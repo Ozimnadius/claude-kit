@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Устройство плагина kit</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Golos+Text:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&family=Unbounded:wght@600&display=swap">
+<style>
+/* Схема-чертёж: светлый холодный лист, цвет — только у ролей (хук, команда, агент, пользователь). */
+:root{--bg:#F1F3F4;--surface:#FFFFFF;--ink:#15191E;--muted:#58616C;--rule:#DDE1E5;--rule-strong:#B6BEC7;--edge:#6A737F;--hook:#B0590C;--hook-bg:#FDF1E3;--skill:#2552CC;--skill-bg:#EBF0FD;--skill-ink:#1C44B0;--agent:#0A7769;--agent-bg:#E2F3EF;--user:#BE2A50;--user-bg:#FCECF0;--code-bg:#ECEFF2;color-scheme:light;
+  --f-display:'Unbounded','Golos Text',system-ui,sans-serif;
+  --f-body:'Golos Text',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+  --f-mono:'JetBrains Mono',ui-monospace,'Cascadia Mono',Consolas,monospace}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#0F1215;--surface:#161A1F;--ink:#E5E8EC;--muted:#99A3AE;--rule:#272D34;--rule-strong:#3B434C;--edge:#8993A0;--hook:#EE9C4C;--hook-bg:#2A1F14;--skill:#86A8FF;--skill-bg:#17213A;--skill-ink:#AAC2FF;--agent:#4FC8B6;--agent-bg:#122724;--user:#FF7D98;--user-bg:#2D1820;--code-bg:#1E2329;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0F1215;--surface:#161A1F;--ink:#E5E8EC;--muted:#99A3AE;--rule:#272D34;--rule-strong:#3B434C;--edge:#8993A0;--hook:#EE9C4C;--hook-bg:#2A1F14;--skill:#86A8FF;--skill-bg:#17213A;--skill-ink:#AAC2FF;--agent:#4FC8B6;--agent-bg:#122724;--user:#FF7D98;--user-bg:#2D1820;--code-bg:#1E2329;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--f-body);font-size:15.5px;line-height:1.62}
+a{color:var(--skill-ink)}
+a:focus-visible{outline:2px solid var(--skill);outline-offset:2px;border-radius:3px}
+.page{max-width:1240px;margin:0 auto;padding-inline:20px;padding-block:44px 72px}
+.hero{display:grid;gap:18px;padding-bottom:30px}
+.eyebrow{font-family:var(--f-mono);font-size:12.5px;color:var(--muted);letter-spacing:.02em}
+h1{font-family:var(--f-display);font-weight:600;font-size:clamp(30px,4.6vw,50px);line-height:1.08;letter-spacing:-.02em;margin:0;text-wrap:balance}
+.lede{font-size:18px;line-height:1.55;max-width:66ch;margin:0}
+.inv{display:flex;flex-wrap:wrap;gap:8px 26px;margin:4px 0 0;padding:0}
+.inv div{display:flex;align-items:baseline;gap:8px}
+.inv dt{font-family:var(--f-display);font-weight:600;font-size:22px;font-variant-numeric:tabular-nums}
+.inv dd{margin:0;color:var(--muted);font-size:14px}
+.legend{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13.5px;color:var(--muted);margin:0;padding:0;list-style:none}
+.legend li{display:flex;align-items:center;gap:8px}
+.sw{width:22px;height:14px;border-radius:4px;border:1.5px solid;flex:none}
+.sw.hook{background:var(--hook-bg);border-color:var(--hook)}
+.sw.skill{background:var(--skill-bg);border-color:var(--skill)}
+.sw.agent{background:var(--agent-bg);border-color:var(--agent)}
+.sw.user{background:var(--user-bg);border-color:var(--user)}
+.sw.ext{background:transparent;border-color:var(--muted);border-style:dashed}
+.sw.core{background:var(--surface);border-color:var(--ink);border-width:2px}
+.gate{border:1px solid var(--rule-strong);background:var(--surface);border-radius:10px;padding:14px 18px;max-width:80ch}
+.gate b{font-weight:650}
+.layout{display:grid;grid-template-columns:190px minmax(0,1fr);gap:44px;align-items:start}
+.toc{position:sticky;top:calc(env(safe-area-inset-top,0px) + 20px);font-size:14px}
+.toc p{font-size:11px;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);font-weight:600;margin:0 0 8px}
+.toc ol{list-style:none;margin:0;padding:0;display:grid;gap:2px}
+.toc a{display:block;padding:4px 8px;margin-left:-8px;border-radius:6px;color:var(--ink);text-decoration:none}
+.toc a:hover{background:var(--surface)}
+main{min-width:0}
+section{padding-block:34px;border-top:1px solid var(--rule)}
+section:first-child{border-top:0;padding-top:0}
+h2{font-family:var(--f-display);font-weight:600;font-size:23px;line-height:1.25;letter-spacing:-.01em;margin:0 0 12px;text-wrap:balance}
+h2 .cmd{font-family:var(--f-mono);font-weight:600;font-size:.78em;color:var(--skill-ink);letter-spacing:0;white-space:nowrap}
+h3{font-size:17px;font-weight:650;margin:30px 0 8px;text-wrap:balance}
+p{margin:0 0 12px;max-width:74ch}
+ul,ol{margin:0 0 12px;padding-left:22px;max-width:78ch}
+li{margin-bottom:6px}
+li::marker{color:var(--muted)}
+code{font-family:var(--f-mono);font-size:.85em;background:var(--code-bg);padding:.08em .36em;border-radius:4px;overflow-wrap:anywhere}
+pre{font-family:var(--f-mono);font-size:12.5px;line-height:1.55;background:var(--code-bg);border-radius:8px;padding:14px 16px;overflow-x:auto;margin:10px 0 16px;max-width:86ch}
+figure{margin:18px 0 20px;background:var(--surface);border:1px solid var(--rule);border-radius:10px;padding:14px 14px 12px}
+.fig-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+figcaption{color:var(--muted);font-size:13.5px;line-height:1.5;margin-top:10px;max-width:84ch}
+.tbl{overflow-x:auto;margin:12px 0 18px;border:1px solid var(--rule);border-radius:10px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px;line-height:1.45}
+th,td{text-align:left;vertical-align:top;padding:9px 12px;border-bottom:1px solid var(--rule)}
+tr:last-child td{border-bottom:0}
+th{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:600;background:var(--bg)}
+td:first-child{font-weight:500}
+.mx{font-size:13.5px}
+.mx th,.mx td{text-align:center;padding:8px 4px;white-space:nowrap}
+.mx th:first-child,.mx td:first-child{text-align:left;padding-left:12px}
+.mx th{font-family:var(--f-mono);text-transform:none;letter-spacing:0;font-size:10.5px}
+.mx td.all{text-align:left;color:var(--muted);font-weight:400;white-space:normal}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--skill)}
+.cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,320px),1fr));gap:8px 32px}
+.cols > div{min-width:0}
+.rule-box{border:1.5px solid var(--user);background:var(--user-bg);border-radius:10px;padding:12px 16px;margin:14px 0 6px;max-width:84ch}
+.rule-box strong{color:var(--user)}
+.chain{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:12px 0 16px;padding:0;list-style:none;max-width:none}
+.chain li{margin:0;display:flex;align-items:center;gap:8px}
+.chain li + li::before{content:"→";color:var(--muted)}
+.chain span{border:1px solid var(--rule-strong);background:var(--surface);border-radius:6px;padding:5px 10px;font-size:14px}
+.chain span.u{border-color:var(--user);background:var(--user-bg)}
+.steps{counter-reset:s;list-style:none;padding:0;max-width:84ch}
+.steps > li{counter-increment:s;position:relative;padding-left:40px;margin-bottom:12px}
+.steps > li::before{content:counter(s);position:absolute;left:0;top:1px;width:26px;height:26px;border-radius:50%;border:1.5px solid var(--skill);color:var(--skill-ink);font-size:12.5px;font-weight:650;display:grid;place-items:center;font-variant-numeric:tabular-nums}
+.tag{display:inline-block;font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;border-radius:4px;padding:1px 6px;margin-right:6px;vertical-align:1px}
+.tag.u{color:var(--user);background:var(--user-bg)}
+footer{border-top:1px solid var(--rule);margin-top:20px;padding-top:18px;color:var(--muted);font-size:13px}
+@media (max-width:900px){
+  .layout{grid-template-columns:minmax(0,1fr);gap:8px}
+  .toc{position:static;border:1px solid var(--rule);border-radius:10px;background:var(--surface);padding:12px 14px}
+  .toc ol{grid-template-columns:repeat(auto-fill,minmax(150px,1fr))}
+}
+@media (max-width:520px){ body{font-size:15px} .lede{font-size:16.5px} h2{font-size:20px} }
+.dg{display:block;width:100%;min-width:820px;height:auto;font-family:var(--f-body);font-size:13px;color:var(--ink)}
+
+.dg text{fill:currentColor}
+.dg .t{font-weight:600;font-size:13.5px}
+.dg .s{fill:var(--muted);font-size:12px}
+.dg .m{font-family:var(--f-mono);font-size:11.5px}
+.dg .tm{font-family:var(--f-mono);font-size:12.5px;font-weight:600}
+.dg .ag{font-family:var(--f-mono);font-size:11.5px;font-weight:600;fill:var(--agent)}
+.dg .loop{fill:var(--muted);font-size:12.5px;font-style:italic}
+.dg .cap{fill:var(--muted);font-size:10.5px;font-weight:600;letter-spacing:.09em;text-transform:uppercase}
+.dg .box{fill:var(--surface);stroke:var(--rule-strong);stroke-width:1.2}
+.dg .k-core .box{stroke:var(--ink);stroke-width:1.8}
+.dg .k-hook .box{fill:var(--hook-bg);stroke:var(--hook)}
+.dg .k-skill .box{fill:var(--skill-bg);stroke:var(--skill)}
+.dg .k-skill .tm{fill:var(--skill-ink)}
+.dg .k-agent .box{fill:var(--agent-bg);stroke:var(--agent)}
+.dg .k-agent .tm{fill:var(--agent)}
+.dg .k-user .box{fill:var(--user-bg);stroke:var(--user)}
+.dg .k-user .t,.dg .k-user .tm{fill:var(--user)}
+.dg .k-ext .box{fill:none;stroke:var(--muted);stroke-dasharray:5 4}
+.dg .k-note .box{fill:var(--bg);stroke:var(--rule-strong)}
+.dg .e{fill:none;stroke:var(--edge);stroke-width:1.4}
+.dg .e.d{stroke-dasharray:5 4}
+.dg .e.u{stroke:var(--user)}
+.dg .ah{fill:var(--edge)}
+.dg .ah.u{fill:var(--user)}
+.dg .life{stroke:var(--rule-strong);stroke-width:1.2;stroke-dasharray:3 4}
+.dg .lbl{font-size:11.5px;fill:var(--muted);paint-order:stroke;stroke:var(--surface);stroke-width:5px;stroke-linejoin:round}
+.dg .lbl.u{fill:var(--user);font-weight:600}
+
+html{scroll-behavior:smooth}
+@media (prefers-reduced-motion: reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body>
+<div class="page">
+<header class="hero">
+  <div class="eyebrow">claude-kit · плагин kit 2.5.0</div>
+  <h1>Как устроен kit</h1>
+  <p class="lede">Плагин Claude Code, который ведёт проект по шагам: журнал, один коммит на проверенный шаг, выкладка, работа на сервере и снимки «до/после». Внутри — общий каркас для любых проектов и модуль для сайтов на 1С-Битрикс.</p>
+  <dl class="inv">
+    <div><dt>5</dt><dd>команд /kit:</dd></div>
+    <div><dt>2</dt><dd>агента</dd></div>
+    <div><dt>3</dt><dd>хука</dd></div>
+    <div><dt>14</dt><dd>node-скриптов</dd></div>
+    <div><dt>3</dt><dd>PHP-скрипта для сервера</dd></div>
+  </dl>
+  <ul class="legend" aria-label="Условные обозначения на схемах">
+    <li><span class="sw hook"></span>хук — срабатывает сам</li>
+    <li><span class="sw skill"></span>команда /kit:</li>
+    <li><span class="sw agent"></span>агент</li>
+    <li><span class="sw user"></span>пользователь, согласие или стоп</li>
+    <li><span class="sw core"></span>Claude и ключевые узлы</li>
+    <li><span class="sw ext"></span>внешнее: git, сервер, сайт, PhpStorm</li>
+  </ul>
+  <div class="gate"><b>Главное условие.</b> Плагин включается только в kit-проекте — там, где в <code>.claude/CLAUDE.md</code> есть раздел «Параметры для агентов» или лежит журнал (<code>.claude/docs/progress.md</code>, до переезда — <code>docs/progress.md</code>). В остальных папках хуки молчат. Ошибка внутри хука сессию не ломает: любой сбой — тихий выход с кодом 0.</div>
+</header>
+<div class="layout">
+<nav class="toc" aria-label="Разделы">
+  <p>Разделы</p>
+  <ol><li><a href="#karta">Карта</a></li><li><a href="#cikl">Цикл работы</a></li><li><a href="#huki">Хуки</a></li><li><a href="#step-done">/kit:step-done</a></li><li><a href="#server">/kit:server</a></li><li><a href="#visual">/kit:visual</a></li><li><a href="#deploy-list">/kit:deploy-list</a></li><li><a href="#udalennyj">Удалённый репозиторий</a></li><li><a href="#project-init">/kit:project-init</a></li><li><a href="#parametry">Параметры</a></li><li><a href="#grabli">Грабли и защита</a></li><li><a href="#vypusk">Выпуск и обновление</a></li></ol>
+</nav>
+<main>
+
+<section id="karta">
+  <h2>Карта</h2>
+  <p>Команды Claude вызывает сам, когда подходит ситуация, или по вашей команде <code>/kit:…</code>. Хуки не вызывает никто: Claude Code запускает их на событиях сессии. Вся тяжёлая логика — в node-скриптах, чтобы поведение было одинаковым и проверялось тестами, а не зависело от того, как модель поймёт текст скилла.</p>
+  <figure><div class="fig-scroll"><svg class="dg" viewBox="0 0 1040 552" role="img" aria-label="Карта плагина kit: пользователь даёт команды Claude, хуки перехватывают события сессии, Claude вызывает пять команд /kit:, каждая команда работает через свои скрипты и агентов и меняет git, журнал, сервер или сайт." xmlns="http://www.w3.org/2000/svg"><defs><marker id="d1-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah " d="M0,0 L10,5 L0,10 z"/></marker><marker id="d1-u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah u" d="M0,0 L10,5 L0,10 z"/></marker></defs><g class="n k-user"><rect class="box" x="389" y="14" width="260" height="52" rx="8"/><text class="t" x="519" y="36.6" text-anchor="middle">Пользователь</text><text class="s" x="519" y="52.1" text-anchor="middle">команды · ответы «да/нет» · пароли</text></g><g class="n k-hook"><rect class="box" x="20" y="100" width="280" height="88" rx="8"/><text class="t" x="32" y="125.6" text-anchor="start">Хуки — срабатывают сами</text><text class="m" x="32" y="141.1" text-anchor="start">SessionStart → контекст</text><text class="m" x="32" y="156.1" text-anchor="start">PreToolUse → запрет</text><text class="m" x="32" y="171.1" text-anchor="start">PostToolUse → php -l</text></g><g class="n k-core"><rect class="box" x="389" y="100" width="260" height="88" rx="8"/><text class="t" x="519" y="133.1" text-anchor="middle">Claude</text><text class="s" x="519" y="148.6" text-anchor="middle">основной агент сессии</text><text class="s" x="519" y="163.6" text-anchor="middle">выполняет скиллы, зовёт агентов</text></g><g class="n "><rect class="box" x="740" y="100" width="280" height="88" rx="8"/><text class="t" x="752" y="125.6" text-anchor="start">Проект</text><text class="m" x="752" y="141.1" text-anchor="start">.claude/CLAUDE.md → Параметры</text><text class="m" x="752" y="156.1" text-anchor="start">.claude/docs/progress.md</text><text class="m" x="752" y="171.1" text-anchor="start">.claude/docs/deploy-prod.md</text></g><path class="e " d="M519 66 L519 100" marker-end="url(#d1-a)"/><text class="lbl " x="527" y="88" text-anchor="start">команды, ответы</text><path class="e " d="M300 144 L389 144" marker-end="url(#d1-a)"/><text class="lbl " x="344" y="136" text-anchor="middle">перехват</text><path class="e " d="M740 144 L649 144" marker-end="url(#d1-a)"/><text class="lbl " x="694" y="136" text-anchor="middle">читает</text><path class="e " d="M519 188 L519 212"/><path class="e " d="M115 212 L923 212"/><text class="lbl " x="216" y="205" text-anchor="middle">Skill: сам или по команде</text><path class="e " d="M115 212 L115 236" marker-end="url(#d1-a)"/><g class="n k-skill"><rect class="box" x="20" y="236" width="190" height="56" rx="8"/><text class="tm" x="115" y="260.6" text-anchor="middle">/kit:project-init</text><text class="s" x="115" y="276.1" text-anchor="middle">один раз на проект</text></g><path class="e " d="M115 292 L115 316" marker-end="url(#d1-a)"/><g class="n "><rect class="box" x="20" y="316" width="190" height="136" rx="8"/><text class="m" x="32" y="337.1" text-anchor="start">site-probe.js</text><text class="m" x="32" y="352.1" text-anchor="start">ssh-probe.js</text><text class="m" x="32" y="367.1" text-anchor="start">phpstorm-exclude.js</text><text class="m" x="32" y="382.1" text-anchor="start">secret-scan.js --all</text><text class="m" x="32" y="397.1" text-anchor="start">check-closed.js</text><text class="s" x="32" y="412.1" text-anchor="start">+ git-keeper: коммит 0.1</text></g><path class="e " d="M115 452 L115 476" marker-end="url(#d1-a)"/><g class="n k-ext"><rect class="box" x="20" y="476" width="190" height="60" rx="8"/><text class="s" x="115" y="502.1" text-anchor="middle">git · .idea · сайт</text><text class="s" x="115" y="517.1" text-anchor="middle">сервер по SSH</text></g><path class="e " d="M317 212 L317 236" marker-end="url(#d1-a)"/><g class="n k-skill"><rect class="box" x="222" y="236" width="190" height="56" rx="8"/><text class="tm" x="317" y="260.6" text-anchor="middle">/kit:step-done</text><text class="s" x="317" y="276.1" text-anchor="middle">после проверенного шага</text></g><path class="e " d="M317 292 L317 316" marker-end="url(#d1-a)"/><g class="n "><rect class="box" x="222" y="316" width="190" height="136" rx="8"/><text class="ag" x="234" y="337.1" text-anchor="start">docs-keeper (sonnet)</text><text class="ag" x="234" y="352.1" text-anchor="start">git-keeper (haiku)</text><text class="m" x="234" y="367.1" text-anchor="start">secret-scan.js --paths</text><text class="m" x="234" y="382.1" text-anchor="start">secret-scan.js --cached</text></g><path class="e " d="M317 452 L317 476" marker-end="url(#d1-a)"/><g class="n k-ext"><rect class="box" x="222" y="476" width="190" height="60" rx="8"/><text class="s" x="317" y="502.1" text-anchor="middle">журнал и план</text><text class="s" x="317" y="517.1" text-anchor="middle">коммит и push</text></g><path class="e " d="M519 212 L519 236" marker-end="url(#d1-a)"/><g class="n k-skill"><rect class="box" x="424" y="236" width="190" height="56" rx="8"/><text class="tm" x="519" y="260.6" text-anchor="middle">/kit:deploy-list</text><text class="s" x="519" y="276.1" text-anchor="middle">перед выкладкой</text></g><path class="e " d="M519 292 L519 316" marker-end="url(#d1-a)"/><g class="n "><rect class="box" x="424" y="316" width="190" height="136" rx="8"/><text class="m" x="436" y="337.1" text-anchor="start">deploy-list.js</text><text class="s" x="436" y="352.1" text-anchor="start">читает git log</text><text class="s" x="436" y="367.1" text-anchor="start">и план выкладки</text></g><path class="e " d="M519 452 L519 476" marker-end="url(#d1-a)"/><g class="n k-ext"><rect class="box" x="424" y="476" width="190" height="60" rx="8"/><text class="s" x="519" y="502.1" text-anchor="middle">список «залить»</text><text class="s" x="519" y="517.1" text-anchor="middle">и «удалить»</text></g><path class="e " d="M721 212 L721 236" marker-end="url(#d1-a)"/><g class="n k-skill"><rect class="box" x="626" y="236" width="190" height="56" rx="8"/><text class="tm" x="721" y="260.6" text-anchor="middle">/kit:server</text><text class="s" x="721" y="276.1" text-anchor="middle">когда нужен сервер</text></g><path class="e " d="M721 292 L721 316" marker-end="url(#d1-a)"/><g class="n "><rect class="box" x="626" y="316" width="190" height="136" rx="8"/><text class="m" x="638" y="337.1" text-anchor="start">remote-php.js</text><text class="m" x="638" y="352.1" text-anchor="start">kit-exec.js</text><text class="m" x="638" y="367.1" text-anchor="start">md5-check.js</text><text class="m" x="638" y="382.1" text-anchor="start">inventory.php</text><text class="m" x="638" y="397.1" text-anchor="start">check-files.php</text><text class="m" x="638" y="412.1" text-anchor="start">delete-list.php</text></g><path class="e " d="M721 452 L721 476" marker-end="url(#d1-a)"/><g class="n k-ext"><rect class="box" x="626" y="476" width="190" height="60" rx="8"/><text class="s" x="721" y="502.1" text-anchor="middle">сервер по SSH</text><text class="s" x="721" y="517.1" text-anchor="middle">или kit-exec.php</text></g><path class="e " d="M923 212 L923 236" marker-end="url(#d1-a)"/><g class="n k-skill"><rect class="box" x="828" y="236" width="190" height="56" rx="8"/><text class="tm" x="923" y="260.6" text-anchor="middle">/kit:visual</text><text class="s" x="923" y="276.1" text-anchor="middle">до и после изменений</text></g><path class="e " d="M923 292 L923 316" marker-end="url(#d1-a)"/><g class="n "><rect class="box" x="828" y="316" width="190" height="136" rx="8"/><text class="m" x="840" y="337.1" text-anchor="start">visual.js</text><text class="s" x="840" y="352.1" text-anchor="start">deps · install · login</text><text class="s" x="840" y="367.1" text-anchor="start">discover · shoot · check</text><text class="s" x="840" y="382.1" text-anchor="start">compare · list</text></g><path class="e " d="M923 452 L923 476" marker-end="url(#d1-a)"/><g class="n k-ext"><rect class="box" x="828" y="476" width="190" height="60" rx="8"/><text class="s" x="923" y="502.1" text-anchor="middle">Chrome → сайт</text><text class="s" x="923" y="517.1" text-anchor="middle">снимки локально</text></g></svg></div><figcaption>Каждая команда — своя колонка: какие скрипты и агенты она запускает и что в итоге меняется. Параметры проекта читает не только Claude: хуки, скрипты и агенты берут их сами (таблица «Параметры» ниже).</figcaption></figure>
+</section>
+
+<section id="cikl">
+  <h2>Цикл работы</h2>
+  <figure><div class="fig-scroll"><svg class="dg" viewBox="0 0 1040 420" role="img" aria-label="Цикл работы: после /kit:project-init идёт петля шаг — проверка — /kit:step-done — следующий шаг; хук php -l срабатывает при записи кода; /kit:visual снимает до и после, /kit:server проверяет на сервере, /kit:deploy-list готовит выкладку, а выкладка возвращается в журнал блоком DEPLOY." xmlns="http://www.w3.org/2000/svg"><defs><marker id="d2-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah " d="M0,0 L10,5 L0,10 z"/></marker><marker id="d2-u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah u" d="M0,0 L10,5 L0,10 z"/></marker></defs><g class="n k-skill"><rect class="box" x="20" y="150" width="170" height="60" rx="8"/><text class="tm" x="105" y="176.6" text-anchor="middle">/kit:project-init</text><text class="s" x="105" y="192.1" text-anchor="middle">один раз</text></g><g class="n k-core"><rect class="box" x="260" y="60" width="190" height="64" rx="8"/><text class="t" x="355" y="88.6" text-anchor="middle">Шаг: код</text><text class="s" x="355" y="104.1" text-anchor="middle">черновик → проект</text></g><g class="n "><rect class="box" x="540" y="60" width="190" height="64" rx="8"/><text class="t" x="635" y="88.6" text-anchor="middle">Проверка</text><text class="s" x="635" y="104.1" text-anchor="middle">сервер, браузер, php -l</text></g><g class="n k-skill"><rect class="box" x="540" y="236" width="190" height="64" rx="8"/><text class="tm" x="635" y="264.6" text-anchor="middle">/kit:step-done</text><text class="s" x="635" y="280.1" text-anchor="middle">журнал, коммит, push</text></g><g class="n "><rect class="box" x="260" y="236" width="190" height="64" rx="8"/><text class="t" x="355" y="264.6" text-anchor="middle">Следующий шаг</text><text class="s" x="355" y="280.1" text-anchor="middle">из «Сейчас» журнала</text></g><g class="n k-hook"><rect class="box" x="415" y="6" width="160" height="30" rx="8"/><text class="m" x="495" y="24.6" text-anchor="middle">PostToolUse: php -l</text></g><path class="e d" d="M495 36 L495 86" marker-end="url(#d2-a)"/><text class="loop" x="495" y="176" text-anchor="middle">один шаг —</text><text class="loop" x="495" y="194" text-anchor="middle">один коммит</text><path class="e " d="M450 92 L540 92" marker-end="url(#d2-a)"/><path class="e " d="M635 124 L635 236" marker-end="url(#d2-a)"/><text class="lbl " x="645" y="184" text-anchor="start">проверено</text><path class="e " d="M540 268 L450 268" marker-end="url(#d2-a)"/><text class="lbl " x="495" y="260" text-anchor="middle">коммит</text><path class="e " d="M355 236 L355 124" marker-end="url(#d2-a)"/><text class="lbl " x="347" y="184" text-anchor="end">дальше</text><path class="e " d="M190 180 L222 180 L222 92 L260 92" marker-end="url(#d2-a)"/><g class="n k-skill"><rect class="box" x="830" y="40" width="190" height="64" rx="8"/><text class="tm" x="925" y="61.1" text-anchor="middle">/kit:visual</text><text class="s" x="925" y="76.6" text-anchor="middle">before — до шага</text><text class="s" x="925" y="91.6" text-anchor="middle">after + compare</text></g><g class="n k-skill"><rect class="box" x="830" y="150" width="190" height="64" rx="8"/><text class="tm" x="925" y="178.6" text-anchor="middle">/kit:server</text><text class="s" x="925" y="194.1" text-anchor="middle">md5, логи, удаления</text></g><g class="n k-skill"><rect class="box" x="830" y="260" width="190" height="64" rx="8"/><text class="tm" x="925" y="288.6" text-anchor="middle">/kit:deploy-list</text><text class="s" x="925" y="304.1" text-anchor="middle">что залить и удалить</text></g><g class="n k-user"><rect class="box" x="830" y="350" width="190" height="56" rx="8"/><text class="t" x="925" y="374.6" text-anchor="middle">Выкладка</text><text class="s" x="925" y="390.1" text-anchor="middle">PhpStorm или вручную</text></g><path class="e " d="M730 80 L830 80" marker-end="url(#d2-a)"/><text class="lbl " x="780" y="72" text-anchor="middle">снимки</text><path class="e d" d="M730 108 L780 108 L780 182 L830 182" marker-end="url(#d2-a)"/><text class="lbl " x="774" y="150" text-anchor="end">на сервере</text><path class="e " d="M730 284 L830 284" marker-end="url(#d2-a)"/><text class="lbl " x="780" y="276" text-anchor="middle">к выкладке</text><path class="e " d="M925 324 L925 350" marker-end="url(#d2-a)"/><path class="e " d="M925 260 L925 214" marker-end="url(#d2-a)"/><text class="lbl " x="933" y="241" text-anchor="start">удаления</text><path class="e " d="M830 378 L635 378 L635 300" marker-end="url(#d2-a)"/><text class="lbl " x="732" y="370" text-anchor="middle">DEPLOY в журнал</text></svg></div><figcaption>Петля в центре — обычный рабочий день: шаг, проверка, закрытие шага, следующий. Справа — команды, которые подключаются по ситуации. Выкладка возвращается в журнал: что и каким коммитом залито, пишется через /kit:step-done блоком DEPLOY.</figcaption></figure>
+  <div class="cols">
+    <div>
+      <ul>
+        <li><b>Один шаг за раз.</b> Следующий начинается только после проверки предыдущего. ID шага — <code>N.M</code>, исправления после ревью — <code>N.Mа</code>, <code>N.Mб</code> отдельными коммитами, без amend.</li>
+        <li><b>Автозаливка.</b> При «Выкладка: PhpStorm Always» любое сохранение сразу уезжает на сервер. Поэтому черновики живут во временной папке сессии, PHP проверяется там же, а в проект попадает одной правкой. Удаление локального файла сервер не трогает — такие файлы записываются в «Удалить с сервера».</li>
+      </ul>
+    </div>
+    <div>
+      <ul>
+        <li><b>Кто пишет код.</b> Если пользователь, Claude даёт один маленький шаг и ждёт ответа; «сделай сам» относится только к текущему шагу. Если Claude — после записи он сам проверяет результат на сервере на десктопной и мобильной ширине.</li>
+        <li><b>Worktree.</b> Сессия в <code>.claude/worktrees/…</code> при автозаливке: правки не попадут на сервер, пока их не сольют, так что сразу проверять на сервере бессмысленно.</li>
+        <li><b>Git — не ваша забота.</b> Команды git пользователю не выдаются, коммиты делает только git-keeper.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="huki">
+  <h2>Хуки</h2>
+  <p>Это часть плагина, которая работает без участия Claude. Все три хука сначала проверяют, kit-проект ли это, и только потом что-то делают.</p>
+  <figure><div class="fig-scroll"><svg class="dg" viewBox="0 0 1040 446" role="img" aria-label="Три хука: каждое событие сначала проверяет, kit-проект ли это; если нет — тишина. SessionStart дописывает исключения PhpStorm, кладёт в контекст раздел «Сейчас» и правила и сверяет ветку с удалённым репозиторием; PreToolUse запрещает cd вне подоболочки и sed -i по PHP; PostToolUse прогоняет php -l и при ошибке возвращает код 2." xmlns="http://www.w3.org/2000/svg"><defs><marker id="d3-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah " d="M0,0 L10,5 L0,10 z"/></marker><marker id="d3-u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah u" d="M0,0 L10,5 L0,10 z"/></marker></defs><g class="n k-hook"><rect class="box" x="20" y="22" width="200" height="140" rx="8"/><text class="tm" x="120" y="81.1" text-anchor="middle">SessionStart</text><text class="m" x="120" y="96.6" text-anchor="middle">startup · resume</text><text class="m" x="120" y="111.6" text-anchor="middle">clear · compact</text></g><g class="n k-hook"><rect class="box" x="20" y="200" width="200" height="70" rx="8"/><text class="tm" x="120" y="231.6" text-anchor="middle">PreToolUse</text><text class="m" x="120" y="247.1" text-anchor="middle">Bash · PowerShell</text></g><g class="n k-hook"><rect class="box" x="20" y="312" width="200" height="70" rx="8"/><text class="tm" x="120" y="343.6" text-anchor="middle">PostToolUse</text><text class="m" x="120" y="359.1" text-anchor="middle">Write · Edit · MultiEdit</text></g><g class="n k-core"><rect class="box" x="262" y="22" width="130" height="360" rx="8"/><text class="t" x="327" y="191.1" text-anchor="middle">kit-проект?</text><text class="s" x="327" y="206.6" text-anchor="middle">«Параметры»</text><text class="s" x="327" y="221.6" text-anchor="middle">или журнал</text></g><path class="e u" d="M327 382 L327 410" marker-end="url(#d3-u)"/><text class="lbl u" x="327" y="430" text-anchor="middle">нет → тишина, код 0</text><path class="e " d="M220 92 L262 92" marker-end="url(#d3-a)"/><path class="e " d="M220 235 L262 235" marker-end="url(#d3-a)"/><path class="e " d="M220 347 L262 347" marker-end="url(#d3-a)"/><g class="n "><rect class="box" x="432" y="22" width="190" height="40" rx="8"/><text class="m" x="527" y="45.6" text-anchor="middle">phpstorm-exclude.js</text></g><g class="n "><rect class="box" x="432" y="72" width="190" height="40" rx="8"/><text class="m" x="527" y="95.6" text-anchor="middle">session-start.js</text></g><g class="n "><rect class="box" x="432" y="122" width="190" height="40" rx="8"/><text class="m" x="527" y="145.6" text-anchor="middle">remote-check.js</text></g><g class="n "><rect class="box" x="432" y="210" width="190" height="50" rx="8"/><text class="m" x="527" y="238.6" text-anchor="middle">guard-bash.js</text></g><g class="n "><rect class="box" x="432" y="322" width="190" height="50" rx="8"/><text class="m" x="527" y="350.6" text-anchor="middle">php-lint.js</text></g><path class="e " d="M392 42 L432 42" marker-end="url(#d3-a)"/><path class="e " d="M392 92 L432 92" marker-end="url(#d3-a)"/><path class="e " d="M392 142 L432 142" marker-end="url(#d3-a)"/><path class="e " d="M392 235 L432 235" marker-end="url(#d3-a)"/><text class="lbl " x="412" y="227" text-anchor="middle">да</text><path class="e " d="M392 347 L432 347" marker-end="url(#d3-a)"/><g class="n k-ext"><rect class="box" x="662" y="22" width="358" height="40" rx="8"/><text class="s" x="841" y="45.6" text-anchor="middle">Excluded Paths в .idea/deployment.xml</text></g><g class="n "><rect class="box" x="662" y="72" width="358" height="40" rx="8"/><text class="s" x="841" y="95.6" text-anchor="middle">в контекст Claude: «Сейчас» + правила</text></g><g class="n k-ext"><rect class="box" x="662" y="122" width="358" height="40" rx="8"/><text class="s" x="841" y="145.6" text-anchor="middle">git fetch → pull --ff-only, push или стоп</text></g><g class="n "><rect class="box" x="662" y="202" width="180" height="66" rx="8"/><text class="m" x="752" y="223.6" text-anchor="middle">cd вне ( … )</text><text class="m" x="752" y="238.6" text-anchor="middle">Set-Location</text><text class="m" x="752" y="253.6" text-anchor="middle">sed -i по .php</text></g><g class="n k-user"><rect class="box" x="870" y="210" width="150" height="50" rx="8"/><text class="t" x="945" y="231.6" text-anchor="middle">deny</text><text class="s" x="945" y="247.1" text-anchor="middle">+ причина</text></g><g class="n "><rect class="box" x="662" y="314" width="180" height="66" rx="8"/><text class="s" x="752" y="335.6" text-anchor="middle">.php и параметр</text><text class="s" x="752" y="350.6" text-anchor="middle">«PHP» — путь</text><text class="s" x="752" y="365.6" text-anchor="middle">к php.exe</text></g><g class="n k-user"><rect class="box" x="870" y="322" width="150" height="50" rx="8"/><text class="t" x="945" y="343.6" text-anchor="middle">код 2</text><text class="s" x="945" y="359.1" text-anchor="middle">ошибка → Claude</text></g><path class="e " d="M622 42 L662 42" marker-end="url(#d3-a)"/><path class="e " d="M622 92 L662 92" marker-end="url(#d3-a)"/><path class="e " d="M622 142 L662 142" marker-end="url(#d3-a)"/><path class="e " d="M622 235 L662 235" marker-end="url(#d3-a)"/><path class="e " d="M842 235 L870 235" marker-end="url(#d3-a)"/><path class="e " d="M622 347 L662 347" marker-end="url(#d3-a)"/><path class="e " d="M842 347 L870 347" marker-end="url(#d3-a)"/><text class="s" x="945" y="280" text-anchor="middle">иначе — выполняется</text><text class="s" x="945" y="392" text-anchor="middle">нет ошибки — тишина</text></svg></div><figcaption>SessionStart готовит сессию, PreToolUse может отказать команде оболочки ещё до запуска, PostToolUse проверяет только что записанный PHP. Отказ и ошибка приходят Claude как обычный ответ инструмента — он переписывает команду или чинит код.</figcaption></figure>
+  <h3>Что SessionStart кладёт в контекст</h3>
+  <p>Хук срабатывает при старте, <code>resume</code>, <code>/clear</code> и после сжатия контекста — поэтому Claude не теряет текущий шаг даже в длинной сессии. Так начинается сессия в этом репозитории (сокращено):</p>
+<pre>[kit] Проект ведётся по журналу .claude/docs/progress.md.
+
+## Сейчас (из .claude/docs/progress.md)
+- Этап: 14 закрыт (исправления по code-review плагина kit …)
+- Следующий шаг: нет — новый этап начнёт пользователь
+
+## Правила процесса (плагин kit)
+- Один шаг за раз: следующий — только после проверки предыдущего.
+- После проверенного шага — /kit:step-done (docs-keeper → git-keeper, один коммит на шаг).
+- Код пишет Claude: после записи проверить результат на сервере (страница, десктоп и мобильная ширина).
+…</pre>
+  <p>Шесть правил процесса добавляются всегда, остальное — по параметрам проекта:</p>
+  <div class="tbl"><table>
+    <thead><tr><th>Условие</th><th>Что добавляется</th></tr></thead>
+    <tbody>
+      <tr><td>всегда</td><td>раздел «Сейчас» из журнала (до 4000 знаков) и шесть правил: шаг за разом, вопросы через AskUserQuestion, /kit:step-done, git только через git-keeper, LF, грабли cd / sed / Git Bash</td></tr>
+      <tr><td>Выкладка: PhpStorm Always</td><td>любое сохранение уходит на прод — черновики только во временной папке</td></tr>
+      <tr><td>Выкладка: вручную; дев — PhpStorm Always</td><td>то же для дев-сервера</td></tr>
+      <tr><td>Код пишет: пользователь</td><td>один маленький шаг и ожидание ответа</td></tr>
+      <tr><td>Код пишет: Claude</td><td>после записи — проверка на сервере, десктоп и мобильная ширина</td></tr>
+      <tr><td>автозаливка + сессия в worktree</td><td>правки не уедут на сервер до слияния — не проверять сразу</td></tr>
+      <tr><td>нет «Параметров для агентов»</td><td>предложить /kit:project-init</td></tr>
+      <tr><td>всегда; журнал в <code>docs/</code></td><td>где лежат документы (<code>work/</code>, <code>archive/</code>, реестр); для старой раскладки — подсказка о переезде в <code>.claude/docs</code></td></tr>
+    </tbody>
+  </table></div>
+  <p>Второй скрипт SessionStart, <code>phpstorm-exclude.js</code>, дописывает в <code>.idea/deployment.xml</code> исключения <code>.idea</code>, <code>.git</code>, <code>.claude</code> и простые пути из «Не выкладывать» — каждому серверу, сопоставленному с корнем проекта. Он только добавляет и ничего не удаляет; из worktree работает с основной папкой проекта. Исключение — параметр «Документы на сервере: да» (с 2.6.0): тогда хук убирает исключение <code>.claude</code> целиком и исключает всё в ней поимённо, кроме <code>docs</code>, <code>CLAUDE.md</code> и <code>.htaccess</code> (нет <code>.htaccess</code> — создаёт), — документы уезжают на сервер автозаливкой, папка закрыта из веба.</p>
+  <p>Третий скрипт SessionStart, <code>remote-check.js</code> (с 2.5.0), работает, только если задан параметр «Удалённый репозиторий». Он делает <code>git fetch</code> не дольше 8 секунд и без окон входа и сравнивает ветку с удалённой: новые коммиты там — Claude до любой правки выполняет <code>git pull --ff-only</code>; неотправленные здесь — отправляет; разошлись — останавливается и спрашивает. Нет сети или входа — строка «не удалось проверить», работа идёт дальше.</p>
+  <h3>Страж команд и php -l</h3>
+  <ul>
+    <li><code>guard-bash.js</code> разбирает команду как оболочка: вырезает heredoc, here-string и комментарии, делит на команды по <code>;</code>, <code>&amp;&amp;</code>, <code>|</code>. <code>cd</code> в Bash разрешён только внутри подоболочки <code>( cd … &amp;&amp; … )</code>; в PowerShell <code>cd</code> и <code>Set-Location</code> запрещены везде — скобки там не помогают. Например, при подготовке этого обзора страж остановил команду Claude с <code>cd</code>, и её пришлось переписать через подоболочку.</li>
+    <li><code>php-lint.js</code> берёт <code>php.exe</code> из параметра «PHP» — только абсолютный путь к существующему файлу, иначе молчит. Скрипты для сервера (<code>.claude/scripts/</code>, библиотека <code>/kit:server</code>) пишутся без <code>&lt;?php</code>: хук проверяет их через временную копию с этой приставкой и сдвигает номера строк обратно.</li>
+  </ul>
+</section>
+
+<section id="step-done">
+  <h2>Закрытие шага <span class="cmd">/kit:step-done</span></h2>
+  <p>Claude вызывает команду сам, как только результат шага проверен. Работа с документами и git вынесена в двух агентов на моделях попроще: docs-keeper (sonnet) пишет журнал, git-keeper (haiku) делает коммит. Claude собирает для них данные и проверяет обоих, не веря отчётам на слово.</p>
+  <figure><div class="fig-scroll"><svg class="dg" viewBox="0 0 1040 700" role="img" aria-label="Последовательность /kit:step-done: Claude собирает файлы шага, docs-keeper обновляет журнал и отчитывается, Claude сверяет отчёт с файлом, git-keeper проверяет пути, добавляет файлы, проверяет секреты и делает один коммит, после чего Claude проверяет, что коммит ровно один и заголовок совпал. Если задан удалённый репозиторий — после проверки коммит отправляется: в первый раз — после проверки всей истории на секреты." xmlns="http://www.w3.org/2000/svg"><defs><marker id="d4-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah " d="M0,0 L10,5 L0,10 z"/></marker><marker id="d4-u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah u" d="M0,0 L10,5 L0,10 z"/></marker></defs><g class="n k-core"><rect class="box" x="25" y="12" width="170" height="48" rx="8"/><text class="t" x="110" y="32.6" text-anchor="middle">Claude</text><text class="s" x="110" y="48.1" text-anchor="middle">основной агент</text></g><g class="n k-agent"><rect class="box" x="245" y="12" width="170" height="48" rx="8"/><text class="tm" x="330" y="32.6" text-anchor="middle">kit:docs-keeper</text><text class="s" x="330" y="48.1" text-anchor="middle">модель sonnet</text></g><g class="n k-agent"><rect class="box" x="465" y="12" width="170" height="48" rx="8"/><text class="tm" x="550" y="32.6" text-anchor="middle">kit:git-keeper</text><text class="s" x="550" y="48.1" text-anchor="middle">модель haiku</text></g><g class="n "><rect class="box" x="685" y="12" width="170" height="48" rx="8"/><text class="tm" x="770" y="32.6" text-anchor="middle">secret-scan.js</text><text class="s" x="770" y="48.1" text-anchor="middle">пути и секреты</text></g><g class="n k-ext"><rect class="box" x="880" y="12" width="140" height="48" rx="8"/><text class="tm" x="950" y="32.6" text-anchor="middle">git</text><text class="s" x="950" y="48.1" text-anchor="middle">репозиторий</text></g><line class="life" x1="110" y1="60" x2="110" y2="692"/><line class="life" x1="330" y1="60" x2="330" y2="692"/><line class="life" x1="550" y1="60" x2="550" y2="692"/><line class="life" x1="770" y1="60" x2="770" y2="692"/><line class="life" x1="950" y1="60" x2="950" y2="692"/><path class="e " d="M110 92 L947 92" marker-end="url(#d4-a)"/><text class="lbl " x="530" y="85" text-anchor="middle">rev-parse HEAD · status --porcelain</text><g class="n k-note"><rect class="box" x="15" y="104" width="190" height="40" rx="4"/><text class="s" x="110" y="120.1" text-anchor="middle">FILES — файлы шага</text><text class="s" x="110" y="135.1" text-anchor="middle">чужие правки → вопрос</text></g><path class="e " d="M110 172 L327 172" marker-end="url(#d4-a)"/><text class="lbl " x="220" y="165" text-anchor="middle">STEP · STATUS · SUMMARY · NEXT …</text><g class="n k-note"><rect class="box" x="242" y="184" width="176" height="40" rx="4"/><text class="s" x="330" y="200.1" text-anchor="middle">журнал, план выкладки,</text><text class="s" x="330" y="215.1" text-anchor="middle">RULES → CLAUDE.md</text></g><path class="e d" d="M330 248 L113 248" marker-end="url(#d4-a)"/><text class="lbl " x="220" y="241" text-anchor="middle">отчёт: «Сейчас», цитаты, файлы</text><g class="n k-note"><rect class="box" x="15" y="262" width="190" height="40" rx="4"/><text class="s" x="110" y="278.1" text-anchor="middle">сверка отчёта Grep-ом</text><text class="s" x="110" y="293.1" text-anchor="middle">нет строки → повтор</text></g><g class="n k-user"><rect class="box" x="15" y="310" width="190" height="40" rx="4"/><text class="s" x="110" y="326.1" text-anchor="middle">конец этапа?</text><text class="s" x="110" y="341.1" text-anchor="middle">work/ → archive/ с выбора</text></g><path class="e " d="M110 378 L547 378" marker-end="url(#d4-a)"/><text class="lbl " x="330" y="371" text-anchor="middle">FILES · MESSAGE · BODY · COAUTHOR · KIT_ROOT</text><path class="e " d="M550 410 L767 410" marker-end="url(#d4-a)"/><text class="lbl " x="660" y="403" text-anchor="middle">--paths FILES</text><path class="e d u" d="M770 432 L553 432" marker-end="url(#d4-u)"/><text class="lbl u" x="660" y="446" text-anchor="middle">1 → стоп</text><path class="e " d="M550 468 L947 468" marker-end="url(#d4-a)"/><text class="lbl " x="750" y="461" text-anchor="middle">add -A -- FILES</text><path class="e " d="M550 500 L767 500" marker-end="url(#d4-a)"/><text class="lbl " x="660" y="493" text-anchor="middle">--cached FILES</text><path class="e d u" d="M770 522 L553 522" marker-end="url(#d4-u)"/><text class="lbl u" x="660" y="536" text-anchor="middle">1 → стоп</text><path class="e " d="M550 558 L947 558" marker-end="url(#d4-a)"/><text class="lbl " x="750" y="551" text-anchor="middle">commit -m '…' -- FILES</text><path class="e d" d="M550 590 L113 590" marker-end="url(#d4-a)"/><text class="lbl " x="330" y="583" text-anchor="middle">хеш · файлы · подпись</text><path class="e " d="M110 620 L947 620" marker-end="url(#d4-a)"/><text class="lbl " x="530" y="613" text-anchor="middle">проверка: 1 коммит, заголовок = MESSAGE, подпись</text><path class="e " d="M110 652 L767 652" marker-end="url(#d4-a)"/><text class="lbl " x="440" y="645" text-anchor="middle">--history — только перед первой отправкой</text><path class="e " d="M110 684 L947 684" marker-end="url(#d4-a)"/><text class="lbl " x="530" y="677" text-anchor="middle">push -u &lt;имя&gt; HEAD — если задан «Удалённый репозиторий»</text></svg></div><figcaption>Время идёт сверху вниз. Сплошная стрелка — вызов, пунктир — ответ. secret-scan проверяет дважды: пути до git add (чтобы запрещённый файл даже не попал в индекс) и добавленные строки после. Код 1 на любой из проверок — git-keeper останавливается без коммита. Если задан удалённый репозиторий, после проверки коммит отправляется (git push -u); в первый раз — только после проверки всей истории на секреты.</figcaption></figure>
+  <div class="cols">
+    <div>
+      <h3>Если что-то не так</h3>
+      <ul>
+        <li>Отчёт docs-keeper не сошёлся с файлом — повторный вызов только с недостающим. К git-keeper Claude не переходит, пока журнал не совпадёт с блоками.</li>
+        <li>Найден секрет или запрещённый путь — стоп до коммита; значения в выводе замаскированы.</li>
+        <li>Новых коммитов 0 или 2, заголовок не совпал, чужая подпись — Claude сообщает, что показали команды, и останавливается. Никаких <code>reset</code>, <code>amend</code>, <code>rebase</code>, и сам в обход git-keeper не коммитит.</li>
+        <li>Агенты <code>kit:…</code> не подхватились — запускается general-purpose с полным текстом файла агента и той же моделью.</li>
+      </ul>
+    </div>
+    <div>
+      <h3>Особенности</h3>
+      <ul>
+        <li><b>Отправка</b> (с 2.5.0) — после проверки коммита, если задан «Удалённый репозиторий»: <code>git push -u &lt;имя&gt; HEAD</code>. Отклонено — стоп и вопрос; нет сети или входа — коммит остаётся и уйдёт со следующим шагом. <code>--force</code> — никогда без согласия.</li>
+        <li>Хеши прошлых шагов берутся из <code>git log</code> по префиксу <code>ID:</code> — помнить их между сессиями не нужно.</li>
+        <li>Подпись <code>Co-Authored-By</code> приходит блоком COAUTHOR от основного агента и пишется дословно — не устаревает при смене модели.</li>
+        <li>Сообщение коммита — только в одинарных кавычках: в двойных <code>$arResult</code> стал бы пустой строкой. Заголовок сверяется символ в символ.</li>
+        <li><code>core.quotepath=false</code> во всех командах git: иначе кириллические пути приходят escape-последовательностями и <code>git add</code> их не находит.</li>
+        <li>Конец этапа: документы <code>work/…</code> «в работе, этап N» предлагаются в <code>archive/</code>. Перенос — обычным <code>Move-Item</code>, в коммит идут оба пути, и git видит переименование.</li>
+        <li>git-keeper не делает <code>push</code>, <code>pull</code>, <code>reset</code>, <code>checkout</code>, <code>stash</code>, <code>rebase</code>, <code>git add .</code> и второй коммит.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="server">
+  <h2>Работа на сервере <span class="cmd">/kit:server</span></h2>
+  <div class="rule-box"><strong>Правило согласия.</strong> Чтение — сразу: <code>ls</code>, <code>md5sum</code>, логи, SELECT, <code>inventory.php</code>. Любое изменение — только после вопроса с точной командой или кодом и явного «да». Одно согласие — одно действие. Пароли вводит только пользователь: SSH — по ключу (<code>BatchMode=yes</code> пароль не спросит), в админку сайта он входит сам.</div>
+  <figure><div class="fig-scroll"><svg class="dg" viewBox="0 0 1040 470" role="img" aria-label="Выбор канала /kit:server: если для сервера задан параметр SSH — канал SSH с кодами 0, 1, 3; при коде 3 отказ во входе ведёт на файл-канал, смена отпечатка — стоп, обрыв изменяющего кода — результат неизвестен. Без SSH: в режиме bitrix с адресом сайта — файл-канал kit-exec.php, иначе выполнить негде." xmlns="http://www.w3.org/2000/svg"><defs><marker id="d5-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah " d="M0,0 L10,5 L0,10 z"/></marker><marker id="d5-u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah u" d="M0,0 L10,5 L0,10 z"/></marker></defs><g class="n k-core"><rect class="box" x="400" y="14" width="240" height="52" rx="8"/><text class="t" x="520" y="36.6" text-anchor="middle">Задача на сервере</text><text class="s" x="520" y="52.1" text-anchor="middle">сервер — прод; оба → вопрос</text></g><path class="e " d="M520 66 L520 95" marker-end="url(#d5-a)"/><g class="n "><polygon class="box" points="520,95 640,130 520,165 400,130"/><text class="t" x="520" y="134.1" text-anchor="middle">«SSH …» задан?</text></g><path class="e " d="M400 130 L205 130 L205 196" marker-end="url(#d5-a)"/><text class="lbl " x="300" y="122" text-anchor="middle">да</text><path class="e " d="M640 130 L740 130 L740 205" marker-end="url(#d5-a)"/><text class="lbl " x="690" y="122" text-anchor="middle">нет</text><g class="n "><rect class="box" x="40" y="196" width="330" height="88" rx="8"/><text class="t" x="52" y="221.6" text-anchor="start">Канал SSH</text><text class="m" x="52" y="237.1" text-anchor="start">ssh -o BatchMode=yes … 'команда'</text><text class="m" x="52" y="252.1" text-anchor="start">remote-php.js файл.php</text><text class="s" x="52" y="267.1" text-anchor="start">bitrix → код идёт с ядром Битрикса</text></g><g class="n "><polygon class="box" points="740,205 840,240 740,275 640,240"/><text class="t" x="740" y="244.1" text-anchor="middle">bitrix и адрес?</text></g><path class="e " d="M740 275 L740 330" marker-end="url(#d5-a)"/><text class="lbl " x="748" y="306" text-anchor="start">да</text><path class="e u" d="M840 240 L880 240" marker-end="url(#d5-u)"/><text class="lbl u" x="860" y="232" text-anchor="middle">нет</text><g class="n k-user"><rect class="box" x="880" y="212" width="145" height="56" rx="8"/><text class="t" x="952.5" y="236.6" text-anchor="middle">Негде</text><text class="s" x="952.5" y="252.1" text-anchor="middle">включить SSH</text></g><g class="n k-core"><rect class="box" x="610" y="330" width="260" height="70" rx="8"/><text class="t" x="740" y="361.6" text-anchor="middle">Файл-канал kit-exec.php</text><text class="s" x="740" y="377.1" text-anchor="middle">браузер Claude, только админ</text></g><text class="s" x="740" y="422" text-anchor="middle">как он устроен — схема ниже</text><path class="e " d="M205 284 L205 300"/><path class="e " d="M90 300 L315 300"/><path class="e " d="M90 300 L90 318" marker-end="url(#d5-a)"/><path class="e " d="M200 300 L200 318" marker-end="url(#d5-a)"/><path class="e " d="M315 300 L315 318" marker-end="url(#d5-a)"/><g class="n "><rect class="box" x="40" y="318" width="100" height="42" rx="8"/><text class="t" x="90" y="335.6" text-anchor="middle">0</text><text class="s" x="90" y="351.1" text-anchor="middle">результат</text></g><g class="n "><rect class="box" x="150" y="318" width="100" height="42" rx="8"/><text class="t" x="200" y="335.6" text-anchor="middle">1</text><text class="s" x="200" y="351.1" text-anchor="middle">ошибка PHP</text></g><g class="n "><rect class="box" x="260" y="318" width="110" height="42" rx="8"/><text class="t" x="315" y="335.6" text-anchor="middle">3</text><text class="s" x="315" y="351.1" text-anchor="middle">нет связи</text></g><path class="e d" d="M370 339 L610 339" marker-end="url(#d5-a)"/><text class="lbl " x="490" y="331" text-anchor="middle">отказ во входе</text><path class="e " d="M315 360 L315 382"/><path class="e " d="M115 382 L435 382"/><path class="e " d="M115 382 L115 400" marker-end="url(#d5-a)"/><path class="e " d="M275 382 L275 400" marker-end="url(#d5-a)"/><path class="e " d="M435 382 L435 400" marker-end="url(#d5-a)"/><g class="n k-user"><rect class="box" x="40" y="400" width="150" height="56" rx="8"/><text class="s" x="115" y="424.1" text-anchor="middle">новый сервер:</text><text class="s" x="115" y="439.1" text-anchor="middle">входит пользователь</text></g><g class="n k-user"><rect class="box" x="200" y="400" width="150" height="56" rx="8"/><text class="t" x="275" y="424.6" text-anchor="middle">стоп</text><text class="s" x="275" y="440.1" text-anchor="middle">отпечаток сменился</text></g><g class="n "><rect class="box" x="360" y="400" width="150" height="56" rx="8"/><text class="s" x="435" y="424.1" text-anchor="middle">обрыв изменения:</text><text class="s" x="435" y="439.1" text-anchor="middle">результат неизвестен</text></g></svg></div><figcaption>Канал выбирается по параметрам проекта. Код 3 по SSH разбирается по причине: отказ во входе можно обойти файл-каналом, смену отпечатка сервера — нельзя (это может быть подмена), а обрыв во время изменяющего кода означает, что изменение могло пройти, — повторять его нельзя, только проверить чтением и спросить.</figcaption></figure>
+  <h3>Файл-канал kit-exec.php</h3>
+  <p>Нужен для Битрикса без SSH. Это не консоль: код одной задачи вшит в файл при сборке, из запроса файл ничего не выполняет. Номер запуска <code>?run=</code> — не секрет, а сверка «тот ли это файл»: старый файл, который ещё не заменили, при открытии нового адреса называет свой номер и ничего не делает. Без проверки <code>php -l</code> файл не собирается: ошибку компиляции на сервере увидел бы любой посетитель раньше, чем PHP дошёл бы до проверки прав.</p>
+  <figure><div class="fig-scroll"><svg class="dg" viewBox="0 0 1040 340" role="img" aria-label="Файл-канал: код задачи собирается в kit-exec.php с проверкой php -l, кладётся в корень проекта, доезжает на сервер и открывается во встроенном браузере Claude. На сервере файл загружает ядро Битрикса, пускает только администратора, печатает свой номер запуска и выполняет код, только если номер в адресе совпал. В конце работы файл удаляет сам себя." xmlns="http://www.w3.org/2000/svg"><defs><marker id="d6-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah " d="M0,0 L10,5 L0,10 z"/></marker><marker id="d6-u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah u" d="M0,0 L10,5 L0,10 z"/></marker></defs><text class="cap" x="20" y="18" text-anchor="start">путь файла</text><g class="n "><rect class="box" x="20" y="30" width="160" height="60" rx="8"/><text class="tm" x="100" y="56.6" text-anchor="middle">task.php</text><text class="s" x="100" y="72.1" text-anchor="middle">код задачи</text></g><g class="n "><rect class="box" x="210" y="30" width="170" height="60" rx="8"/><text class="tm" x="295" y="56.6" text-anchor="middle">kit-exec.js</text><text class="s" x="295" y="72.1" text-anchor="middle">php -l · номер run</text></g><g class="n "><rect class="box" x="410" y="30" width="170" height="60" rx="8"/><text class="tm" x="495" y="56.6" text-anchor="middle">kit-exec.php</text><text class="s" x="495" y="72.1" text-anchor="middle">в корень проекта</text></g><g class="n "><rect class="box" x="610" y="30" width="190" height="60" rx="8"/><text class="t" x="705" y="49.1" text-anchor="middle">Доставка</text><text class="s" x="705" y="64.6" text-anchor="middle">Always — сама, иначе</text><text class="s" x="705" y="79.6" text-anchor="middle">заливает пользователь</text></g><g class="n k-core"><rect class="box" x="830" y="30" width="190" height="60" rx="8"/><text class="t" x="925" y="56.6" text-anchor="middle">Браузер Claude</text><text class="m" x="925" y="72.1" text-anchor="middle">/kit-exec.php?run=…</text></g><path class="e " d="M180 60 L210 60" marker-end="url(#d6-a)"/><path class="e " d="M380 60 L410 60" marker-end="url(#d6-a)"/><path class="e " d="M580 60 L610 60" marker-end="url(#d6-a)"/><path class="e " d="M800 60 L830 60" marker-end="url(#d6-a)"/><path class="e " d="M925 90 L925 120 L105 120 L105 160" marker-end="url(#d6-a)"/><text class="lbl u" x="515" y="114" text-anchor="middle">открыть страницу = выполнить код</text><text class="cap" x="20" y="146" text-anchor="start">на сервере</text><g class="n "><rect class="box" x="20" y="160" width="170" height="54" rx="8"/><text class="t" x="105" y="183.6" text-anchor="middle">Ядро Битрикса</text><text class="s" x="105" y="199.1" text-anchor="middle">права — настоящие</text></g><g class="n "><polygon class="box" points="300,155 375,187 300,219 225,187"/><text class="t" x="300" y="191.1" text-anchor="middle">IsAdmin()?</text></g><g class="n "><rect class="box" x="415" y="160" width="200" height="54" rx="8"/><text class="m" x="515" y="183.1" text-anchor="middle">echo KIT-RUN номер</text><text class="s" x="515" y="198.1" text-anchor="middle">номер этого файла</text></g><g class="n "><polygon class="box" points="715,155 790,187 715,219 640,187"/><text class="t" x="715" y="191.1" text-anchor="middle">?run совпал?</text></g><g class="n k-core"><rect class="box" x="850" y="160" width="170" height="54" rx="8"/><text class="m" x="935" y="183.1" text-anchor="middle">try { код задачи }</text><text class="s" x="935" y="198.1" text-anchor="middle">вывод — результат</text></g><path class="e " d="M190 187 L225 187" marker-end="url(#d6-a)"/><path class="e " d="M375 187 L415 187" marker-end="url(#d6-a)"/><text class="lbl " x="395" y="179" text-anchor="middle">да</text><path class="e " d="M615 187 L640 187" marker-end="url(#d6-a)"/><path class="e " d="M790 187 L850 187" marker-end="url(#d6-a)"/><text class="lbl " x="820" y="179" text-anchor="middle">да</text><path class="e u" d="M300 219 L300 262" marker-end="url(#d6-u)"/><text class="lbl u" x="308" y="245" text-anchor="start">нет</text><g class="n k-user"><rect class="box" x="205" y="262" width="190" height="60" rx="8"/><text class="t" x="300" y="281.1" text-anchor="middle">403</text><text class="s" x="300" y="296.6" text-anchor="middle">входит пользователь</text><text class="s" x="300" y="311.6" text-anchor="middle">в /bitrix/admin/</text></g><path class="e " d="M715 219 L715 262" marker-end="url(#d6-a)"/><text class="lbl " x="723" y="245" text-anchor="start">нет</text><g class="n "><rect class="box" x="620" y="262" width="190" height="60" rx="8"/><text class="t" x="715" y="288.6" text-anchor="middle">код не выполнялся</text><text class="s" x="715" y="304.1" text-anchor="middle">открыть снова можно</text></g><path class="e d" d="M935 214 L935 262" marker-end="url(#d6-a)"/><text class="lbl " x="927" y="245" text-anchor="end">в конце работы</text><g class="n k-user"><rect class="box" x="850" y="262" width="170" height="60" rx="8"/><text class="m" x="935" y="288.1" text-anchor="middle">unlink(__FILE__)</text><text class="s" x="935" y="303.1" text-anchor="middle">KIT-DELETED → 404</text></g></svg></div><figcaption>Верхний ряд — как файл попадает на сервер, нижний — что он делает при открытии. Проверка администратора стоит после ядра Битрикса, поэтому права настоящие. В конце работы файл удаляет себя сам — тоже изменяющим запуском, с согласия.</figcaption></figure>
+  <h3>Как читать ответ страницы</h3>
+  <div class="tbl"><table>
+    <thead><tr><th>На странице</th><th>Что это значит</th><th>Что делать</th></tr></thead>
+    <tbody>
+      <tr><td><code>KIT-RUN &lt;свой номер&gt;</code> без «код не выполнялся»</td><td>код выполнен</td><td>вывод — результат; адрес больше не открывать</td></tr>
+      <tr><td>«kit: только для администратора» (403)</td><td>администратор не вошёл</td><td>вкладку вперёд, пользователь входит в <code>/bitrix/admin/</code>, открыть снова</td></tr>
+      <tr><td><code>KIT-RUN</code> с чужим номером, 404 или страница сайта</td><td>новый файл ещё не доехал</td><td>ждать 5–10 секунд, до 6 попыток, потом просить проверить заливку</td></tr>
+      <tr><td>«код не выполнялся»</td><td>адрес без верного <code>?run</code></td><td>открыть адрес из вывода <code>kit-exec.js</code></td></tr>
+      <tr><td>Parse error, сбой <code>init.php</code> без <code>KIT-RUN</code></td><td>упало до проверки прав</td><td>искать причину; повтор не поможет</td></tr>
+      <tr><td>пусто, 500/502/504, обрыв</td><td>неизвестно: <code>KIT-RUN</code> мог застрять в буфере</td><td>чтение — повторить можно; изменение — не открывать, проверить чтением и спросить</td></tr>
+      <tr><td>«headers already sent»</td><td>сайт что-то вывел раньше заголовков</td><td>на этом сайте канал не заработает — нужен SSH</td></tr>
+    </tbody>
+  </table></div>
+  <p>Остаточный риск оставлен сознательно: пока файл с изменяющим кодом лежит на сервере, тот же адрес выполнит код ещё раз. Поэтому такую страницу открывают один раз, вкладку не перезагружают и по истории на неё не возвращаются. При автозаливке файл уезжает и на тот сервер, куда льёт PhpStorm, — удалять его в конце нужно на каждом.</p>
+  <h3>Удаление файлов — delete-list.php</h3>
+  <ol class="chain">
+    <li><span><code>$dryRun = true</code>: список и куда лягут копии</span></li>
+    <li><span class="u">«Выполнить по-настоящему?» — «да»</span></li>
+    <li><span>копия в <code>~/kit-backup/&lt;дата&gt;/…</code>, сверка md5, затем <code>unlink</code></span></li>
+    <li><span>снаружи 404, отметка ✅ в плане выкладки</span></li>
+  </ol>
+  <p>Каждый путь проверяется через <code>realpath</code>: внутри <code>$base</code>, файл, не симлинк, под узкую маску (<code>*.php.back*</code>, а не <code>*.back*</code> — под неё попал бы <code>jquery.backstretch.js</code>); маски <code>*</code> и <code>*.*</code> не принимаются. Стоп-лист не удаляется никогда: <code>.htaccess</code>, <code>.settings.php</code>, <code>dbconn.php</code>, <code>.env</code>, а в корне ещё <code>index.php</code>, <code>urlrewrite.php</code>, <code>robots.txt</code>, <code>sitemap*.xml</code>. Копия не удалась — файл остаётся; места меньше, чем копии плюс 100 МБ, — стоп.</p>
+  <h3>Чем каналы отличаются</h3>
+  <div class="tbl"><table>
+    <thead><tr><th></th><th>SSH</th><th>Файл-канал</th></tr></thead>
+    <tbody>
+      <tr><td>Где работает код</td><td>PHP CLI на сервере, код идёт через stdin</td><td>веб-запрос к сайту</td></tr>
+      <tr><td>Режимы проекта</td><td>любой; bitrix — с ядром Битрикса</td><td>только bitrix</td></tr>
+      <tr><td>Кто такой <code>$USER</code></td><td>никто, права снимает <code>NOT_CHECK_PERMISSIONS</code></td><td>вошедший администратор</td></tr>
+      <tr><td>Предел времени</td><td><code>--timeout</code> 90 с + 10 с запаса — меньше лимита Bash в 120 с</td><td><code>max_execution_time</code> и таймаут веб-сервера</td></tr>
+      <tr><td>Владелец созданных файлов</td><td>пользователь SSH (BitrixVM — входить под <code>bitrix</code>)</td><td>пользователь веб-сервера</td></tr>
+      <tr><td>Обрыв при изменении</td><td>код 3 — результат неизвестен</td><td>пустая страница или 5xx — результат неизвестен</td></tr>
+    </tbody>
+  </table></div>
+  <p>Библиотека скриптов работает в обоих каналах: <code>inventory.php</code> — окружение, сайты и шаблоны, модули, инфоблоки, HL-блоки, файлы <code>b_file</code>; <code>check-files.php</code> — сверка файлов с локальными по md5 (код готовит <code>md5-check.js</code>); <code>delete-list.php</code> — удаление строгим списком. Проектные копии с конкретными путями лежат в <code>.claude/scripts/NN-имя.php</code>: в git есть, на сервер не уезжают.</p>
+</section>
+
+<section id="visual">
+  <h2>Снимки «до/после» <span class="cmd">/kit:visual</span></h2>
+  <p>Нужны перед обновлением ядра, модулей или шаблона и после каждого шага, который может задеть вид страниц. Снимаются гость и администратор, ширины 1920 и 390.</p>
+  <figure><div class="fig-scroll"><svg class="dg" viewBox="0 0 1040 286" role="img" aria-label="Снимки /kit:visual: один раз — зависимости, список страниц и вход администратора; на каждое изменение — эталон before, контрольный прогон для замера шума, шаг, снимки after, сравнение и отчёт. Перед записью снимков проверяется, что PhpStorm не зальёт их на сервер." xmlns="http://www.w3.org/2000/svg"><defs><marker id="d7-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah " d="M0,0 L10,5 L0,10 z"/></marker><marker id="d7-u" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah u" d="M0,0 L10,5 L0,10 z"/></marker></defs><text class="cap" x="20" y="22" text-anchor="start">один раз на проект и машину</text><g class="n "><rect class="box" x="20" y="34" width="200" height="58" rx="8"/><text class="tm" x="120" y="59.6" text-anchor="middle">deps</text><text class="s" x="120" y="75.1" text-anchor="middle">нет → install с согласия</text></g><g class="n "><rect class="box" x="250" y="34" width="210" height="58" rx="8"/><text class="tm" x="355" y="59.6" text-anchor="middle">pages.json</text><text class="s" x="355" y="75.1" text-anchor="middle">discover → список → «Да»</text></g><g class="n k-user"><rect class="box" x="490" y="34" width="220" height="58" rx="8"/><text class="tm" x="600" y="59.6" text-anchor="middle">login</text><text class="s" x="600" y="75.1" text-anchor="middle">Chrome, входит пользователь</text></g><g class="n k-ext"><rect class="box" x="740" y="34" width="280" height="58" rx="8"/><text class="s" x="880" y="59.1" text-anchor="middle">зависимости и сессии входа —</text><text class="m" x="880" y="74.1" text-anchor="middle">%LOCALAPPDATA%\kit\visual</text></g><path class="e " d="M220 63 L250 63" marker-end="url(#d7-a)"/><path class="e " d="M460 63 L490 63" marker-end="url(#d7-a)"/><text class="cap" x="20" y="130" text-anchor="start">каждое изменение</text><g class="n "><rect class="box" x="20" y="142" width="150" height="58" rx="8"/><text class="tm" x="95" y="167.6" text-anchor="middle">shoot before</text><text class="s" x="95" y="183.1" text-anchor="middle">эталон</text></g><g class="n "><rect class="box" x="195" y="142" width="165" height="58" rx="8"/><text class="tm" x="277.5" y="167.6" text-anchor="middle">check before</text><text class="s" x="277.5" y="183.1" text-anchor="middle">шум → noise.json</text></g><path class="e " d="M170 171 L195 171" marker-end="url(#d7-a)"/><g class="n k-core"><rect class="box" x="385" y="142" width="150" height="58" rx="8"/><text class="t" x="460" y="167.6" text-anchor="middle">Шаг</text><text class="s" x="460" y="183.1" text-anchor="middle">код, обновление</text></g><path class="e " d="M360 171 L385 171" marker-end="url(#d7-a)"/><g class="n "><rect class="box" x="560" y="142" width="150" height="58" rx="8"/><text class="tm" x="635" y="167.6" text-anchor="middle">shoot after-ID</text><text class="s" x="635" y="183.1" text-anchor="middle">весь или --only</text></g><path class="e " d="M535 171 L560 171" marker-end="url(#d7-a)"/><g class="n "><rect class="box" x="735" y="142" width="150" height="58" rx="8"/><text class="tm" x="810" y="167.6" text-anchor="middle">compare</text><text class="s" x="810" y="183.1" text-anchor="middle">до ↔ после</text></g><path class="e " d="M710 171 L735 171" marker-end="url(#d7-a)"/><g class="n "><rect class="box" x="910" y="142" width="110" height="58" rx="8"/><text class="tm" x="965" y="167.6" text-anchor="middle">report.html</text><text class="s" x="965" y="183.1" text-anchor="middle">отчёт</text></g><path class="e " d="M885 171 L910 171" marker-end="url(#d7-a)"/><g class="n k-user"><rect class="box" x="20" y="228" width="1000" height="44" rx="8"/><text class="s" x="520" y="253.6" text-anchor="middle">Перед записью в папку снимков: PhpStorm Always, а папка не исключена → код 4, ничего не снимается</text></g></svg></div><figcaption>Контрольный прогон check снимает эталон второй раз теми же настройками: всё, что разошлось между двумя одинаковыми прогонами, — шум, и дальше он не считается отличием.</figcaption></figure>
+  <div class="cols">
+    <div>
+      <h3>Порядок разбора сравнения</h3>
+      <ol>
+        <li><b>Статусы и ошибки</b> — смена статуса (200 → 500), редирект, USER_ID, новые JS-ошибки и ответы ≥ 400. Это главное.</li>
+        <li><b>Отличается</b> — Claude открывает дифф-картинку и оба снимка и смотрит сам, плюс пропавшие и новые строки текста.</li>
+        <li><b>В пределах шума</b> и «не снимали» — только упоминание.</li>
+      </ol>
+    </div>
+    <div>
+      <h3>Особенности</h3>
+      <ul>
+        <li>Текст сравнивается с точностью до чисел (цифры → <code>#</code>): таймер или «Найдено 12» шумом и останутся. Смена статуса между одинаковыми прогонами шумом не бывает.</li>
+        <li>Снимки из-под админа — только локально: <code>.claude/docs/visual</code> не коммитится и не выкладывается, инструмент сам кладёт туда <code>.gitignore</code>.</li>
+        <li>Опасные адреса (выход, <code>action=</code>, <code>sessid=</code>, удаление, <code>/bitrix/</code>) не снимаются; <code>"unsafe": true</code> — с согласия на конкретный адрес.</li>
+        <li>Нужен установленный Google Chrome. Метки — латиницей: <code>after-10.5a</code>.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="tbl"><table>
+    <thead><tr><th>Код</th><th>Что</th></tr></thead>
+    <tbody>
+      <tr><td>0</td><td>норма</td></tr>
+      <tr><td>1</td><td>страницы не снялись, или в сравнении отличия сверх шума</td></tr>
+      <tr><td>2</td><td>аргументы или <code>pages.json</code>: опасный адрес, опечатка, метка с другого адреса</td></tr>
+      <tr><td>3</td><td>нет сессии входа или она истекла — снова <code>login</code></td></tr>
+      <tr><td>4</td><td>защита выкладки: PhpStorm зальёт снимки на сервер</td></tr>
+      <tr><td>5</td><td>нет зависимостей или Chrome</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="deploy-list">
+  <h2>Список на выкладку <span class="cmd">/kit:deploy-list</span></h2>
+  <p>Показывает, что залить и что удалить на сервере с последней выкладки. Откуда считать:</p>
+  <ol class="chain">
+    <li><span><code>--base &lt;коммит&gt;</code></span></li>
+    <li><span>иначе последний «Коммит» в таблице «Залито на прод»</span></li>
+    <li><span>иначе первый коммит репозитория</span></li>
+  </ol>
+  <div class="tbl"><table>
+    <thead><tr><th>Выкладка</th><th>Что показывает</th></tr></thead>
+    <tbody>
+      <tr><td>вручную</td><td>«Залить» и «Удалить с сервера» целиком</td></tr>
+      <tr><td>PhpStorm Always</td><td>только «Удалить»: заливает PhpStorm сам, а удаление локально сервер не трогает</td></tr>
+      <tr><td>вручную; дев — PhpStorm Always</td><td>полный список для прода</td></tr>
+    </tbody>
+  </table></div>
+  <p>Из списка всегда выпадают <code>.claude</code>, папка журнала вне <code>.claude</code>, <code>/kit-exec.php</code> и всё из «Не выкладывать». Незакоммиченные изменения в список не входят — сначала нужно закрыть шаг. Удаления делает пользователь (PhpStorm → Remote Host) или Claude через <code>/kit:server</code>. Когда выложено — запись через <code>/kit:step-done</code> блоком DEPLOY: файлы, коммит, что осталось удалить, что проверено.</p>
+</section>
+
+<section id="udalennyj">
+  <h2>Удалённый репозиторий и работа с другого компьютера</h2>
+  <p>С 2.5.0 git проекта можно держать в закрытом удалённом репозитории (GitHub, GitLab, корпоративный сервер). Тогда заболели или работаете из дома — достаточно <code>git clone</code>: вместе с кодом придут журнал, решения, план выкладки, правила и скрипты. Репозиторий создаёте вы — закрытым и пустым, вход тоже ваш; подключает его <code>/kit:project-init</code> (параметр «Удалённый репозиторий: origin»).</p>
+  <ol class="chain">
+    <li><span>шаг проверен</span></li>
+    <li><span>один коммит (git-keeper)</span></li>
+    <li><span>первый раз: <code>secret-scan --history</code></span></li>
+    <li><span><code>git push -u origin HEAD</code></span></li>
+  </ol>
+  <ul>
+    <li>На другой машине: плагин, <code>git clone</code> в ту же папку (параметр «PHP» — путь на машине, и он в git), сервер выкладки в PhpStorm (<code>.idea</code> не в git), свой SSH-ключ, зависимости снимков заново, скиллы Битрикса — через <code>/kit:project-init</code>.</li>
+    <li>Работать с одного компьютера за раз: при старте хук сверит ветку с удалённой, и Claude подтянет чужие коммиты, <code>/kit:step-done</code> отправит свои; разошлись — Claude остановится и спросит.</li>
+    <li>Адрес с логином или токеном внутри не принимается; перед первой отправкой проверяется вся история — секрет из старых коммитов остановит отправку.</li>
+  </ul>
+</section>
+
+<section id="project-init">
+  <h2>Подготовка проекта <span class="cmd">/kit:project-init</span></h2>
+  <p>Запускается только командой. В существующем проекте дополняет недостающее и ничего не перезаписывает. Порядок важен — особенно пункт 6.</p>
+  <ol class="steps">
+    <li><b>Разведка, только чтение.</b> git и его настройки, файлы kit, старая раскладка <code>docs/</code>, признаки Битрикса (<code>bitrix/</code>, <code>local/</code>, <code>urlrewrite.php</code>), <code>.idea</code>: автозаливка, серверы, домен из <code>webServers.xml</code>, File Watchers.</li>
+    <li><b>Вопросы</b> — не больше четырёх за раз, найденное разведкой — первым с пометкой «(Рекомендую)»: режим, окружение, кто пишет код, как файлы попадают на сервер; затем адрес прода, задача, исключения, вотчеры. Ответ разошёлся с настройками <code>.idea</code> — отдельный вопрос.</li>
+    <li><b>Версия PHP.</b> <code>site-probe.js</code> читает <code>X-Powered-By</code> прода и находит такой же <code>php.exe</code> в OSPanel — для хука <code>php -l</code>.</li>
+    <li><b>SSH.</b> Псевдонимы из <code>~/.ssh/config</code> (с <code>Include</code>, только строки <code>Host</code>/<code>HostName</code>/<code>User</code>, ключи не открываются), затем <code>ssh-probe.js</code> — одно подключение: папка сайта и PHP CLI нужной версии. <span class="tag u">ветка</span>Новый хост — пользователь один раз входит сам; сменился отпечаток — стоп.</li>
+    <li><b>План на согласие</b> — таблица «что есть / что сделаю / что пропущу». Без согласия ничего не пишется.</li>
+    <li><b>Исключения PhpStorm — до любой записи.</b> Иначе <code>git init</code> и <code>settings.local.json</code> уехали бы на сервер автозаливкой. Затем сверка <code>--check</code>; при автозаливке — <code>.htaccess</code> и проверка снаружи.</li>
+    <li><b>Git, если его нет.</b> <code>autocrlf=input</code>, <code>quotepath=false</code>, <code>.gitignore</code> по шаблону режима, <code>secret-scan --all</code> по всему, что попадёт в коммит, первый коммит <code>0.1</code> через git-keeper. <span class="tag u">ветка</span>Нашёлся секрет — исключить путь или убрать секрет; варианта «это не секрет» нет.</li>
+    <li><b>Файлы kit.</b> <code>.claude/.htaccess</code>, <code>.claude/CLAUDE.md</code> из шаблона (или дописать только раздел параметров), журнал и план выкладки в <code>.claude/docs</code>. Шаблоны собираются во временной папке и пишутся одной записью, когда не осталось ни одного <code>{{…}}</code>.</li>
+    <li><b>Проверка снаружи.</b> <code>check-closed.js</code> запрашивает каждый файл <code>.claude</code> по каждому адресу: 404, 403 и 401 — норма, «ОТКРЫТ» или редирект — стоп и разбор.</li>
+    <li><b>Битрикс: скиллы</b> (с 2.7.0). <code>bitrix-skills.js</code> ставит в <code>.claude/skills</code> скиллы из bxmaximum/bitrix-framework-skills (без <code>bitrix24-*</code>) и bitrix-tools/best-practice — 46 штук; в правила проекта — строка «код на Битриксе — по этим скиллам». В git и на сервер они не попадают; уже стоят — пункт обновляет их до последних версий.</li>
+    <li><b>Переезд</b> <code>docs/</code> → <code>.claude/docs</code>, если проект на старой раскладке: исключения, <code>.gitignore</code>, старые копии на сервере, таблица «файл → куда», перенос.</li>
+    <li><b>Закрытие</b> через <code>/kit:step-done</code> — шаг <code>0.2</code>.</li>
+  </ol>
+</section>
+
+<section id="parametry">
+  <h2>Параметры: кто что читает</h2>
+  <p>Раздел «Параметры для агентов» в <code>.claude/CLAUDE.md</code> — единственная настройка проекта. Строки вида <code>- Ключ: значение</code>, списки через запятую; формат менять нельзя, его разбирают скрипты.</p>
+  <div class="tbl"><table class="mx">
+    <thead><tr><th>Параметр</th><th>session-start</th><th>php-lint</th><th>phpstorm-exclude</th><th>remote-check</th><th>secret-scan</th><th>deploy-list</th><th>check-closed</th><th>remote-php</th><th>kit-exec</th><th>visual</th><th>docs-keeper</th></tr></thead>
+    <tbody>
+      <tr><td>Режим</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td><span class="dot" aria-label="читает"></span></td><td><span class="dot" aria-label="читает"></span></td><td></td></tr>
+      <tr><td>Код пишет</td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>Выкладка</td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>Прод, Дев</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td><span class="dot" aria-label="читает"></span></td><td><span class="dot" aria-label="читает"></span></td><td></td></tr>
+      <tr><td>SSH прод, SSH дев</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td></tr>
+      <tr><td>PHP на сервере</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td></tr>
+      <tr><td>PHP</td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td></tr>
+      <tr><td>Журнал</td><td class="all" colspan="11">все: по нему определяются kit-проект и папка документов</td></tr>
+      <tr><td>План выкладки</td><td></td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td></tr>
+      <tr><td>ID шага</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td></tr>
+      <tr><td>Не выкладывать</td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td></tr>
+      <tr><td>Документы на сервере</td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>Не коммитить</td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>Секреты</td><td></td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>Удалённый репозиторий</td><td></td><td></td><td></td><td><span class="dot" aria-label="читает"></span></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+    </tbody>
+  </table></div>
+  <p>«Окружение» скрипты не читают: оно нужно <code>/kit:project-init</code> для вопросов и <code>/kit:server</code>, чтобы понять, спрашивать ли, на каком сервере выполнять. «Удалённый репозиторий» читает ещё <code>/kit:step-done</code> — чтобы отправить коммит. Пути в «Не выкладывать» и «Не коммитить»: со <code>/</code> — от корня проекта (<code>bitrix/</code> не задевает копии шаблонов в <code>local/templates/…/bitrix/</code>), без <code>/</code> — имя в любом месте пути; <code>X (кроме Y)</code> — исключение из правила.</p>
+</section>
+
+<section id="grabli">
+  <h2>Грабли и чем они закрыты</h2>
+  <div class="tbl"><table>
+    <thead><tr><th>Грабля</th><th>Что делает kit</th></tr></thead>
+    <tbody>
+      <tr><td><code>cd</code> меняет каталог всей сессии</td><td>guard-bash запрещает; в Bash можно <code>( cd … &amp;&amp; … )</code>, в PowerShell — только абсолютные пути</td></tr>
+      <tr><td><code>sed -i</code> портит <code>\</code> в неймспейсах PHP</td><td>guard-bash запрещает; PHP правится только через Edit</td></tr>
+      <tr><td>ошибка синтаксиса PHP уезжает на прод автозаливкой</td><td>php-lint после каждой правки; при Always черновик — во временной папке</td></tr>
+      <tr><td>журнал, скрипты, снимки или <code>.git</code> уезжают на сервер</td><td>Excluded Paths при каждом старте, <code>.claude</code> в «Не выкладывать», <code>.htaccess</code>, проверка снаружи <code>check-closed</code></td></tr>
+      <tr><td>nginx отдаёт статику мимо <code>.htaccess</code></td><td><code>.claude</code> исключена целиком; снимки только локально, visual при риске — код 4</td></tr>
+      <tr><td>секрет попадает в коммит</td><td>secret-scan до и после <code>git add</code>, значения маскируются; подстановки шаблонов (<code>$key</code>, <code>{{…}}</code>, <code>#API_KEY#</code>) не считаются секретом</td></tr>
+      <tr><td>кириллица в путях git</td><td><code>core.quotepath=false</code> во всех командах</td></tr>
+      <tr><td><code>$arResult</code> исчезает из сообщения коммита</td><td>только одинарные кавычки; заголовок проверяется символ в символ</td></tr>
+      <tr><td>Git Bash превращает <code>/путь</code> в <code>C:/Program Files/Git/…</code></td><td><code>MSYS_NO_PATHCONV=1</code> или PowerShell; <code>remote-php.js</code> ловит переписанный путь (код 4)</td></tr>
+      <tr><td>чужая подпись в коммите</td><td>COAUTHOR дословно от основного агента, git-keeper свою не подставляет</td></tr>
+      <tr><td>изменяющий код выполнился дважды</td><td>SSH: код 3 = неизвестно, без повтора; файл-канал: <code>?run=</code>, одно открытие, вкладку не перезагружать</td></tr>
+      <tr><td>удалили не тот файл</td><td>строгий список, узкие маски, стоп-лист, сухой прогон, копия с md5</td></tr>
+      <tr><td>зависший PHP обрывает вызов</td><td>90 с + 10 с запаса меньше 120 с лимита Bash — приходит код 3, а не обрыв</td></tr>
+      <tr><td>подмена сервера</td><td>«REMOTE HOST IDENTIFICATION HAS CHANGED» — стоп; <code>StrictHostKeyChecking=no</code> и <code>accept-new</code> не используются</td></tr>
+      <tr><td>параметр <code>SSH прод</code> вида <code>-oProxyCommand=…</code></td><td>хост только <code>^[A-Za-z0-9_][A-Za-z0-9_.@-]*$</code>, без <code>-</code> в начале</td></tr>
+      <tr><td>пароль в руках Claude</td><td>SSH только по ключу; в Chrome для снимков и в админку сайта входит пользователь</td></tr>
+      <tr><td>заболел — продолжить работу не с чего</td><td>удалённый репозиторий: коммит уходит после каждого шага, при старте сессии — сверка; дома — <code>git clone</code></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<section id="vypusk">
+  <h2>Выпуск и обновление</h2>
+  <ul>
+    <li>Установленный плагин — копия в кэше <code>~/.claude/plugins/cache/claude-kit/kit/&lt;версия&gt;</code>. Claude Code работает с копией, а не с папкой репозитория.</li>
+    <li>Без повышения <code>version</code> в <code>plugin.json</code> и <code>marketplace.json</code> обновления не будет: <code>claude plugin update</code> ответит, что версия последняя.</li>
+    <li>Порядок выпуска: версия → слияние в <code>master</code> → <code>claude plugin marketplace update claude-kit</code> → <code>claude plugin update kit@claude-kit</code> → перезапуск сессий. Push на GitHub — только с согласия.</li>
+    <li>Зависимости снимков и сессии входа лежат в <code>%LOCALAPPDATA%\kit\visual</code> — вне кэша, поэтому обновления плагина их не трогают.</li>
+    <li>Проверить правки без выпуска: <code>claude --plugin-dir C:\OSPanel\home\claude-kit\plugins\kit</code>.</li>
+  </ul>
+</section>
+
+</main>
+</div>
+<footer>Собрано по исходникам <code>plugins/kit</code> версии 2.5.0 (скиллы, агенты, хуки и скрипты), 30 сентября 2026. Пересборка страницы, схем и Markdown: <code>node .claude/docs/work/overview/build/build.js</code> из корня репозитория.</footer>
+</div>
+</body>
+</html>

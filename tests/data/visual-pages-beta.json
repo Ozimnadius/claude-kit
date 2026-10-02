@@ -1,0 +1,207 @@
+{
+  "contexts": {
+    "guest": {
+      "auth": false,
+      "pages": [
+        {
+          "name": "home",
+          "url": "/"
+        },
+        {
+          "name": "auth",
+          "url": "/auth/"
+        },
+        {
+          "name": "registration",
+          "url": "/auth/registration/?register=yes&backurl=/"
+        },
+        {
+          "name": "forgot-password",
+          "url": "/auth/?forgot_password=yes"
+        },
+        {
+          "name": "catalog-redirect",
+          "url": "/catalog/"
+        },
+        {
+          "name": "company",
+          "url": "/company/"
+        },
+        {
+          "name": "contacts",
+          "url": "/contacts/"
+        },
+        {
+          "name": "partners",
+          "url": "/partners/"
+        },
+        {
+          "name": "basket-empty",
+          "url": "/basket/"
+        },
+        {
+          "name": "404",
+          "url": "/net-takoj-stranicy-visual/"
+        }
+      ]
+    },
+    "admin": {
+      "auth": true,
+      "setup": [
+        {
+          "goto": "/basket/"
+        },
+        {
+          "clickAccept": ".remove_all_basket",
+          "optional": true
+        },
+        {
+          "wait": 1500
+        },
+        {
+          "goto": "/catalog/section_a/1001/"
+        },
+        {
+          "fill": ".buy_block-input",
+          "nth": 0,
+          "value": "1"
+        },
+        {
+          "fill": ".buy_block-input",
+          "nth": 1,
+          "value": "1"
+        },
+        {
+          "click": ".buy_block-submit"
+        },
+        {
+          "wait": 2500
+        },
+        {
+          "goto": "/catalog/section_a/1002/"
+        },
+        {
+          "fill": ".buy_block-input",
+          "nth": 0,
+          "value": "1"
+        },
+        {
+          "click": ".buy_block-submit"
+        },
+        {
+          "wait": 2500
+        }
+      ],
+      "pages": [
+        {
+          "name": "home",
+          "url": "/"
+        },
+        {
+          "name": "catalog-popup",
+          "url": "/",
+          "fullPage": false,
+          "viewports": [
+            "desktop"
+          ],
+          "actions": [
+            {
+              "hover": "header a.dropdown-toggle[href='/catalog/']"
+            },
+            {
+              "wait": 1200
+            }
+          ]
+        },
+        {
+          "name": "catalog",
+          "url": "/catalog/"
+        },
+        {
+          "name": "section-a",
+          "url": "/catalog/section_a/"
+        },
+        {
+          "name": "section-b",
+          "url": "/catalog/section_b/"
+        },
+        {
+          "name": "section-c",
+          "url": "/catalog/section_c/"
+        },
+        {
+          "name": "product-1001",
+          "url": "/catalog/section_a/1001/"
+        },
+        {
+          "name": "product-1002",
+          "url": "/catalog/section_a/1002/"
+        },
+        {
+          "name": "search",
+          "url": "/catalog/?q=%D1%82%D0%BE%D0%B2%D0%B0%D1%80"
+        },
+        {
+          "name": "basket",
+          "url": "/basket/"
+        },
+        {
+          "name": "order",
+          "url": "/order/"
+        },
+        {
+          "name": "personal",
+          "url": "/personal/"
+        },
+        {
+          "name": "personal-orders",
+          "url": "/personal/orders/"
+        },
+        {
+          "name": "personal-order-109",
+          "url": "/personal/order/1/"
+        },
+        {
+          "name": "personal-private",
+          "url": "/personal/private/"
+        },
+        {
+          "name": "personal-favorite",
+          "url": "/personal/favorite/"
+        },
+        {
+          "name": "personal-change-password",
+          "url": "/personal/change-password/"
+        },
+        {
+          "name": "company",
+          "url": "/company/"
+        },
+        {
+          "name": "contacts",
+          "url": "/contacts/"
+        },
+        {
+          "name": "partners",
+          "url": "/partners/"
+        },
+        {
+          "name": "404",
+          "url": "/net-takoj-stranicy-visual/"
+        }
+      ],
+      "teardown": [
+        {
+          "goto": "/basket/"
+        },
+        {
+          "clickAccept": ".remove_all_basket",
+          "optional": true
+        },
+        {
+          "wait": 2000
+        }
+      ]
+    }
+  }
+}

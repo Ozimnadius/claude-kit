@@ -1,0 +1,30 @@
+# Служебное IDE и Claude Code: в git только правила, .htaccess, документы и скрипты `/kit:server`
+/.idea/
+/.claude/*
+!/.claude/CLAUDE.md
+!/.claude/.htaccess
+!/.claude/scripts/
+!/.claude/scripts/**
+!/.claude/docs/
+!/.claude/docs/**
+
+# Снимки /kit:visual — только локально (из-под админа)
+/.claude/docs/visual/
+
+# Файл-канал /kit:server — на сервере только на время работы, в git не нужен
+/kit-exec.php
+
+# Ядро и загрузки Битрикса (секреты — в bitrix/.settings_extra.php); материалы задачи — в upload/docs/
+/bitrix/
+/upload/*
+!/upload/docs/
+
+# Секреты
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Резервные копии обновлений
+*.back*

@@ -1,0 +1,13 @@
+{
+  "name": "claude-kit",
+  "private": true,
+  "license": "MIT",
+  "description": "Маркетплейс claude-kit с плагином kit для Claude Code",
+  "scripts": {
+    "test": "node --test tests/*.test.js"
+  },
+  "devDependencies": {
+    "pixelmatch": "7.2.0",
+    "pngjs": "7.0.0"
+  }
+}

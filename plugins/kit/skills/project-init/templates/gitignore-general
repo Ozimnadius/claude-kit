@@ -1,0 +1,21 @@
+# Служебное IDE и Claude Code: в git только правила, .htaccess, документы и скрипты `/kit:server`
+/.idea/
+/.claude/*
+!/.claude/CLAUDE.md
+!/.claude/.htaccess
+!/.claude/scripts/
+!/.claude/scripts/**
+!/.claude/docs/
+!/.claude/docs/**
+
+# Снимки /kit:visual — только локально (из-под админа)
+/.claude/docs/visual/
+
+# Секреты и зависимости
+.env
+.env.*
+!.env.example
+node_modules/
+
+# Резервные копии
+*.back*

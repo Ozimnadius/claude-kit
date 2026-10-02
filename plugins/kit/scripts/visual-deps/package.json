@@ -1,0 +1,10 @@
+{
+  "name": "kit-visual-deps",
+  "private": true,
+  "description": "Зависимости снимков /kit:visual: ставятся один раз на машину командой node visual.js install в %LOCALAPPDATA%\\kit\\visual\\deps",
+  "dependencies": {
+    "pixelmatch": "7.2.0",
+    "playwright-core": "1.63.0",
+    "pngjs": "7.0.0"
+  }
+}
