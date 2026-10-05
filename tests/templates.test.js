@@ -93,7 +93,8 @@ test('progress.md: разделы журнала и таблица этапа 0'
   const decisions = parseTable(getSection(md, 'Решения'));
   assert.deepEqual(Object.keys(decisions[0]), ['№', 'Дата', 'Шаг', 'Решение', 'Почему', 'Что отвергли', 'Кто']);
   const rows = parseTable(getSection(md, 'Этап 0'));
-  assert.deepEqual(Object.keys(rows[0]), ['Шаг', 'Статус', 'Что сделано', 'Коммит']);
+  assert.deepEqual(Object.keys(rows[0]), ['Шаг', 'Статус', 'Что сделано', 'Как проверено', 'Коммит']);
+  assert.ok(rows[0]['Как проверено'], 'у 0.1 заполнено «Как проверено»');
   assert.equal(rows[0]['Шаг'], '0.1');
 });
 
