@@ -38,7 +38,8 @@ function docsRule(docsRel) {
 function superpowersRule(docsRel) {
   const work = (docsRel === '.' ? '' : docsRel + '/') + 'work/';
   return '- Superpowers по правилам kit: спеки и планы — в ' + work + ' (spec-<тема>.md по шаблону ' + SPEC_TEMPLATE.replace(/\\/g, '/')
-    + ', plan-<тема>.md), не в docs/superpowers/; superpowers сам не коммитит — коммит только через /kit:step-done; '
+    + ', plan-<тема>.md с разделом «Чек-лист» в начале: строка на задачу «- [ ] N.M — …», шаги внутри задач — без чекбоксов), '
+    + 'не в docs/superpowers/; superpowers сам не коммитит — коммит только через /kit:step-done; '
     + 'задача плана = шаг kit N.M; выбранный подход и отвергнутые — в DECISIONS; TDD — только где в проекте есть тесты.';
 }
 

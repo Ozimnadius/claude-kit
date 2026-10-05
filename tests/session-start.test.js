@@ -31,7 +31,7 @@ test('alpha: «Сейчас», общие правила, Always и «код п�
 test('superpowers по правилам kit: правило всегда, с путём к шаблону спеки; ветки и worktree — только при автозаливке', () => {
   const md = paramsMd({ 'Код пишет': 'Claude', 'Выкладка': 'PhpStorm Always' });
   const alpha = run(makeProject({ '.claude/CLAUDE.md': md, '.claude/docs/progress.md': progressMd() })).stdout;
-  assert.match(alpha, /- Superpowers по правилам kit: спеки и планы — в \.claude\/docs\/work\/ \(spec-<тема>\.md по шаблону .*\/skills\/project-init\/templates\/spec\.md, plan-<тема>\.md\), не в docs\/superpowers\//);
+  assert.match(alpha, /- Superpowers по правилам kit: спеки и планы — в \.claude\/docs\/work\/ \(spec-<тема>\.md по шаблону .*\/skills\/project-init\/templates\/spec\.md, plan-<тема>\.md с разделом «Чек-лист» в начале: строка на задачу «- \[ \] N\.M — …», шаги внутри задач — без чекбоксов\), не в docs\/superpowers\//);
   assert.match(alpha, /коммит только через \/kit:step-done; задача плана = шаг kit N\.M/);
   const tpl = /по шаблону (\S+?), plan/.exec(alpha)[1];
   assert.ok(require('fs').existsSync(tpl), 'шаблон есть: ' + tpl);

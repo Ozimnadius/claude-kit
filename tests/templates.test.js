@@ -59,6 +59,7 @@ test('CLAUDE.md: документы — в .claude/docs, в «Не выклад�
   assert.ok(tpl.includes('`.claude/docs/visual/`'));
   assert.ok(tpl.includes('в `work/`') && tpl.includes('в `archive/`') && tpl.includes('раздел «Документы» журнала'));
   assert.ok(tpl.includes('**Крупная задача** — `superpowers:brainstorming`') && tpl.includes('не в `docs/superpowers/`'), 'правило superpowers в «Как работаем»');
+  assert.ok(tpl.includes('с разделом «Чек-лист» в начале: строка на задачу `- [ ] N.M — …`'), 'чек-лист задач в плане');
   const rest = tpl.split('.claude/docs/').join('').split('upload/docs/').join('').split('docs/superpowers/').join('');
   assert.ok(!rest.includes('docs/'), 'старых путей docs/ в шаблоне нет');
 });
