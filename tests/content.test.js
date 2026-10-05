@@ -122,12 +122,17 @@ test('step-done: агенты kit:, один коммит, COAUTHOR, запас�
     'BODY (если передавался) есть в сообщении дословно', 'шаг на этом не останавливается',
     '`ГГГГ-ММ-ДД | решение | почему | что отвергли (или —) | пользователь / агент`', 'Не больше 1–3 за шаг', 'не придумывай',
     '«Заменяет №N»', 'не записано: нет "почему"', '«Решения агента на этом шаге (можно возразить)»',
-    'CHECK: …', 'BODY: <CHECK дословно>', '`SUMMARY` (одна строка: что сделано)']) {
+    'CHECK: …', 'BODY: <CHECK дословно>', '`SUMMARY` (одна строка: что сделано)',
+    '**Входящие ответы**', '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --list', 'Запомни N из последней строки «записей: N»', 'Процедурные ответы пропусти',
+    '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --clear N', 'входящие не трогай']) {
     assert.ok(body.includes(s), s);
   }
   const i5 = body.indexOf('## 5. Проверка');
   const i5a = body.indexOf('## 5а. Отправка в удалённый репозиторий');
   assert.ok(i5 > 0 && i5a > i5 && i5a < body.indexOf('## 6. Ответ пользователю'), 'отправка — после проверки коммита');
+  const iList = body.indexOf('decision-inbox.js" --list');
+  const iClear = body.indexOf('decision-inbox.js" --clear N');
+  assert.ok(iList > 0 && iList < body.indexOf('## 3. docs-keeper') && iClear > i5 && iClear < i5a, 'входящие: чтение — до docs-keeper, очистка — после проверки коммита');
   const iArchive = body.indexOf('### Закрытие этапа — архив');
   assert.ok(iArchive > 0 && iArchive < body.indexOf('## 3. docs-keeper'), 'архив — до вызова docs-keeper');
   assert.doesNotMatch(body, /^\s*git status/m, 'пути — только с core.quotepath=false');
