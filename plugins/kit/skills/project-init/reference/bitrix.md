@@ -21,7 +21,7 @@
 
 ## Секреты
 
-Только в `/bitrix/.settings_extra.php` (своя секция), читать через конфиг-класс проекта. В git не класть: `/bitrix/` в `.gitignore`, git-keeper и `secret-scan.js` проверяют пути и строки.
+Только в `/bitrix/.settings_extra.php` (своя секция), читать через конфиг-класс проекта. В git не класть: `/bitrix/` в `.gitignore`, скрипт коммита `kit-commit.js` и `secret-scan.js` проверяют пути и строки.
 
 ## Работа на сервере
 

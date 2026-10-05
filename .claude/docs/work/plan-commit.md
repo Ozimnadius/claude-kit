@@ -3,7 +3,7 @@
 ## Чек-лист
 
 - [x] 28.1 — скрипт `kit-commit.js` и тесты
-- [ ] 28.2 — `/kit:step-done` и `/kit:project-init` на скрипте, агент git-keeper удалён
+- [x] 28.2 — `/kit:step-done` и `/kit:project-init` на скрипте, агент git-keeper удалён
 - [ ] 28.3 — спек плагина, README и обзор
 - [ ] 28.4 — выпуск 2.14.0
 

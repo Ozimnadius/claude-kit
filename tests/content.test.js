@@ -62,29 +62,23 @@ test('docs-keeper: sonnet, без оболочки, читает парамет�
   assert.ok(fm.description.includes('DOCS'));
 });
 
-test('git-keeper: haiku, один коммит, COAUTHOR дословно, запреты, secret-scan', () => {
-  const { fm, body } = agent('git-keeper');
-  assert.equal(fm.name, 'git-keeper');
-  assert.equal(fm.model, 'haiku');
-  assert.equal(fm.tools, 'PowerShell, Bash, Read, Grep, Glob');
-  for (const s of ['COAUTHOR', 'дословно', 'не больше одного коммита', '--diff-filter=D', 'secret-scan.js', 'KIT_ROOT',
-    'Не коммитить', 'push', 'commit --amend', 'git add .', '--no-verify', 'stash', 'reset',
-    'FILES пуст', 'пустым списком путей', 'отдельный аргумент',
-    'только в одинарных кавычках', "MSYS_NO_PATHCONV=1 git commit -m '<MESSAGE>'", '**Остановился после `git add` — индекс оставь как есть:**', '`restore --staged`, `rm --cached` запрещены', "'\\''Купить'\\''", '**всегда из Bash**', 'первый символ каждого `-m`',
-    'git -c core.quotepath=false status --porcelain=v1', 'git -c core.quotepath=false diff --cached --name-only --diff-filter=D',
-    'components/bitrix/', 'заголовок отличается от MESSAGE', 'MSYS_NO_PATHCONV=1 git commit', '--paths -- <FILES>', 'до `git add`', 'список здесь не дублируется', '-- ".claude/docs/progress.md"']) {
-    assert.ok(body.includes(s), s);
+test('коммит — скрипт kit-commit.js, агента git-keeper нет (К54, с 2.14.0)', () => {
+  assert.ok(!fs.existsSync(path.join(PLUGIN, 'agents', 'git-keeper.md')), 'агент git-keeper удалён');
+  const files = [];
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).forEach((e) => {
+    const p = path.join(d, e.name);
+    if (e.isDirectory()) walk(p);
+    else if (/\.(md|js|json|php)$/.test(e.name)) files.push(p);
+  });
+  walk(PLUGIN);
+  for (const f of files) {
+    const src = fs.readFileSync(f, 'utf8');
+    const rel = path.relative(PLUGIN, f).replace(/\\/g, '/');
+    assert.ok(!src.includes('kit:git-keeper'), rel + ': агента kit:git-keeper больше нет');
+    if (rel !== 'skills/project-init/SKILL.md') assert.ok(!src.includes('git-keeper'), rel + ': упоминание git-keeper');
   }
-  assert.doesNotMatch(body, /\.pem|\.settings_extra\.php|dbconn\.php/, 'базовый список запрещённых путей живёт в secret-scan.js, а не в тексте агента');
-  assert.ok(!body.includes('remote нет'));
-  assert.ok(body.includes('BODY в сообщении отличается от переданного'), 'git-keeper сообщает о расхождении BODY (К42)');
-  assert.ok(body.includes('BODY: совпал дословно / отличается'), 'в отчёте git-keeper — сверка BODY (К42)');
-  assert.ok(body.includes('уже лежат в индексе (например, после прошлой остановки), добавляй всё равно'), 'git add — и для файлов, уже лежащих в индексе (К43)');
-  assert.ok(body.includes('это делает `/kit:step-done` после проверки коммита'));
-  assert.doesNotMatch(body, /Co-Authored-By: Claude/, 'подпись не зашивается в агента');
-  assert.doesNotMatch(body, /-m "</, 'сообщение коммита не в двойных кавычках');
-  assert.doesNotMatch(body, /- PowerShell: `git commit/, 'коммит не из PowerShell: обратная кавычка там — экранирование, BODY терял её');
-  assert.doesNotMatch(body, /^\s*git (status|diff --cached --name)/m, 'пути — только с core.quotepath=false');
+  const { body } = skill('project-init');
+  for (const s of ['kit-commit.js', '`.claude/agents/docs-keeper.md` / `git-keeper.md` — предложи удалить']) assert.ok(body.includes(s), s);
 });
 
 test('ссылки ${CLAUDE_PLUGIN_ROOT}/… в агентах и скиллах ведут на существующие файлы', () => {
@@ -105,18 +99,18 @@ test('ссылки ${CLAUDE_PLUGIN_ROOT}/… в агентах и скиллах
   }
 });
 
-test('step-done: агенты kit:, один коммит, COAUTHOR, запасной путь', () => {
+test('step-done: docs-keeper, один коммит скриптом kit-commit.js, сообщение heredoc', () => {
   const { fm, body } = skill('step-done');
   assert.equal(fm.name, 'step-done');
   assert.ok(fm.description.length > 40);
   assert.notEqual(fm['disable-model-invocation'], 'true', 'Claude вызывает сам');
-  for (const s of ['kit:docs-keeper', 'kit:git-keeper', 'rev-list --count', 'COAUTHOR', 'COMMITS', 'KIT_ROOT',
-    'AskUserQuestion', 'general-purpose', '/kit:project-init', 'Сам коммит не делай',
-    'git log -1 --format=%s', 'совпадает с MESSAGE целиком', 'git -c core.quotepath=false status --porcelain=v1',
+  for (const s of ['kit:docs-keeper', 'rev-list --count', 'COMMITS', 'scripts/kit-commit.js" --', "<<'KIT_MSG'", 'Co-Authored-By', 'Код 3', '**Bash**',
+    'AskUserQuestion', 'general-purpose', '/kit:project-init',
+    'сообщение совпало с поданным', 'git -c core.quotepath=false status --porcelain=v1',
     '/kit:visual', '<папка документов>/visual/', '.claude/scripts/visual/pages.json',
     '`.claude/docs/progress.md`', '**папка документов**', '`DOCS`', 'work/<имя> — <о чём> — в работе, этап N', '### Закрытие этапа — архив',
     '«Все в archive/ (Рекомендую)»', '«Оставить в work/»', 'Move-Item -LiteralPath', 'без git', '**оба** пути, старый и новый', 'git увидит переименование',
-    '<старые и новые пути документов, перенесённых в архив>',
+    'старые и новые пути документов, перенесённых в архив',
     '(`постоянный` кандидатом не бывает)', 'статусом `в работе, этап <номер следующего этапа>`', '`git ls-files <старый путь>` пусто', '`NEXT` пустой или `—` при `STEP` вида `N.M`', 'ID не вида `N.M` (`Р6а`) — только по `STAGE`',
     '### Закрытие этапа — сверка', '`| Пункт | Шаги | Итог |`', '«В «Баги на потом» (Рекомендую)» / «На следующий этап» / «Не делаем — решением»',
     'RECONCILE: ГГГГ-ММ-ДД | этап N | сверено с:', 'строка «Сверка …» из `RECONCILE`', 'не уверен — «частично» с пояснением',
@@ -124,10 +118,10 @@ test('step-done: агенты kit:, один коммит, COAUTHOR, запас�
     '${CLAUDE_PLUGIN_ROOT}/scripts/secret-scan.js" --history', 'git push -u <имя> HEAD', 'Git Credential Manager',
     '`--force`, `pull`, `rebase` и слияния — только после его явного выбора', 'коммит остаётся локально',
     'находки только «запрещённый путь»', '«Отправить как есть» / «Не отправлять»',
-    'BODY (если передавался) есть в сообщении дословно', 'шаг на этом не останавливается',
+    'Сам коммит в обход скрипта не делай',
     '`ГГГГ-ММ-ДД | решение | почему | что отвергли (или —) | пользователь / агент`', 'Не больше 1–3 за шаг', 'не придумывай',
     '«Заменяет №N»', 'не записано: нет "почему"', '«Решения агента на этом шаге (можно возразить)»',
-    'CHECK: …', 'BODY: <CHECK дословно>', '**Журнал по частям**', 'journal-split.js" --stage <N>', '`journal/stages/stage-NN.md` и журнал — в FILES', 'строка `- [x] <STEP>` в плане этапа из реестра', 'Заметки («заметка: …»', 'в `NOTES` дословно', '`SUMMARY` (одна строка: что сделано)',
+    'CHECK: …', '<CHECK дословно>', '**Журнал по частям**', 'journal-split.js" --stage <N>', '`journal/stages/stage-NN.md` и журнал — в FILES', 'строка `- [x] <STEP>` в плане этапа из реестра', 'Заметки («заметка: …»', 'в `NOTES` дословно', '`SUMMARY` (одна строка: что сделано)',
     '**Входящие ответы**', '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --list', 'Запомни N из последней строки «записей: N»', 'Процедурные ответы пропусти',
     '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --clear N', 'входящие не трогай']) {
     assert.ok(body.includes(s), s);
@@ -183,7 +177,7 @@ test('project-init: только командой, все шаги и шабло
   assert.equal(fm.name, 'project-init');
   assert.equal(fm['disable-model-invocation'], 'true');
   for (const s of ['AskUserQuestion', 'secret-scan.js', 'site-probe.js', 'check-closed.js', 'deployment.xml', 'watcherTasks.xml',
-    'webServers.xml', '0.1: Исходники с прода (копия прода)', 'journal/decisions.md`, `journal/bugs.md`, `journal/reference.md` (журнал по частям', '«Перевести на части (Рекомендую)»', 'journal-split.js" --migrate', 'kit:git-keeper', '/kit:step-done', 'core.autocrlf', 'core.quotepath',
+    'webServers.xml', '0.1: Исходники с прода (копия прода)', 'journal/decisions.md`, `journal/bugs.md`, `journal/reference.md` (журнал по частям', '«Перевести на части (Рекомендую)»', 'journal-split.js" --migrate', 'kit-commit.js', '/kit:step-done', 'core.autocrlf', 'core.quotepath',
     'Варианта «это не секрет» нет', '4.0', 'сам не коммить', 'не больше 4 вопросов', 'Grep с `-o` по `rootFolder=',
     '${CLAUDE_PLUGIN_ROOT}/scripts/phpstorm-exclude.js" --also', '${CLAUDE_PLUGIN_ROOT}/scripts/phpstorm-exclude.js" --check --also', 'Код 2 — `deployment.xml` не разобран',
     'File → Reload All from Disk', '`.idea`, `.git` и `.claude` исключаются всегда', '«Больше ничего»', 'сервера автозаливки',
