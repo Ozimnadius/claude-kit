@@ -90,6 +90,8 @@ test('progress.md: разделы журнала и таблица этапа 0'
   assert.ok(getSection(md, 'Документы').includes('| Файл | О чём | Статус |'));
   assert.ok(!md.includes('`docs/`'), 'старых путей docs/ в журнале нет');
   assert.ok(md.indexOf('## Решения') < md.indexOf('## Документы') && md.indexOf('## Документы') < md.indexOf('## Этап 0'), '«Документы» — после «Решений», до этапов');
+  const decisions = parseTable(getSection(md, 'Решения'));
+  assert.deepEqual(Object.keys(decisions[0]), ['№', 'Дата', 'Шаг', 'Решение', 'Почему', 'Что отвергли', 'Кто']);
   const rows = parseTable(getSection(md, 'Этап 0'));
   assert.deepEqual(Object.keys(rows[0]), ['Шаг', 'Статус', 'Что сделано', 'Коммит']);
   assert.equal(rows[0]['Шаг'], '0.1');
