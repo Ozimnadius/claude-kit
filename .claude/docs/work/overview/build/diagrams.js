@@ -28,8 +28,8 @@ function map() {
     ['/kit:report', 'отчёт заказчику'],
   ];
   const tools = [
-    [['m', 'site-probe.js'], ['m', 'ssh-probe.js'], ['m', 'phpstorm-exclude.js'], ['m', 'secret-scan.js --all'], ['m', 'journal-split.js'], ['s', '+ git-keeper: 0.1']],
-    [['ag', 'docs-keeper (sonnet)'], ['ag', 'git-keeper (haiku)'], ['m', 'decision-inbox.js'], ['m', 'journal-split.js'], ['m', 'secret-scan.js']],
+    [['m', 'site-probe.js'], ['m', 'ssh-probe.js'], ['m', 'phpstorm-exclude.js'], ['m', 'secret-scan.js --all'], ['m', 'journal-split.js'], ['s', '+ kit-commit.js: 0.1']],
+    [['ag', 'docs-keeper (sonnet)'], ['m', 'kit-commit.js'], ['m', 'decision-inbox.js'], ['m', 'journal-split.js'], ['m', 'secret-scan.js']],
     [['m', 'deploy-list.js'], ['s', 'читает git log'], ['s', 'и план выкладки']],
     [['m', 'remote-php.js'], ['m', 'kit-exec.js'], ['m', 'md5-check.js'], ['m', 'inventory.php'], ['m', 'check-files.php'], ['m', 'delete-list.php']],
     [['m', 'visual.js'], ['s', 'deps · install · login'], ['s', 'discover · shoot'], ['s', 'check · compare · list']],
@@ -135,11 +135,11 @@ function hooks() {
 
 // 4. /kit:step-done — диаграмма последовательности.
 function stepDone() {
-  const d = makeDiagram('d4', 1040, 832, 'Последовательность /kit:step-done: Claude собирает файлы шага и входящие ответы, при закрытии этапа сверяет задуманное со сделанным, docs-keeper обновляет журнал, его части и чек-лист плана, Claude сверяет отчёт с файлами и переносит закрытый этап в journal/stages/, git-keeper проверяет пути, добавляет файлы, проверяет секреты и делает один коммит из Bash, после чего Claude проверяет коммит, убирает разобранные входящие и, если задан удалённый репозиторий, отправляет коммит.');
+  const d = makeDiagram('d4', 1040, 832, 'Последовательность /kit:step-done: Claude собирает файлы шага и входящие ответы, при закрытии этапа сверяет задуманное со сделанным, docs-keeper обновляет журнал, его части и чек-лист плана, Claude сверяет отчёт с файлами и переносит закрытый этап в journal/stages/, скрипт kit-commit.js получает пути и сообщение (heredoc из Bash), проверяет пути, добавляет файлы, проверяет секреты, делает один коммит и сверяет его сообщение с поданным побайтно, после чего Claude проверяет число коммитов, убирает разобранные входящие и, если задан удалённый репозиторий, отправляет коммит.');
   const X = { C: 110, DK: 330, GK: 550, SS: 770, G: 950 };
   d.box({ x: 25, y: 12, w: 170, h: 48, k: 'core', L: [['t', 'Claude'], ['s', 'основной агент']] });
   d.box({ x: 245, y: 12, w: 170, h: 48, k: 'agent', L: [['tm', 'kit:docs-keeper'], ['s', 'модель sonnet']] });
-  d.box({ x: 465, y: 12, w: 170, h: 48, k: 'agent', L: [['tm', 'kit:git-keeper'], ['s', 'модель haiku']] });
+  d.box({ x: 465, y: 12, w: 170, h: 48, L: [['tm', 'kit-commit.js'], ['s', 'скрипт, без модели']] });
   d.box({ x: 685, y: 12, w: 170, h: 48, L: [['tm', 'secret-scan.js'], ['s', 'пути и секреты']] });
   d.box({ x: 880, y: 12, w: 140, h: 48, k: 'ext', L: [['tm', 'git'], ['s', 'репозиторий']] });
   for (const k of Object.keys(X)) d.line(X[k], 60, X[k], 824);
@@ -150,7 +150,7 @@ function stepDone() {
   };
   const note = (who, y, h, L, k = 'note', w = 190) => d.box({ x: X[who] - w / 2, y, w, h, k, rx: 4, L });
   msg(92, 'C', 'G', 'rev-parse HEAD · status --porcelain');
-  note('C', 104, 40, [['s', 'FILES — файлы шага'], ['s', 'чужие правки → вопрос']]);
+  note('C', 104, 40, [['s', 'пути — файлы шага'], ['s', 'чужие правки → вопрос']]);
   note('C', 152, 40, [['s', 'входящие ответы → DECISIONS'], ['s', 'decision-inbox.js --list']]);
   note('C', 200, 40, [['s', 'конец этапа? сверка'], ['s', 'work/ → archive/ с выбора']], 'user');
   msg(268, 'C', 'DK', 'STEP · STATUS · SUMMARY · CHECK · NEXT …');
@@ -158,15 +158,15 @@ function stepDone() {
   msg(344, 'DK', 'C', 'отчёт: «Сейчас», цитаты, файлы', 'd');
   note('C', 358, 40, [['s', 'сверка отчёта Grep-ом'], ['s', 'нет строки → повтор']]);
   note('C', 406, 40, [['s', 'journal-split.js --stage N'], ['s', 'этап → journal/stages/']], 'user');
-  msg(474, 'C', 'GK', 'FILES · MESSAGE · BODY · COAUTHOR · KIT_ROOT');
-  msg(506, 'GK', 'SS', '--paths FILES');
+  msg(474, 'C', 'GK', "-- <пути> <<'KIT_MSG' (Bash)");
+  msg(506, 'GK', 'SS', '--paths <пути>');
   msg(528, 'SS', 'GK', '1 → стоп', 'd u', 542);
-  msg(564, 'GK', 'G', 'add -A -- FILES');
-  msg(596, 'GK', 'SS', '--cached FILES');
+  msg(564, 'GK', 'G', 'add -A -- <пути>');
+  msg(596, 'GK', 'SS', '--cached <пути>');
   msg(618, 'SS', 'GK', '1 → стоп, индекс как есть', 'd u', 632);
-  msg(654, 'GK', 'G', "commit -m '…' -- FILES (из Bash)");
-  msg(686, 'GK', 'C', 'хеш · файлы · подпись', 'd');
-  msg(716, 'C', 'G', 'проверка: 1 коммит, заголовок и тело = переданным');
+  msg(654, 'GK', 'G', 'commit -F - -- <пути>');
+  msg(686, 'GK', 'C', 'код 0 · хеш · «сообщение совпало»', 'd');
+  msg(716, 'C', 'G', 'проверка: 1 коммит, статус чистый');
   note('C', 728, 40, [['s', 'прошла → входящие'], ['s', 'decision-inbox.js --clear N']]);
   msg(788, 'C', 'SS', '--history — только перед первой отправкой');
   msg(816, 'C', 'G', 'push -u <имя> HEAD — если задан «Удалённый репозиторий»');
