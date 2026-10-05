@@ -1,0 +1,8 @@
+# плагин kit (маркетплейс claude-kit) — этап 18
+
+## Этап 18 — документы проекта и на сервере: параметр «Документы на сервере»
+
+| Шаг | Статус | Что сделано | Коммит |
+|---|---|---|---|
+| 18.1 | ✅ | Параметр «Документы на сервере: да» — хук `phpstorm-exclude.js` убирает исключение `.claude` целиком, исключает остальное в ней поимённо (плюс заранее `.claude/worktrees`, `.claude/settings.local.json` и снимки `visual`), нет `.claude/.htaccess` — создаёт из шаблона `htaccess-deny`, предупреждает, если «Exclude items by name» PhpStorm отсекает документы; в `lib/deployment.js` — `removeExclusions` и `names`; README, спек (§5, 8, 13), шаблон `CLAUDE.md` (строка «Документы на сервере: нет»), справка `phpstorm.md`, обзор; проверено: 6 новых тестов (сначала падали), `npm test` — 348 тестов, 345 прошли, 3 пропущены, 0 упали; `claude plugin validate --strict` (плагин и маркетплейс); прогон хука на копии настроек zeta в scratchpad | `d846572` |
+| 18.2 | ✅ | Выпуск 2.6.0 (минорная: параметр «Документы на сервере») — версия в `plugins/kit/.claude-plugin/plugin.json` и `.claude-plugin/marketplace.json`; этап 18 закрыт; обновление установленного плагина (2.5.1 → 2.6.0: `claude plugin marketplace update claude-kit`, `claude plugin update kit@claude-kit`) и push `master` на GitHub — сразу после этого коммита (согласие пользователя получено); проверено: `npm test` — 348 тестов, 345 прошли, 3 пропущены, 0 упали (тест манифестов сверяет версии), `claude plugin validate` плагина и маркетплейса (`--strict`) пройдены; в zeta (в его сессии): строка «- Документы на сервере: да» в «Параметрах для агентов», убрать `*.md` и `docs` из «Exclude items by name» PhpStorm, перезапустить сессию, после заливки — check-closed | `070bf4d` |
