@@ -113,7 +113,7 @@ html{scroll-behavior:smooth}
 
 const toc = [
   ['karta', 'Карта'], ['cikl', 'Цикл работы'], ['huki', 'Хуки'], ['step-done', '/kit:step-done'],
-  ['server', '/kit:server'], ['visual', '/kit:visual'], ['deploy-list', '/kit:deploy-list'], ['udalennyj', 'Удалённый репозиторий'], ['project-init', '/kit:project-init'],
+  ['server', '/kit:server'], ['visual', '/kit:visual'], ['deploy-list', '/kit:deploy-list'], ['why', '/kit:why'], ['udalennyj', 'Удалённый репозиторий'], ['project-init', '/kit:project-init'],
   ['parametry', 'Параметры'], ['grabli', 'Грабли и защита'], ['vypusk', 'Выпуск и обновление'],
 ];
 
@@ -320,6 +320,18 @@ const main = (fig) => `
     </tbody>
   </table></div>
   <p>Из списка всегда выпадают <code>.claude</code>, папка журнала вне <code>.claude</code>, <code>/kit-exec.php</code> и всё из «Не выкладывать». Незакоммиченные изменения в список не входят — сначала нужно закрыть шаг. Удаления делает пользователь (PhpStorm → Remote Host) или Claude через <code>/kit:server</code>. Когда выложено — запись через <code>/kit:step-done</code> блоком DEPLOY: файлы, коммит, что осталось удалить, что проверено.</p>
+</section>
+
+<section id="why">
+  <h2>Почему так сделано <span class="cmd">/kit:why</span></h2>
+  <p>С 2.11.0. Отвечает, почему в проекте что-то сделано так, — по файлу, функции, строкам или теме. Только чтение, без скрипта: Claude сам идёт по цепочке и у каждого вывода ставит ссылку.</p>
+  <ol class="chain">
+    <li><span>файл, функция, строки → <code>git log --follow</code> / <code>git log -L</code></span></li>
+    <li><span>ID шагов из заголовков коммитов (<code>23.2: …</code>)</span></li>
+    <li><span>журнал: строка шага, «Решения» (почему, что отвергли), баги, «Сверка …»</span></li>
+    <li><span>документы этапа: план, спек</span></li>
+  </ol>
+  <p>Тема («почему коммит только из Bash») — сразу «Решения», журнал и документы, затем поиск по коммитам. Ответ — 2–5 фраз со ссылками (шаг, коммит, решение №N), список источников и «не нашёл»: чего в истории нет, то не додумывается.</p>
 </section>
 
 <section id="udalennyj">
