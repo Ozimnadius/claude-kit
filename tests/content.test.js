@@ -70,7 +70,7 @@ test('git-keeper: haiku, один коммит, COAUTHOR дословно, за�
   for (const s of ['COAUTHOR', 'дословно', 'не больше одного коммита', '--diff-filter=D', 'secret-scan.js', 'KIT_ROOT',
     'Не коммитить', 'push', 'commit --amend', 'git add .', '--no-verify', 'stash', 'reset',
     'FILES пуст', 'пустым списком путей', 'отдельный аргумент',
-    'только в одинарных кавычках', "MSYS_NO_PATHCONV=1 git commit -m '<MESSAGE>'", "'\\''Купить'\\''", '**всегда из Bash**', 'первый символ каждого `-m`',
+    'только в одинарных кавычках', "MSYS_NO_PATHCONV=1 git commit -m '<MESSAGE>'", '**Остановился после `git add` — индекс оставь как есть:**', '`restore --staged`, `rm --cached` запрещены', "'\\''Купить'\\''", '**всегда из Bash**', 'первый символ каждого `-m`',
     'git -c core.quotepath=false status --porcelain=v1', 'git -c core.quotepath=false diff --cached --name-only --diff-filter=D',
     'components/bitrix/', 'заголовок отличается от MESSAGE', 'MSYS_NO_PATHCONV=1 git commit', '--paths -- <FILES>', 'до `git add`', 'список здесь не дублируется', '-- ".claude/docs/progress.md"']) {
     assert.ok(body.includes(s), s);

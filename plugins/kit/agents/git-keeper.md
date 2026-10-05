@@ -42,6 +42,7 @@ model: haiku
    node "<путь к secret-scan.js>" --cached -- <FILES>
    ```
    Код 1 — найдены секреты или запрещённые пути: стоп, ничего не коммить, верни вывод скрипта (значения в нём уже замаскированы). Код 2 или скрипт не найден — стоп, отчёт.
+   **Остановился после `git add` — индекс оставь как есть:** не снимай файлы из индекса (`reset`, `restore --staged`, `rm --cached` запрещены). Это не ошибка: после исправления основной агент вызовет тебя снова, и п. 3 добавит файлы заново. В отчёте перечисли, что осталось в индексе (`git -c core.quotepath=false diff --cached --name-only`).
 5. Коммит — **одна** команда, только эти пути, **всегда из Bash** (инструмент Bash, не PowerShell):
    ```
    MSYS_NO_PATHCONV=1 git commit -m '<MESSAGE>' [-m '<BODY>'] [-m '<COAUTHOR>'] -- <FILES>
@@ -63,7 +64,7 @@ model: haiku
 ## Запрещено
 
 - `push`, `pull`, `fetch`;
-- `reset`, `restore` (в любом виде), `checkout`, `switch`, `stash`, `clean`;
+- `reset`, `restore` (в любом виде), `rm --cached`, `checkout`, `switch`, `stash`, `clean` — в том числе чтобы «убрать за собой» индекс после остановки;
 - `rebase`, `merge`, `cherry-pick`, `revert`, `commit --amend`;
 - `gc`, `prune`, `filter-branch`, изменение `git config`;
 - `git add .`, `git add -A` без путей, `git add -f`, `--no-verify`;
