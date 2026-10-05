@@ -144,6 +144,19 @@ test('step-done: агенты kit:, один коммит, COAUTHOR, запас�
   assert.doesNotMatch(body, /^\s*git status/m, 'пути — только с core.quotepath=false');
 });
 
+test('why: только чтение, цепочка git → журнал → документы, ответ со ссылками', () => {
+  const { fm, body } = skill('why');
+  assert.equal(fm.name, 'why');
+  assert.ok(fm.description.length > 40);
+  assert.notEqual(fm['disable-model-invocation'], 'true', 'Claude вызывает сам, когда спрашивают «почему»');
+  for (const s of ['Только чтение', 'без `cd`', 'git log --follow --format="%h %ad %s" --date=short -- <путь>', 'git log -L :<имя>:<путь>', 'git log -L <от>,<до>:<путь>',
+    'часть заголовка до первого `: `', '«без шага»', '| № | Дата | Шаг |', '| Дата | Решение |', '«Сверка …»', 'раздел «Документы» журнала',
+    '-i --grep=<слово>', 'git cat-file -e <хеш>', 'не додумывай', '«вероятно»', '**Источники**', '**Не нашёл**', 'только если пользователь попросит подробнее']) {
+    assert.ok(body.includes(s), s);
+  }
+  assert.doesNotMatch(body, /docs-keeper|git-keeper|git commit|git add/, 'скилл ничего не пишет и не коммитит');
+});
+
 test('deploy-list: вызывает скрипт и записывает выкладку через step-done', () => {
   const { fm, body } = skill('deploy-list');
   assert.equal(fm.name, 'deploy-list');
