@@ -139,7 +139,7 @@ function stepDone() {
   const note = (who, y, h, L, k = 'note', w = 190) => d.box({ x: X[who] - w / 2, y, w, h, k, rx: 4, L });
   msg(92, 'C', 'G', 'rev-parse HEAD · status --porcelain');
   note('C', 104, 40, [['s', 'FILES — файлы шага'], ['s', 'чужие правки → вопрос']]);
-  msg(172, 'C', 'DK', 'STEP · STATUS · SUMMARY · NEXT …');
+  msg(172, 'C', 'DK', 'STEP · STATUS · SUMMARY · CHECK · NEXT …');
   note('DK', 184, 40, [['s', 'журнал, план выкладки,'], ['s', 'RULES → CLAUDE.md']], 'note', 176);
   msg(248, 'DK', 'C', 'отчёт: «Сейчас», цитаты, файлы', 'd');
   note('C', 262, 40, [['s', 'сверка отчёта Grep-ом'], ['s', 'нет строки → повтор']]);
