@@ -41,6 +41,15 @@ test('superpowers по правилам kit: правило всегда, с п�
   assert.doesNotMatch(gamma, /Superpowers при автозаливке/, 'выкладка вручную — без правила про ветки');
 });
 
+test('журнал по частям: строка о journal/ — только если папка есть', () => {
+  const md = paramsMd({ 'Код пишет': 'Claude', 'Выкладка': 'вручную' });
+  const split = run(makeProject({ '.claude/CLAUDE.md': md, '.claude/docs/progress.md': progressMd(), '.claude/docs/journal/decisions.md': '# решения\n' })).stdout;
+  assert.ok(split.includes('- Журнал по частям: решения — .claude/docs/journal/decisions.md, баги — .claude/docs/journal/bugs.md, '
+    + 'справочник и материалы заказчика — .claude/docs/journal/reference.md, закрытые этапы — .claude/docs/journal/stages/; ищи и там.'), split);
+  const single = run(makeProject({ '.claude/CLAUDE.md': md, '.claude/docs/progress.md': progressMd() })).stdout;
+  assert.doesNotMatch(single, /Журнал по частям/);
+});
+
 test('git worktree в .claude/worktrees/ при PhpStorm Always — предупреждение про автозаливку', () => {
   const files = { '.claude/CLAUDE.md': ALPHA_CLAUDE_MD, 'docs/progress.md': progressMd() };
   const main = makeProject();

@@ -75,6 +75,12 @@ function buildContext(info) {
   if (always && inWorktree(info.dir)) out.push(RULE_WORKTREE);
   if (!p.found) out.push(RULE_NO_PARAMS);
   out.push(docsRule(info.docsRel));
+  // Журнал по частям (с 2.13.0): в журнале — только текущее, остальное — в journal/ рядом с ним.
+  if (info.hasJournal && fs.existsSync(path.join(path.dirname(info.journalPath), 'journal'))) {
+    const parts = (info.docsRel === '.' ? '' : info.docsRel + '/') + 'journal/';
+    out.push('- Журнал по частям: решения — ' + parts + 'decisions.md, баги — ' + parts + 'bugs.md, справочник и материалы заказчика — '
+      + parts + 'reference.md, закрытые этапы — ' + parts + 'stages/; ищи и там.');
+  }
   out.push(superpowersRule(info.docsRel));
   if (always) out.push(RULE_SP_ALWAYS);
   return out.join('\n') + '\n';

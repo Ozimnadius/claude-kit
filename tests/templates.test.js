@@ -86,15 +86,20 @@ test('CLAUDE.md → «Не коммитить» → правила путей: �
   assert.ok(matchRules('local/templates/x/a.php.back2', rules));
 });
 
-test('progress.md: разделы журнала и таблица этапа 0', () => {
+test('progress.md и journal/*.md: журнал по частям — разделы, оглавление «Этапы», таблица этапа 0', () => {
   const md = read('progress.md');
-  for (const s of ['Сейчас', 'Решения', 'Документы', 'Этап 0', 'Материалы заказчика', 'Баги на потом', 'Прод: не забыть', 'Справочник']) {
-    assert.ok(getSection(md, s) !== null, 'нет раздела ' + s);
-  }
+  for (const s of ['Сейчас', 'Этапы', 'Документы', 'Прод: не забыть', 'Этап 0']) assert.ok(getSection(md, s) !== null, 'нет раздела ' + s);
+  for (const s of ['## Решения', '## Баги на потом', '## Справочник', '## Материалы заказчика']) assert.ok(!md.includes(s), s + ' — в частях, не в журнале');
+  assert.ok(md.indexOf('## Сейчас') < md.indexOf('## Этапы') && md.indexOf('## Этапы') < md.indexOf('## Документы') && md.indexOf('## Документы') < md.indexOf('## Этап 0'));
+  assert.ok(getSection(md, 'Этапы').includes('| 0 | подготовка | ниже |'));
   assert.ok(getSection(md, 'Документы').includes('| Файл | О чём | Статус |'));
   assert.ok(!md.includes('`docs/`'), 'старых путей docs/ в журнале нет');
-  assert.ok(md.indexOf('## Решения') < md.indexOf('## Документы') && md.indexOf('## Документы') < md.indexOf('## Этап 0'), '«Документы» — после «Решений», до этапов');
-  const decisions = parseTable(getSection(md, 'Решения'));
+  const dec = read('journal/decisions.md');
+  const bugs = read('journal/bugs.md');
+  const ref = read('journal/reference.md');
+  assert.ok(getSection(bugs, 'Баги на потом').includes('| № | Баг | Где | Статус |'));
+  assert.ok(getSection(ref, 'Материалы заказчика') !== null && getSection(ref, 'Справочник') !== null);
+  const decisions = parseTable(getSection(dec, 'Решения'));
   assert.deepEqual(Object.keys(decisions[0]), ['№', 'Дата', 'Шаг', 'Решение', 'Почему', 'Что отвергли', 'Кто']);
   const rows = parseTable(getSection(md, 'Этап 0'));
   assert.deepEqual(Object.keys(rows[0]), ['Шаг', 'Статус', 'Что сделано', 'Как проверено', 'Коммит']);
