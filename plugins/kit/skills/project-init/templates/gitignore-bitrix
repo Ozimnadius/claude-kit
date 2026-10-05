@@ -11,6 +11,10 @@
 # Снимки /kit:visual — только локально (из-под админа)
 /.claude/docs/visual/
 
+# Служебные папки superpowers: визуальный помощник и git worktree
+/.superpowers/
+/.worktrees/
+
 # Файл-канал /kit:server — на сервере только на время работы, в git не нужен
 /kit-exec.php
 

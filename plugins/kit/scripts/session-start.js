@@ -3,6 +3,7 @@
 // Хук SessionStart (startup|resume|clear|compact): раздел «Сейчас» из журнала и правила процесса в контекст.
 // Вне kit-проекта молчит. Любая ошибка — тихий выход 0.
 const fs = require('fs');
+const path = require('path');
 const { readStdinJson, resolveProjectDir, kitInfo, docsInClaude } = require('./lib/project');
 const { getSection } = require('./lib/md');
 
@@ -21,7 +22,9 @@ const RULE_ALWAYS_DEV = '- Автозаливка на дев: любое сох
 const RULE_USER = '- Код пишет пользователь: Claude даёт один маленький шаг и ждёт ответа; «сделай сам» относится только к текущему шагу.';
 const RULE_CLAUDE = '- Код пишет Claude: после записи проверить результат на сервере (страница, десктоп и мобильная ширина).';
 const RULE_NO_PARAMS = '- В .claude/CLAUDE.md нет раздела «Параметры для агентов» — предложи пользователю /kit:project-init (дополнит недостающее).';
-const RULE_WORKTREE = '- Сессия работает в git worktree — правки здесь не попадут на сервер автозаливкой основной папки, пока их не сольют в основную ветку; не проверяй результат на сервере сразу после записи.';
+const SPEC_TEMPLATE = path.join(__dirname, '..', 'skills', 'project-init', 'templates', 'spec.md');
+const RULE_SP_ALWAYS = '- Superpowers при автозаливке: без отдельных веток и worktree (.worktrees, using-git-worktrees) — правки из них не дойдут до сервера.';
+const RULE_WORKTREE ='- Сессия работает в git worktree — правки здесь не попадут на сервер автозаливкой основной папки, пока их не сольют в основную ветку; не проверяй результат на сервере сразу после записи.';
 
 // Где лежат документы проекта; старая раскладка (docs/) — подсказка о переезде.
 function docsRule(docsRel) {
@@ -29,6 +32,14 @@ function docsRule(docsRel) {
   const rule = '- Документы проекта — в ' + where + ': планы, спеки, чек-листы, материалы — в work/, готовое — в archive/, '
     + 'реестр — раздел «Документы» журнала; новый документ — строкой DOCS в /kit:step-done.';
   return docsInClaude(docsRel) ? rule : rule + ' Переезд в .claude/docs — через /kit:project-init.';
+}
+
+// Superpowers работает по правилам kit: его скиллы сами пишут в docs/superpowers/ и коммитят — правила проекта важнее.
+function superpowersRule(docsRel) {
+  const work = (docsRel === '.' ? '' : docsRel + '/') + 'work/';
+  return '- Superpowers по правилам kit: спеки и планы — в ' + work + ' (spec-<тема>.md по шаблону ' + SPEC_TEMPLATE.replace(/\\/g, '/')
+    + ', plan-<тема>.md), не в docs/superpowers/; superpowers сам не коммитит — коммит только через /kit:step-done; '
+    + 'задача плана = шаг kit N.M; выбранный подход и отвергнутые — в DECISIONS; TDD — только где в проекте есть тесты.';
 }
 
 // Папка проекта — git worktree, который Claude Code (десктоп) создаёт внутри проекта в .claude/worktrees/.
@@ -63,6 +74,8 @@ function buildContext(info) {
   if (always && inWorktree(info.dir)) out.push(RULE_WORKTREE);
   if (!p.found) out.push(RULE_NO_PARAMS);
   out.push(docsRule(info.docsRel));
+  out.push(superpowersRule(info.docsRel));
+  if (always) out.push(RULE_SP_ALWAYS);
   return out.join('\n') + '\n';
 }
 

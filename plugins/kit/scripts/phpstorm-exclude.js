@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // Исключения PhpStorm (Settings → Deployment → сервер → Excluded Paths) в .idea/deployment.xml:
-// .idea, .git, .claude, папка документов вне .claude и простые пути из «Не выкладывать» — у каждого сервера,
+// .idea, .git, .claude, папка документов вне .claude, простые пути из «Не выкладывать» и служебные папки superpowers — у каждого сервера,
 // сопоставленного с корнем проекта. Только добавляет. Внешний процесс: защита путей Claude Code его не касается.
 // «Документы на сервере: да» — из .claude на сервер уезжают docs, CLAUDE.md и .htaccess: исключение .claude
 // убирается (единственное удаление), остальное в ней исключается поимённо; нет .claude/.htaccess — создаётся.
@@ -22,6 +22,9 @@ const RELOAD = 'Если PhpStorm открыт и не подхватил — Fi
 // исключаются заранее — они появляются посреди сессии, а хук увидит их только на следующем старте.
 const KEEP = ['docs', 'CLAUDE.md', '.htaccess'];
 const EARLY = ['.claude/worktrees', '.claude/settings.local.json', '.claude/skills'];
+// Служебные папки superpowers (визуальный помощник, git worktree, спеки и планы по умолчанию) — тоже заранее:
+// появляются посреди сессии. specs и .specify не исключаем — так может называться папка сайта.
+const TOOLS = ['.superpowers', '.worktrees', 'docs/superpowers'];
 const DENY = path.join(__dirname, '..', 'skills', 'project-init', 'templates', 'htaccess-deny');
 const OPEN_NOTE = 'На сервер уезжают .claude/docs, .claude/CLAUDE.md и .claude/.htaccess (параметр «Документы на сервере: да») — '
   + 'после заливки проверьте снаружи, что /.claude/ закрыта (check-closed).';
@@ -58,7 +61,7 @@ function required(info, also) {
   const open = docsOnServer(info);
   const list = open ? ['.idea', '.git', ...claudeRest(info.dir), ...EARLY, info.visualRel] : [...MUST];
   if (!docsInClaude(info.docsRel)) list.push(info.docsRel);
-  for (const item of [...info.params.list('Не выкладывать'), ...also]) list.push(item);
+  for (const item of [...info.params.list('Не выкладывать'), ...also, ...TOOLS]) list.push(item);
   // .claude в «Не выкладывать» — для ручной выкладки; в Excluded Paths при «да» она не возвращается.
   return list.map(plainPath).filter((p) => p && !(open && p.toLowerCase() === '.claude'));
 }

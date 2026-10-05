@@ -28,6 +28,19 @@ test('alpha: «Сейчас», общие правила, Always и «код п�
   assert.doesNotMatch(r.stdout, /нет раздела «Параметры для агентов»/);
 });
 
+test('superpowers по правилам kit: правило всегда, с путём к шаблону спеки; ветки и worktree — только при автозаливке', () => {
+  const md = paramsMd({ 'Код пишет': 'Claude', 'Выкладка': 'PhpStorm Always' });
+  const alpha = run(makeProject({ '.claude/CLAUDE.md': md, '.claude/docs/progress.md': progressMd() })).stdout;
+  assert.match(alpha, /- Superpowers по правилам kit: спеки и планы — в \.claude\/docs\/work\/ \(spec-<тема>\.md по шаблону .*\/skills\/project-init\/templates\/spec\.md, plan-<тема>\.md\), не в docs\/superpowers\//);
+  assert.match(alpha, /коммит только через \/kit:step-done; задача плана = шаг kit N\.M/);
+  const tpl = /по шаблону (\S+?), plan/.exec(alpha)[1];
+  assert.ok(require('fs').existsSync(tpl), 'шаблон есть: ' + tpl);
+  assert.match(alpha, /Superpowers при автозаливке: без отдельных веток и worktree/);
+  const gamma = run(makeProject({ '.claude/CLAUDE.md': GAMMA_CLAUDE_MD, 'docs/progress.md': progressMd() })).stdout;
+  assert.match(gamma, /спеки и планы — в docs\/work\//);
+  assert.doesNotMatch(gamma, /Superpowers при автозаливке/, 'выкладка вручную — без правила про ветки');
+});
+
 test('git worktree в .claude/worktrees/ при PhpStorm Always — предупреждение про автозаливку', () => {
   const files = { '.claude/CLAUDE.md': ALPHA_CLAUDE_MD, 'docs/progress.md': progressMd() };
   const main = makeProject();

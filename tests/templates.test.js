@@ -24,7 +24,8 @@ test('gitignore-bitrix: служебное, ядро, снимки и секре
   const yes = ['.idea/workspace.xml', '.claude/settings.local.json', '.claude/agents/docs-keeper.md', '.claude/worktrees/x/index.php', '.claude/docs/visual/before/admin/desktop/home.png', '.claude/docs/visual/.gitignore',
     '.claude/skills/bitrix-orm/SKILL.md', '.claude/skills/bitrix-orm/rules/reading.md',
     'kit-exec.php', 'bitrix/.settings.php', 'upload/iblock/a.jpg', 'local/x.php.back1',
-    '.env', '.env.local', 'local/.env.production', 'cert/site.pem', 'local/ssl/private.key'];
+    '.env', '.env.local', 'local/.env.production', 'cert/site.pem', 'local/ssl/private.key',
+    '.superpowers/brainstorm/1/content/a.html', '.worktrees/feature/index.php'];
   const no = ['.claude/CLAUDE.md', '.claude/.htaccess', '.claude/scripts/01-inventory.php', '.claude/scripts/visual/pages.json', '.claude/docs/progress.md', '.claude/docs/deploy-prod.md',
     '.claude/docs/work/plan-12345.md', '.claude/docs/work/design/a.png', '.claude/docs/archive/plan-ssh.md', 'upload/docs/a.png', 'local/templates/x/a.php',
     'local/templates/x/components/bitrix/news.list/.default/template.php', 'docs/progress.md', 'local/php_interface/env.php', 'local/kit-exec.php',
@@ -35,7 +36,8 @@ test('gitignore-bitrix: служебное, ядро, снимки и секре
 });
 
 test('gitignore-general: служебное, снимки и секреты игнорируются; документы — в git', () => {
-  const yes = ['.idea/workspace.xml', '.claude/settings.local.json', '.env', '.env.local', 'node_modules/a/b.js', 'x.php.back1', '.claude/docs/visual/links.json'];
+  const yes = ['.idea/workspace.xml', '.claude/settings.local.json', '.env', '.env.local', 'node_modules/a/b.js', 'x.php.back1', '.claude/docs/visual/links.json',
+    '.superpowers/brainstorm/1/content/a.html', '.worktrees/feature/src/a.php'];
   const no = ['.claude/CLAUDE.md', '.claude/scripts/a.php', '.claude/scripts/visual/pages.json', 'src/a.php', '.claude/docs/progress.md', '.claude/docs/work/spec.md', '.claude/docs/archive/a.md', 'docs/progress.md', '.env.example'];
   const set = ignored(read('gitignore-general'), [...yes, ...no]);
   for (const p of yes) assert.ok(set.has(p), 'должен игнорироваться: ' + p);
@@ -56,7 +58,8 @@ test('CLAUDE.md: документы — в .claude/docs, в «Не выклад�
   const tpl = read('CLAUDE.md');
   assert.ok(tpl.includes('`.claude/docs/visual/`'));
   assert.ok(tpl.includes('в `work/`') && tpl.includes('в `archive/`') && tpl.includes('раздел «Документы» журнала'));
-  const rest = tpl.split('.claude/docs/').join('').split('upload/docs/').join('');
+  assert.ok(tpl.includes('**Крупная задача** — `superpowers:brainstorming`') && tpl.includes('не в `docs/superpowers/`'), 'правило superpowers в «Как работаем»');
+  const rest = tpl.split('.claude/docs/').join('').split('upload/docs/').join('').split('docs/superpowers/').join('');
   assert.ok(!rest.includes('docs/'), 'старых путей docs/ в шаблоне нет');
 });
 
@@ -96,6 +99,14 @@ test('progress.md: разделы журнала и таблица этапа 0'
   assert.deepEqual(Object.keys(rows[0]), ['Шаг', 'Статус', 'Что сделано', 'Как проверено', 'Коммит']);
   assert.ok(rows[0]['Как проверено'], 'у 0.1 заполнено «Как проверено»');
   assert.equal(rows[0]['Шаг'], '0.1');
+});
+
+test('spec.md: разделы kit поверх дизайна brainstorming', () => {
+  const md = read('spec.md');
+  for (const s of ['Задача', 'Требования', 'Критерии готовности', 'Предположения', 'Открытые вопросы', 'Дизайн']) {
+    assert.ok(getSection(md, s) !== null, 'нет раздела ' + s);
+  }
+  assert.ok(md.includes('Т-1.') && md.includes('[УТОЧНИТЬ:') && md.includes('work/spec-<тема>.md') && md.includes('DECISIONS'));
 });
 
 test('deploy-prod.md: разделы и колонки «Залито на прод»', () => {
