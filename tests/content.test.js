@@ -69,9 +69,9 @@ test('git-keeper: haiku, один коммит, COAUTHOR дословно, за�
   for (const s of ['COAUTHOR', 'дословно', 'не больше одного коммита', '--diff-filter=D', 'secret-scan.js', 'KIT_ROOT',
     'Не коммитить', 'push', 'commit --amend', 'git add .', '--no-verify', 'stash', 'reset',
     'FILES пуст', 'пустым списком путей', 'отдельный аргумент',
-    'только в одинарных кавычках', "git commit -m '<MESSAGE>'", "'' в корзине", "'\\''Купить'\\''", 'из Bash',
+    'только в одинарных кавычках', "MSYS_NO_PATHCONV=1 git commit -m '<MESSAGE>'", "'\\''Купить'\\''", '**всегда из Bash**', 'первый символ каждого `-m`',
     'git -c core.quotepath=false status --porcelain=v1', 'git -c core.quotepath=false diff --cached --name-only --diff-filter=D',
-    'components/bitrix/', 'заголовок отличается от MESSAGE', 'MSYS_NO_PATHCONV=1 git commit', '--paths -- <FILES>', 'до `git add`', 'список здесь не дублируется', "-- '.claude/docs/progress.md'", '-- ".claude/docs/progress.md"']) {
+    'components/bitrix/', 'заголовок отличается от MESSAGE', 'MSYS_NO_PATHCONV=1 git commit', '--paths -- <FILES>', 'до `git add`', 'список здесь не дублируется', '-- ".claude/docs/progress.md"']) {
     assert.ok(body.includes(s), s);
   }
   assert.doesNotMatch(body, /\.pem|\.settings_extra\.php|dbconn\.php/, 'базовый список запрещённых путей живёт в secret-scan.js, а не в тексте агента');
@@ -82,6 +82,7 @@ test('git-keeper: haiku, один коммит, COAUTHOR дословно, за�
   assert.ok(body.includes('это делает `/kit:step-done` после проверки коммита'));
   assert.doesNotMatch(body, /Co-Authored-By: Claude/, 'подпись не зашивается в агента');
   assert.doesNotMatch(body, /-m "</, 'сообщение коммита не в двойных кавычках');
+  assert.doesNotMatch(body, /- PowerShell: `git commit/, 'коммит не из PowerShell: обратная кавычка там — экранирование, BODY терял её');
   assert.doesNotMatch(body, /^\s*git (status|diff --cached --name)/m, 'пути — только с core.quotepath=false');
 });
 

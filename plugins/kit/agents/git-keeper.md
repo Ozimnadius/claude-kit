@@ -42,13 +42,14 @@ model: haiku
    node "<путь к secret-scan.js>" --cached -- <FILES>
    ```
    Код 1 — найдены секреты или запрещённые пути: стоп, ничего не коммить, верни вывод скрипта (значения в нём уже замаскированы). Код 2 или скрипт не найден — стоп, отчёт.
-5. Коммит — **одна** команда, только эти пути:
+5. Коммит — **одна** команда, только эти пути, **всегда из Bash** (инструмент Bash, не PowerShell):
    ```
-   git commit -m '<MESSAGE>' [-m '<BODY>'] [-m '<COAUTHOR>'] -- <FILES>
+   MSYS_NO_PATHCONV=1 git commit -m '<MESSAGE>' [-m '<BODY>'] [-m '<COAUTHOR>'] -- <FILES>
    ```
-   MESSAGE, BODY и COAUTHOR — **только в одинарных кавычках**, текст внутри — символ в символ. В двойных кавычках `$arResult`, `$APPLICATION` превратятся в пустые переменные (и в PowerShell, и в Bash), обратная кавычка в PowerShell — escape-символ, в Bash — подстановка команды. Апостроф `'` внутри текста: PowerShell — удвоить (`'` → `''`), Bash — заменить на `'\''`. Двойную кавычку `"` внутри текста Windows PowerShell 5.1 теряет при передаче в git — такой коммит делай из Bash.
-   - PowerShell: `git commit -m '2.1: вывод $arResult в шаблоне' -m 'Co-Authored-By: …' -- '.claude/docs/progress.md' 'local/templates/x/a.php'`; с апострофом: `-m '2.2: кнопка ''Купить'' в корзине'`.
-   - Bash: `MSYS_NO_PATHCONV=1 git commit -m '2.1: вывод $arResult в шаблоне' -m 'Co-Authored-By: …' -- ".claude/docs/progress.md" "local/templates/x/a.php"`; с апострофом: `-m '2.2: кнопка '\''Купить'\'' в корзине'`. `MSYS_NO_PATHCONV=1` обязателен: Git Bash переписывает аргументы, начинающиеся с `/`, — BODY `/local/templates/x …` превратится в `C:/Program Files/Git/local/templates/x …`.
+   MESSAGE, BODY и COAUTHOR — **только в одинарных кавычках**, текст внутри — символ в символ, включая обратные кавычки `` ` ``, `$` и `"`: внутри одинарных кавычек Bash ничего не подставляет. Единственная замена — апостроф `'` внутри текста: `'\''`. Почему не PowerShell: в нём обратная кавычка — символ экранирования, а Windows PowerShell 5.1 теряет `"` при передаче в git; на коммитах из PowerShell обратные кавычки в начале BODY пропадали (шаги 22.2, 23.1).
+   - Пример: ``MSYS_NO_PATHCONV=1 git commit -m '2.1: вывод $arResult в шаблоне' -m '`php -l` — ок' -m 'Co-Authored-By: …' -- ".claude/docs/progress.md" "local/templates/x/a.php"``; с апострофом: `-m '2.2: кнопка '\''Купить'\'' в корзине'`.
+   - `MSYS_NO_PATHCONV=1` обязателен: Git Bash переписывает аргументы, начинающиеся с `/`, — BODY `/local/templates/x …` превратится в `C:/Program Files/Git/local/templates/x …`.
+   - Перед запуском сверь собранную команду с MESSAGE, BODY и COAUTHOR посимвольно — особенно обратные кавычки и первый символ каждого `-m`.
 
    Каждый путь — отдельный аргумент в своих кавычках, не склеивай пути в одну строку. То же для `git add -A -- …` и для secret-scan.js.
    Не прошёл — стоп и отчёт с выводом. Второй попытки другим способом нет: не меняй команду, не делай второй коммит, не исправляй индекс.
