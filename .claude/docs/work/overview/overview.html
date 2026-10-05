@@ -153,7 +153,7 @@ html{scroll-behavior:smooth}
 <div class="layout">
 <nav class="toc" aria-label="Разделы">
   <p>Разделы</p>
-  <ol><li><a href="#karta">Карта</a></li><li><a href="#cikl">Цикл работы</a></li><li><a href="#huki">Хуки</a></li><li><a href="#step-done">/kit:step-done</a></li><li><a href="#server">/kit:server</a></li><li><a href="#visual">/kit:visual</a></li><li><a href="#deploy-list">/kit:deploy-list</a></li><li><a href="#why">/kit:why</a></li><li><a href="#udalennyj">Удалённый репозиторий</a></li><li><a href="#project-init">/kit:project-init</a></li><li><a href="#parametry">Параметры</a></li><li><a href="#grabli">Грабли и защита</a></li><li><a href="#vypusk">Выпуск и обновление</a></li></ol>
+  <ol><li><a href="#karta">Карта</a></li><li><a href="#cikl">Цикл работы</a></li><li><a href="#huki">Хуки</a></li><li><a href="#step-done">/kit:step-done</a></li><li><a href="#server">/kit:server</a></li><li><a href="#visual">/kit:visual</a></li><li><a href="#deploy-list">/kit:deploy-list</a></li><li><a href="#why">/kit:why</a></li><li><a href="#report">/kit:report</a></li><li><a href="#udalennyj">Удалённый репозиторий</a></li><li><a href="#project-init">/kit:project-init</a></li><li><a href="#parametry">Параметры</a></li><li><a href="#grabli">Грабли и защита</a></li><li><a href="#vypusk">Выпуск и обновление</a></li></ol>
 </nav>
 <main>
 
@@ -366,6 +366,17 @@ html{scroll-behavior:smooth}
     <li><span>документы этапа: план, спек</span></li>
   </ol>
   <p>Тема («почему коммит только из Bash») — сразу «Решения», журнал и документы, затем поиск по коммитам. Ответ — 2–5 фраз со ссылками (шаг, коммит, решение №N), список источников и «не нашёл»: чего в истории нет, то не додумывается.</p>
+</section>
+
+<section id="report">
+  <h2>Отчёт для заказчика <span class="cmd">/kit:report</span></h2>
+  <p>С 2.12.0. Собирает из журнала, git и плана выкладки текст для задачи Битрикс24 или письма: что сделано, что выложено на сайт, что нужно подтвердить, открытые вопросы и что дальше. Пишет для заказчика: без хешей, путей, имён файлов, внутренних названий и подробностей разработки; пустые разделы не выводит.</p>
+  <ol class="chain">
+    <li><span>период: дата из аргумента, иначе с прошлого отчёта, иначе с начала текущего этапа</span></li>
+    <li><span>сделано — шаги из коммитов за период и их строки в журнале</span></li>
+    <li><span>подтвердить — решения за период, которые касаются заказчика</span></li>
+    <li><span>дата отчёта — заметкой во входящие; следующий /kit:step-done пишет её в «Справочник»</span></li>
+  </ol>
 </section>
 
 <section id="udalennyj">
