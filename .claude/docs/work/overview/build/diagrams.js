@@ -5,32 +5,36 @@ const { makeDiagram } = require('./svg');
 
 // 1. Карта: пользователь → Claude ← хуки / проект; Claude → скиллы → скрипты и агенты → что меняется.
 function map() {
-  const d = makeDiagram('d1', 1040, 552, 'Карта плагина kit: пользователь даёт команды Claude, хуки перехватывают события сессии, Claude вызывает команды /kit: (на схеме — пять основных), каждая команда работает через свои скрипты и агентов и меняет git, журнал, сервер или сайт.');
-  const cx = [115, 317, 519, 721, 923];
-  const x = cx.map((c) => c - 95);
-  d.box({ x: 389, y: 14, w: 260, h: 52, k: 'user', L: [['t', 'Пользователь'], ['s', 'команды · ответы «да/нет» · пароли']] });
-  d.box({ x: 20, y: 100, w: 280, h: 88, k: 'hook', a: 'l', L: [['t', 'Хуки — срабатывают сами'], ['m', 'SessionStart → контекст'], ['m', 'PreToolUse → запрет'], ['m', 'PostToolUse → php -l']] });
-  d.box({ x: 389, y: 100, w: 260, h: 88, k: 'core', L: [['t', 'Claude'], ['s', 'основной агент сессии'], ['s', 'выполняет скиллы, зовёт агентов']] });
-  d.box({ x: 740, y: 100, w: 280, h: 88, a: 'l', L: [['t', 'Проект'], ['m', '.claude/CLAUDE.md → Параметры'], ['m', '.claude/docs/progress.md'], ['m', '.claude/docs/deploy-prod.md']] });
-  d.edge([[519, 66], [519, 100]], { lbl: 'команды, ответы', lx: 527, ly: 88, la: 'start' });
-  d.edge([[300, 144], [389, 144]], { lbl: 'перехват', lx: 344, ly: 136 });
-  d.edge([[740, 144], [649, 144]], { lbl: 'читает', lx: 694, ly: 136 });
-  d.edge([[519, 188], [519, 212]], { head: false });
-  d.edge([[115, 212], [923, 212]], { head: false });
-  d.label(216, 205, 'Skill: сам или по команде');
+  const d = makeDiagram('d1', 1320, 560, 'Карта плагина kit: пользователь даёт команды Claude, хуки перехватывают события сессии, Claude вызывает семь команд /kit:, каждая работает через свои скрипты и агентов и меняет git, журнал, сервер или сайт либо только читает историю.');
+  const cx = [108, 292, 476, 660, 844, 1028, 1212];
+  const x = cx.map((c) => c - 85);
+  d.box({ x: 530, y: 14, w: 260, h: 52, k: 'user', L: [['t', 'Пользователь'], ['s', 'команды · ответы · пароли']] });
+  d.box({ x: 20, y: 100, w: 300, h: 104, k: 'hook', a: 'l', L: [['t', 'Хуки — срабатывают сами'], ['m', 'SessionStart → контекст'], ['m', 'PreToolUse → запрет'], ['m', 'PostToolUse → php -l'], ['m', 'PostToolUse → входящие ответы']] });
+  d.box({ x: 530, y: 100, w: 260, h: 88, k: 'core', L: [['t', 'Claude'], ['s', 'основной агент сессии'], ['s', 'выполняет скиллы, зовёт агентов']] });
+  d.box({ x: 1000, y: 100, w: 300, h: 104, a: 'l', L: [['t', 'Проект'], ['m', '.claude/CLAUDE.md → Параметры'], ['m', '.claude/docs/progress.md'], ['m', '.claude/docs/journal/…'], ['m', '.claude/docs/deploy-prod.md']] });
+  d.edge([[660, 66], [660, 100]], { lbl: 'команды, ответы', lx: 668, ly: 88, la: 'start' });
+  d.edge([[320, 144], [530, 144]], { lbl: 'перехват', lx: 425, ly: 136 });
+  d.edge([[1000, 144], [790, 144]], { lbl: 'читает', lx: 895, ly: 136 });
+  d.edge([[660, 188], [660, 214]], { head: false });
+  d.edge([[108, 214], [1212, 214]], { head: false });
+  d.label(672, 207, 'Skill: сам или по команде');
   const skills = [
     ['/kit:project-init', 'один раз на проект'],
     ['/kit:step-done', 'после проверенного шага'],
     ['/kit:deploy-list', 'перед выкладкой'],
     ['/kit:server', 'когда нужен сервер'],
     ['/kit:visual', 'до и после изменений'],
+    ['/kit:why', 'почему так сделано'],
+    ['/kit:report', 'отчёт заказчику'],
   ];
   const tools = [
-    [['m', 'site-probe.js'], ['m', 'ssh-probe.js'], ['m', 'phpstorm-exclude.js'], ['m', 'secret-scan.js --all'], ['m', 'check-closed.js'], ['s', '+ git-keeper: коммит 0.1']],
-    [['ag', 'docs-keeper (sonnet)'], ['ag', 'git-keeper (haiku)'], ['m', 'secret-scan.js --paths'], ['m', 'secret-scan.js --cached']],
+    [['m', 'site-probe.js'], ['m', 'ssh-probe.js'], ['m', 'phpstorm-exclude.js'], ['m', 'secret-scan.js --all'], ['m', 'journal-split.js'], ['s', '+ git-keeper: 0.1']],
+    [['ag', 'docs-keeper (sonnet)'], ['ag', 'git-keeper (haiku)'], ['m', 'decision-inbox.js'], ['m', 'journal-split.js'], ['m', 'secret-scan.js']],
     [['m', 'deploy-list.js'], ['s', 'читает git log'], ['s', 'и план выкладки']],
     [['m', 'remote-php.js'], ['m', 'kit-exec.js'], ['m', 'md5-check.js'], ['m', 'inventory.php'], ['m', 'check-files.php'], ['m', 'delete-list.php']],
-    [['m', 'visual.js'], ['s', 'deps · install · login'], ['s', 'discover · shoot · check'], ['s', 'compare · list']],
+    [['m', 'visual.js'], ['s', 'deps · install · login'], ['s', 'discover · shoot'], ['s', 'check · compare · list']],
+    [['m', 'git log --follow · -L'], ['s', 'шаги из коммитов'], ['s', 'журнал и его части'], ['s', 'документы этапов']],
+    [['m', 'git log --since'], ['m', 'decision-inbox.js'], ['s', 'журнал, решения,'], ['s', 'план выкладки']],
   ];
   const ext = [
     [['s', 'git · .idea · сайт'], ['s', 'сервер по SSH']],
@@ -38,14 +42,16 @@ function map() {
     [['s', 'список «залить»'], ['s', 'и «удалить»']],
     [['s', 'сервер по SSH'], ['s', 'или kit-exec.php']],
     [['s', 'Chrome → сайт'], ['s', 'снимки локально']],
+    [['s', 'ответ со ссылками'], ['s', 'только чтение']],
+    [['s', 'текст для Б24'], ['s', 'дата — во входящие']],
   ];
-  for (let i = 0; i < 5; i++) {
-    d.edge([[cx[i], 212], [cx[i], 236]]);
-    d.box({ x: x[i], y: 236, w: 190, h: 56, k: 'skill', L: [['tm', skills[i][0]], ['s', skills[i][1]]] });
-    d.edge([[cx[i], 292], [cx[i], 316]]);
-    d.box({ x: x[i], y: 316, w: 190, h: 136, a: 'l', v: 't', L: tools[i] });
-    d.edge([[cx[i], 452], [cx[i], 476]]);
-    d.box({ x: x[i], y: 476, w: 190, h: 60, k: 'ext', L: ext[i] });
+  for (let i = 0; i < cx.length; i++) {
+    d.edge([[cx[i], 214], [cx[i], 238]]);
+    d.box({ x: x[i], y: 238, w: 170, h: 56, k: 'skill', L: [['tm', skills[i][0]], ['s', skills[i][1]]] });
+    d.edge([[cx[i], 294], [cx[i], 318]]);
+    d.box({ x: x[i], y: 318, w: 170, h: 140, a: 'l', v: 't', L: tools[i] });
+    d.edge([[cx[i], 458], [cx[i], 482]]);
+    d.box({ x: x[i], y: 482, w: 170, h: 60, k: 'ext', L: ext[i] });
   }
   return d;
 }
@@ -82,13 +88,19 @@ function cycle() {
 
 // 3. Хуки: событие → признак kit-проекта → скрипт → проверка → итог.
 function hooks() {
-  const d = makeDiagram('d3', 1040, 446, 'Три хука: каждое событие сначала проверяет, kit-проект ли это; если нет — тишина. SessionStart дописывает исключения PhpStorm, кладёт в контекст раздел «Сейчас» и правила и сверяет ветку с удалённым репозиторием; PreToolUse запрещает cd вне подоболочки и sed -i по PHP; PostToolUse прогоняет php -l и при ошибке возвращает код 2.');
+  const d = makeDiagram('d3', 1040, 548, 'Хуки: каждое событие сначала проверяет, kit-проект ли это; если нет — тишина. SessionStart дописывает исключения PhpStorm, кладёт в контекст раздел «Сейчас» и правила и сверяет ветку с удалённым репозиторием; PreToolUse запрещает cd вне подоболочки и sed -i по PHP; PostToolUse после правки прогоняет php -l и при ошибке возвращает код 2, а после вопроса пользователю записывает ответ во входящие для /kit:step-done.');
   d.box({ x: 20, y: 22, w: 200, h: 140, k: 'hook', L: [['tm', 'SessionStart'], ['m', 'startup · resume'], ['m', 'clear · compact']] });
   d.box({ x: 20, y: 200, w: 200, h: 70, k: 'hook', L: [['tm', 'PreToolUse'], ['m', 'Bash · PowerShell']] });
   d.box({ x: 20, y: 312, w: 200, h: 70, k: 'hook', L: [['tm', 'PostToolUse'], ['m', 'Write · Edit · MultiEdit']] });
-  d.box({ x: 262, y: 22, w: 130, h: 360, k: 'core', L: [['t', 'kit-проект?'], ['s', '«Параметры»'], ['s', 'или журнал']] });
-  d.edge([[327, 382], [327, 410]], { c: 'u' });
-  d.label(327, 430, 'нет → тишина, код 0', 'middle', 'u');
+  d.box({ x: 20, y: 412, w: 200, h: 70, k: 'hook', L: [['tm', 'PostToolUse'], ['m', 'AskUserQuestion']] });
+  d.box({ x: 262, y: 22, w: 130, h: 460, k: 'core', L: [['t', 'kit-проект?'], ['s', '«Параметры»'], ['s', 'или журнал']] });
+  d.edge([[327, 482], [327, 510]], { c: 'u' });
+  d.label(327, 530, 'нет → тишина, код 0', 'middle', 'u');
+  d.edge([[220, 447], [262, 447]]);
+  d.box({ x: 432, y: 422, w: 190, h: 50, L: [['m', 'decision-inbox.js']] });
+  d.edge([[392, 447], [432, 447]]);
+  d.box({ x: 662, y: 414, w: 358, h: 66, k: 'ext', L: [['s', 'вопрос, варианты, ответ → kit-inbox.jsonl'], ['s', '/kit:step-done берёт решения']] });
+  d.edge([[622, 447], [662, 447]]);
   d.edge([[220, 92], [262, 92]]);
   d.edge([[220, 235], [262, 235]]);
   d.edge([[220, 347], [262, 347]]);
@@ -123,14 +135,14 @@ function hooks() {
 
 // 4. /kit:step-done — диаграмма последовательности.
 function stepDone() {
-  const d = makeDiagram('d4', 1040, 700, 'Последовательность /kit:step-done: Claude собирает файлы шага, docs-keeper обновляет журнал и отчитывается, Claude сверяет отчёт с файлом, git-keeper проверяет пути, добавляет файлы, проверяет секреты и делает один коммит, после чего Claude проверяет, что коммит ровно один и заголовок совпал. Если задан удалённый репозиторий — после проверки коммит отправляется: в первый раз — после проверки всей истории на секреты.');
+  const d = makeDiagram('d4', 1040, 832, 'Последовательность /kit:step-done: Claude собирает файлы шага и входящие ответы, при закрытии этапа сверяет задуманное со сделанным, docs-keeper обновляет журнал, его части и чек-лист плана, Claude сверяет отчёт с файлами и переносит закрытый этап в journal/stages/, git-keeper проверяет пути, добавляет файлы, проверяет секреты и делает один коммит из Bash, после чего Claude проверяет коммит, убирает разобранные входящие и, если задан удалённый репозиторий, отправляет коммит.');
   const X = { C: 110, DK: 330, GK: 550, SS: 770, G: 950 };
   d.box({ x: 25, y: 12, w: 170, h: 48, k: 'core', L: [['t', 'Claude'], ['s', 'основной агент']] });
   d.box({ x: 245, y: 12, w: 170, h: 48, k: 'agent', L: [['tm', 'kit:docs-keeper'], ['s', 'модель sonnet']] });
   d.box({ x: 465, y: 12, w: 170, h: 48, k: 'agent', L: [['tm', 'kit:git-keeper'], ['s', 'модель haiku']] });
   d.box({ x: 685, y: 12, w: 170, h: 48, L: [['tm', 'secret-scan.js'], ['s', 'пути и секреты']] });
   d.box({ x: 880, y: 12, w: 140, h: 48, k: 'ext', L: [['tm', 'git'], ['s', 'репозиторий']] });
-  for (const k of Object.keys(X)) d.line(X[k], 60, X[k], 692);
+  for (const k of Object.keys(X)) d.line(X[k], 60, X[k], 824);
   const msg = (y, f, t, lbl, c = '', ly) => {
     const fx = X[f];
     const tx = X[t] + (X[t] > fx ? -3 : 3);
@@ -139,22 +151,25 @@ function stepDone() {
   const note = (who, y, h, L, k = 'note', w = 190) => d.box({ x: X[who] - w / 2, y, w, h, k, rx: 4, L });
   msg(92, 'C', 'G', 'rev-parse HEAD · status --porcelain');
   note('C', 104, 40, [['s', 'FILES — файлы шага'], ['s', 'чужие правки → вопрос']]);
-  msg(172, 'C', 'DK', 'STEP · STATUS · SUMMARY · CHECK · NEXT …');
-  note('DK', 184, 40, [['s', 'журнал, план выкладки,'], ['s', 'RULES → CLAUDE.md']], 'note', 176);
-  msg(248, 'DK', 'C', 'отчёт: «Сейчас», цитаты, файлы', 'd');
-  note('C', 262, 40, [['s', 'сверка отчёта Grep-ом'], ['s', 'нет строки → повтор']]);
-  note('C', 310, 40, [['s', 'конец этапа?'], ['s', 'work/ → archive/ с выбора']], 'user');
-  msg(378, 'C', 'GK', 'FILES · MESSAGE · BODY · COAUTHOR · KIT_ROOT');
-  msg(410, 'GK', 'SS', '--paths FILES');
-  msg(432, 'SS', 'GK', '1 → стоп', 'd u', 446);
-  msg(468, 'GK', 'G', 'add -A -- FILES');
-  msg(500, 'GK', 'SS', '--cached FILES');
-  msg(522, 'SS', 'GK', '1 → стоп', 'd u', 536);
-  msg(558, 'GK', 'G', "commit -m '…' -- FILES");
-  msg(590, 'GK', 'C', 'хеш · файлы · подпись', 'd');
-  msg(620, 'C', 'G', 'проверка: 1 коммит, заголовок = MESSAGE, подпись');
-  msg(652, 'C', 'SS', '--history — только перед первой отправкой');
-  msg(684, 'C', 'G', 'push -u <имя> HEAD — если задан «Удалённый репозиторий»');
+  note('C', 152, 40, [['s', 'входящие ответы → DECISIONS'], ['s', 'decision-inbox.js --list']]);
+  note('C', 200, 40, [['s', 'конец этапа? сверка'], ['s', 'work/ → archive/ с выбора']], 'user');
+  msg(268, 'C', 'DK', 'STEP · STATUS · SUMMARY · CHECK · NEXT …');
+  note('DK', 280, 40, [['s', 'журнал и части journal/,'], ['s', '[x] в плане этапа']], 'note', 176);
+  msg(344, 'DK', 'C', 'отчёт: «Сейчас», цитаты, файлы', 'd');
+  note('C', 358, 40, [['s', 'сверка отчёта Grep-ом'], ['s', 'нет строки → повтор']]);
+  note('C', 406, 40, [['s', 'journal-split.js --stage N'], ['s', 'этап → journal/stages/']], 'user');
+  msg(474, 'C', 'GK', 'FILES · MESSAGE · BODY · COAUTHOR · KIT_ROOT');
+  msg(506, 'GK', 'SS', '--paths FILES');
+  msg(528, 'SS', 'GK', '1 → стоп', 'd u', 542);
+  msg(564, 'GK', 'G', 'add -A -- FILES');
+  msg(596, 'GK', 'SS', '--cached FILES');
+  msg(618, 'SS', 'GK', '1 → стоп, индекс как есть', 'd u', 632);
+  msg(654, 'GK', 'G', "commit -m '…' -- FILES (из Bash)");
+  msg(686, 'GK', 'C', 'хеш · файлы · подпись', 'd');
+  msg(716, 'C', 'G', 'проверка: 1 коммит, заголовок и тело = переданным');
+  note('C', 728, 40, [['s', 'прошла → входящие'], ['s', 'decision-inbox.js --clear N']]);
+  msg(788, 'C', 'SS', '--history — только перед первой отправкой');
+  msg(816, 'C', 'G', 'push -u <имя> HEAD — если задан «Удалённый репозиторий»');
   return d;
 }
 
