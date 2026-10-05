@@ -5,6 +5,7 @@
 //               в .claude/kit-inbox.jsonl — вопрос, варианты с описаниями, ответ, свой ли это текст. Всегда код 0, без вывода.
 //   --list      входящие для Claude, по порядку; последняя строка — «записей: N». Нет — «Входящих ответов нет.»
 //   --clear N   убрать первые N записей — разобранные (ответы, пришедшие после --list, остаются).
+//   --note "текст"  заметка для NOTES следующего /kit:step-done (например, «Отчёт заказчику: …» от /kit:report).
 // Отсеивает процедурные вопросы («Закрывать?», «Начинать?») не скрипт, а Claude в /kit:step-done — по смыслу.
 // Файл локальный: в git не идёт (шаблоны .gitignore, запрет в secret-scan), из выкладки исключён хуком phpstorm-exclude.js.
 const fs = require('fs');
@@ -77,6 +78,10 @@ function listText(entries) {
   if (!entries.length) return 'Входящих ответов нет.';
   const lines = [];
   entries.forEach((e, i) => {
+    if (e.type === 'note') {
+      lines.push(`${i + 1}. [${String(e.ts).slice(0, 10)}] заметка: ${e.text}`);
+      return;
+    }
     lines.push(`${i + 1}. [${String(e.ts).slice(0, 10)}] ${e.question} → ${e.answer}${e.own ? ' (свой ответ)' : ''}`);
     const chosen = e.options.filter((o) => o.label === e.answer || (e.multiSelect && e.answer.split(', ').includes(o.label)));
     for (const o of chosen) if (o.description) lines.push(`   выбрано: ${o.label} — ${o.description}`);
@@ -128,6 +133,18 @@ function main(argv) {
     console.log(listText(readInbox(file)));
     return 0;
   }
+  const ni = argv.indexOf('--note');
+  if (ni >= 0) {
+    const text = String(argv[ni + 1] || '').trim();
+    if (!text) {
+      console.error('--note: нужен текст заметки, например --note "Отчёт заказчику: 2026-10-05"');
+      return 2;
+    }
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, JSON.stringify({ ts: new Date().toISOString(), type: 'note', text }) + '\n');
+    console.log('Заметка добавлена во входящие.');
+    return 0;
+  }
   const ci = argv.indexOf('--clear');
   if (ci >= 0) {
     const n = Number(argv[ci + 1]);
@@ -138,7 +155,7 @@ function main(argv) {
     console.log(`Убрано записей: ${clearFirst(file, n)}.`);
     return 0;
   }
-  console.error('Использование: node decision-inbox.js --hook | --list | --clear N');
+  console.error('Использование: node decision-inbox.js --hook | --list | --clear N | --note "текст"');
   return 2;
 }
 

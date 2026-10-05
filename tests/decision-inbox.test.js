@@ -89,3 +89,18 @@ test('--list: ответ, выбранное с описанием, другие
   assert.equal(cli(dir, '--clear').code, 2);
   assert.equal(cli(dir).code, 2);
 });
+
+test('--note: заметка для NOTES (/kit:report) — в --list «заметка: …», убирается --clear как обычная запись; без текста — код 2', () => {
+  const dir = kitProject();
+  hook(hookInput(dir, { 'Где хранить файл входящих?': 'Локально (Рекомендую)' }));
+  const r = cli(dir, '--note', 'Отчёт заказчику: 2026-10-05 (период с 2026-09-28)');
+  assert.equal(r.code, 0);
+  assert.equal(r.stdout, 'Заметка добавлена во входящие.\n');
+  const list = cli(dir, '--list').stdout;
+  assert.match(list, /\n2\. \[\d{4}-\d\d-\d\d\] заметка: Отчёт заказчику: 2026-10-05 \(период с 2026-09-28\)\nзаписей: 2\n$/);
+  assert.equal(inbox(dir)[1].type, 'note');
+  cli(dir, '--clear', '2');
+  assert.equal(fs.existsSync(path.join(dir, INBOX)), false);
+  assert.equal(cli(dir, '--note').code, 2);
+  assert.equal(cli(dir, '--note', '  ').code, 2);
+});
