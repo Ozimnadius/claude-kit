@@ -188,6 +188,7 @@ const main = (fig) => `
   <ul>
     <li><code>guard-bash.js</code> разбирает команду как оболочка: вырезает heredoc, here-string и комментарии, делит на команды по <code>;</code>, <code>&amp;&amp;</code>, <code>|</code>. <code>cd</code> в Bash разрешён только внутри подоболочки <code>( cd … &amp;&amp; … )</code>; в PowerShell <code>cd</code> и <code>Set-Location</code> запрещены везде — скобки там не помогают. Например, при подготовке этого обзора страж остановил команду Claude с <code>cd</code>, и её пришлось переписать через подоболочку.</li>
     <li><code>php-lint.js</code> берёт <code>php.exe</code> из параметра «PHP» — только абсолютный путь к существующему файлу, иначе молчит. Скрипты для сервера (<code>.claude/scripts/</code>, библиотека <code>/kit:server</code>) пишутся без <code>&lt;?php</code>: хук проверяет их через временную копию с этой приставкой и сдвигает номера строк обратно.</li>
+    <li><code>decision-inbox.js</code> (с 2.9.0) — PostToolUse на <code>AskUserQuestion</code>: каждый ответ пользователя (вопрос, варианты с описаниями, выбор или свой текст) дописывается в локальный <code>.claude/kit-inbox.jsonl</code> — не в git и не на сервер. <code>/kit:step-done</code> берёт оттуда решения для «Решений», процедурные вопросы пропускает и после коммита убирает разобранное — решения переживают сжатие контекста.</li>
   </ul>
 </section>
 
