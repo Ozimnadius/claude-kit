@@ -19,6 +19,7 @@ const { parseRules, matchRules, norm } = require('./lib/paths');
 const BASE_FORBIDDEN = [
   '.idea', '*.back*', '.settings.php', '.settings_extra.php', 'dbconn.php', '.env', '.env.* (кроме .env.example)',
   '*.pem', '*.key', '.claude/settings.local.json', '.claude/worktrees', 'docs/visual', '.claude/docs/visual',
+  '.claude/kit-inbox.jsonl', // входящие ответы для /kit:step-done — только локально
   '/kit-exec.php', // файл-канал /kit:server (только корень): на сервере на время работы, в git не нужен
 ];
 const MAX_SIZE = 2 * 1024 * 1024;

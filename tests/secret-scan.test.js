@@ -247,9 +247,9 @@ test('запрещённые пути: базовые и из параметра
 test('--paths: только запрещённые пути — файлы не читаются и могут не существовать (К40)', () => {
   const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd(ALPHA) });
   // Ни одного из этих файлов на диске нет: режим смотрит только на пути.
-  const bad = scan(dir, '--paths', '--', '.env', 'local/x.php.back1', 'upload/iblock/b.txt', 'kit-exec.php', '.claude/docs/visual/a.png', 'ok.php');
+  const bad = scan(dir, '--paths', '--', '.env', 'local/x.php.back1', 'upload/iblock/b.txt', 'kit-exec.php', '.claude/docs/visual/a.png', '.claude/kit-inbox.jsonl', 'ok.php');
   assert.equal(bad.code, 1, bad.stdout);
-  for (const p of ['\\.env', 'local\\/x\\.php\\.back1', 'upload\\/iblock\\/b\\.txt', 'kit-exec\\.php', '\\.claude\\/docs\\/visual\\/a\\.png']) {
+  for (const p of ['\\.env', 'local\\/x\\.php\\.back1', 'upload\\/iblock\\/b\\.txt', 'kit-exec\\.php', '\\.claude\\/docs\\/visual\\/a\\.png', '\\.claude\\/kit-inbox\\.jsonl']) {
     assert.match(bad.stdout, new RegExp('^ {2}' + p + ': запрещённый путь', 'm'), p);
   }
   assert.doesNotMatch(bad.stdout, /ok\.php/);

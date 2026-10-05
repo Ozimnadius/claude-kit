@@ -125,7 +125,7 @@ const docsProject = (extra = {}) => ({
   '.claude/agents/x.md': '',
   '.claude/settings.local.json': '{}',
 });
-const OPENED = ['.claude/agents', '.claude/settings.local.json', '.claude/worktrees', '.claude/skills', '.claude/docs/visual'];
+const OPENED = ['.claude/agents', '.claude/settings.local.json', '.claude/worktrees', '.claude/skills', '.claude/kit-inbox.jsonl', '.claude/docs/visual'];
 
 test('--hook, «Документы на сервере: да»: .claude убрана, исключено всё в ней, кроме docs, CLAUDE.md и .htaccess, плюс worktrees, скиллы и снимки; повтор — тишина', () => {
   const dir = makeProject({ ...docsProject(), [XML]: GAMMA });
