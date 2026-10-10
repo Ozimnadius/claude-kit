@@ -5,7 +5,7 @@
 ## Проект
 
 - Личный маркетплейс Claude Code `claude-kit` с плагином `kit` (`plugins/kit/`): агенты, скиллы, хуки и node-скрипты для проектов пользователя.
-- Документы — в `.claude/docs/`: журнал `progress.md` и его части в `journal/`; текущее — в `work/` (спек `spec-claude-kit.md`, план этапа, новые замечания пользователя); готовое — в `archive/` (планы завершённых этапов, закрытые замечания `MyObservations.md`); реестр — раздел «Документы» журнала. `.claude` — защищённая папка Claude Code: в режимах Manual/acceptEdits запись просит подтверждения.
+- Документы — в `.claude/docs/`: журнал `progress.md` и его части в `journal/`; текущее — в `work/` (спек `spec-claude-kit.md`, план этапа, замечания и идеи пользователя `MyIdeas.md`); готовое — в `archive/` (планы завершённых этапов); реестр — раздел «Документы» журнала. `.claude` — защищённая папка Claude Code: в режимах Manual/acceptEdits запись просит подтверждения.
 - Перед коммитом: `npm test` (`node --test tests/*.test.js`), `claude plugin validate plugins/kit --strict`, `claude plugin validate . --strict`.
 - Один проверенный шаг — один коммит `ID: …`; исправления после ревью — отдельными коммитами с тем же ID и буквой (`6.2а`, `6.2б`), без amend.
 - Установленный плагин — копия в кэше `~/.claude/plugins/cache/claude-kit/kit/<версия>`. Выпуск: поднять `version` в `plugins/kit/.claude-plugin/plugin.json` и `.claude-plugin/marketplace.json` → слить в `master` основного checkout `C:\OSPanel\home\claude-kit` → `claude plugin marketplace update claude-kit` и `claude plugin update kit@claude-kit`. Без повышения версии обновление не происходит.
