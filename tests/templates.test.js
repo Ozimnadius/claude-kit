@@ -129,3 +129,7 @@ test('htaccess-deny: Apache 2.4 и 2.2', () => {
   assert.match(h, /Require all denied/);
   assert.match(h, /Deny from all/);
 });
+
+test('шаблон CLAUDE.md: «Коммит: после просмотра» (с 2.15.0)', () => {
+  assert.match(read('CLAUDE.md'), /^- Коммит: после просмотра$/m);
+});

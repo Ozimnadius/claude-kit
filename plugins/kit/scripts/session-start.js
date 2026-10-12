@@ -21,6 +21,9 @@ const RULE_ALWAYS = '- Выкладка: PhpStorm Always — любое сохр
 const RULE_ALWAYS_DEV = '- Автозаливка на дев: любое сохранение в проекте сразу уходит на дев-сервер (на прод — вручную). Черновики — только во временной папке сессии; PHP собрать и проверить php -l там, в проект — одной правкой. Удаление локально дев-сервер не трогает.';
 const RULE_USER = '- Код пишет пользователь: Claude даёт один маленький шаг и ждёт ответа; «сделай сам» относится только к текущему шагу.';
 const RULE_CLAUDE = '- Код пишет Claude: после записи проверить результат на сервере (страница, десктоп и мобильная ширина).';
+// С 2.15.0: без параметра «Коммит» или с любым значением, кроме «сразу», коммит — только после просмотра пользователем.
+const RULE_REVIEW = '- Коммит — после просмотра: /kit:step-done показывает незакоммиченные изменения (панель изменений приложения Claude) '
+  + 'и коммитит только после ответа «Коммитить»; вопросы пользователь задаёт комментариями к строкам.';
 const RULE_NO_PARAMS = '- В .claude/CLAUDE.md нет раздела «Параметры для агентов» — предложи пользователю /kit:project-init (дополнит недостающее).';
 const SPEC_TEMPLATE = path.join(__dirname, '..', 'skills', 'project-init', 'templates', 'spec.md');
 const RULE_SP_ALWAYS = '- Superpowers при автозаливке: без отдельных веток и worktree (.worktrees, using-git-worktrees) — правки из них не дойдут до сервера.';
@@ -73,6 +76,7 @@ function buildContext(info) {
   else if (who.startsWith('claude')) out.push(RULE_CLAUDE);
   // После правил автозаливки и «Код пишет» — уточняет их для worktree.
   if (always && inWorktree(info.dir)) out.push(RULE_WORKTREE);
+  if (!/^сразу/i.test(p.get('Коммит', '').trim())) out.push(RULE_REVIEW);
   if (!p.found) out.push(RULE_NO_PARAMS);
   out.push(docsRule(info.docsRel));
   // Журнал по частям (с 2.13.0): в журнале — только текущее, остальное — в journal/ рядом с ним.

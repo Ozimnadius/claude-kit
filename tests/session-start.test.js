@@ -122,3 +122,11 @@ test('документы: новая раскладка — правило пр�
   assert.match(old.stdout, /- Документы проекта — в docs\/: .* Переезд в \.claude\/docs — через \/kit:project-init\./);
   assert.equal(run(makeProject({ 'index.php': '' })).stdout, '', 'вне kit-проекта — тишина');
 });
+
+test('«Коммит»: без параметра и «после просмотра» — правило просмотра перед коммитом; «сразу» — без него (с 2.15.0)', () => {
+  const rule = /- Коммит — после просмотра: \/kit:step-done показывает незакоммиченные изменения/;
+  const out = (params) => run(makeProject({ '.claude/CLAUDE.md': paramsMd(params), '.claude/docs/progress.md': progressMd() })).stdout;
+  assert.match(out({ 'Код пишет': 'Claude' }), rule);
+  assert.match(out({ 'Коммит': 'после просмотра' }), rule);
+  assert.doesNotMatch(out({ 'Коммит': 'сразу' }), rule);
+});

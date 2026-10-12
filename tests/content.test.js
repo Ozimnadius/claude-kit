@@ -123,7 +123,9 @@ test('step-done: docs-keeper, один коммит скриптом kit-commit.
     '«Заменяет №N»', 'не записано: нет "почему"', '«Решения агента на этом шаге (можно возразить)»',
     'CHECK: …', '<CHECK дословно>', '**Журнал по частям**', 'journal-split.js" --stage <N>', '`journal/stages/stage-NN.md` и журнал — в FILES', 'строка `- [x] <STEP>` в плане этапа из реестра', 'Заметки («заметка: …»', 'в `NOTES` дословно', '`SUMMARY` (одна строка: что сделано)',
     '**Входящие ответы**', '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --list', 'Запомни N из последней строки «записей: N»', 'Процедурные ответы пропусти',
-    '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --clear N', 'входящие не трогай']) {
+    '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --clear N', 'входящие не трогай',
+    '## 3а. Просмотр перед коммитом', 'mcp__ccd_view__show_pane', '`diff_scope` — `uncommitted`', '«Коммит: сразу»', 'Ctrl+Enter',
+    '«Коммитить»', '«Есть вопросы — оставлю комментарии»', '«Не коммитить пока»', 'продолжи с п. 3а']) {
     assert.ok(body.includes(s), s);
   }
   const i5 = body.indexOf('## 5. Проверка');
@@ -136,6 +138,8 @@ test('step-done: docs-keeper, один коммит скриптом kit-commit.
   assert.ok(iArchive > 0 && iArchive < body.indexOf('## 3. docs-keeper'), 'архив — до вызова docs-keeper');
   const iRec = body.indexOf('### Закрытие этапа — сверка');
   assert.ok(iRec > 0 && iRec < iArchive, 'сверка — до архива: документы этапа ещё в work/');
+  const i3a = body.indexOf('## 3а. Просмотр перед коммитом');
+  assert.ok(i3a > body.indexOf('## 3. docs-keeper') && i3a < body.indexOf('## 4. Коммит'), 'просмотр — после журнала, до коммита');
   assert.doesNotMatch(body, /^\s*git status/m, 'пути — только с core.quotepath=false');
 });
 
