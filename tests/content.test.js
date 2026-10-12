@@ -125,7 +125,8 @@ test('step-done: docs-keeper, один коммит скриптом kit-commit.
     '**Входящие ответы**', '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --list', 'Запомни N из последней строки «записей: N»', 'Процедурные ответы пропусти',
     '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --clear N', 'входящие не трогай',
     '## 3а. Просмотр перед коммитом', 'mcp__ccd_view__show_pane', '`diff_scope` — `uncommitted`', '«Коммит: сразу»', 'Ctrl+Enter',
-    '«Коммитить»', '«Есть вопросы — оставлю комментарии»', '«Не коммитить пока»', 'продолжи с п. 3а']) {
+    '«Коммитить»', '«Есть вопросы — оставлю комментарии»', '«Не коммитить пока»', 'продолжи с п. 3а',
+    'mcp__ccd_view__get_layout', 'mcp__ccd_view__close_pane', 'панель уже была открыта — не закрывай']) {
     assert.ok(body.includes(s), s);
   }
   const i5 = body.indexOf('## 5. Проверка');
