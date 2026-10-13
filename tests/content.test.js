@@ -238,6 +238,17 @@ test('project-init: только командой, все шаги и шабло
   }
 });
 
+test('project-init: вопрос «Документы на сервере» — только при автозаливке, шаблон пишет ответ (К55)', () => {
+  const { body } = skill('project-init');
+  for (const s of ['вопрос «Документы на сервере»', 'Без автозаливки вопрос не задавай', 'Параметр «Документы на сервере» — ответ третьего вызова',
+    'исключение `.claude` сменится поимённым', '[kit] Документы на сервер не уедут', 'при «Документы на сервере: да» — 403']) {
+    assert.ok(body.includes(s), s);
+  }
+  const tpl = fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', 'templates', 'CLAUDE.md'), 'utf8');
+  assert.match(tpl, /^- Документы на сервере: \{\{да \| нет\}\}$/m);
+  assert.ok(tpl.includes('| из `.claude/` автозаливка везёт на сервер только документы'), 'шаблон: вариант строки про .claude при «да»');
+});
+
 test('server: сначала SSH (BatchMode, remote-php, --timeout, коды), иначе файл kit-exec.php; правила изменений', () => {
   const { fm, body } = skill('server');
   assert.equal(fm.name, 'server');
