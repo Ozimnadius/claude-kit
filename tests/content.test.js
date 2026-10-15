@@ -199,6 +199,16 @@ test('финальное ревью этапа 32: чужие правки пр�
   for (const s of ['по параметру «Окружение»', 'нужной таблицы нет — добавь раздел', 'в «Файлы» есть `ssh-deploy.js`']) assert.ok(dk.includes(s), 'docs-keeper: ' + s);
 });
 
+test('К56–К60: «не файл» — в «Не выкладывать», свежий сухой прогон, п. 3а в порядке SSH, описание «Залить на сервер», хук и шаблон', () => {
+  const sd = skill('step-done').body;
+  for (const s of ['«Добавить в «Не выкладывать» (Рекомендую)» / «Остановиться»', 'свежий сухой прогон', 'в порядке **SSH** docs-keeper ещё не вызывался',
+    'после проверки на сервере — коммит, а при заданном «Удалённом репозитории» — и отправка']) {
+    assert.ok(sd.includes(s), 'step-done: ' + s);
+  }
+  const tpl = fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', 'templates', 'CLAUDE.md'), 'utf8');
+  assert.ok(tpl.includes('при «Claude по SSH» — после заливки в `/kit:step-done`'), 'шаблон: «Код пишет пользователь» в режиме SSH');
+});
+
 test('deploy-list и report: таблица по окружению, режим «Claude по SSH» (этап 32)', () => {
   const dl = skill('deploy-list');
   assert.ok(dl.fm.description.includes('Claude по SSH'));

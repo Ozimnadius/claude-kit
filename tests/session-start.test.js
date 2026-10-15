@@ -141,6 +141,7 @@ test('«Claude по SSH»: правило заливки в /kit:step-done, «К
   assert.match(out, /- Код пишет Claude: результат на сервере проверяй после заливки в \/kit:step-done/);
   assert.doesNotMatch(out, /после записи проверить результат на сервере/);
   assert.doesNotMatch(out, /PhpStorm Always|Superpowers при автозаливке|уедут на сервер дважды/);
+  assert.match(out, /после ответа «Коммитить» \(в режиме «Claude по SSH» — «Залить на сервер»\)/, 'К60: правило просмотра');
 });
 
 test('«Claude по SSH», а в deployment.xml автозаливка — предупреждение; без Always и при «PhpStorm Always» — нет', () => {

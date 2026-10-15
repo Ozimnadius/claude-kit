@@ -180,7 +180,10 @@ async function main(argv) {
     '', 'Удалить (' + dels.length + '):', ...dels.map((p) => '  ' + p),
   ];
   if (kept.length) head.push('', 'Не удаляю — файл есть локально (' + kept.length + '):', ...kept.map((p) => '  ' + p));
-  if (skipped.length) head.push('', 'Пропущено — не файл (' + skipped.length + '):', ...skipped.map((p) => '  ' + p));
+  if (skipped.length) {
+    head.push('', 'Пропущено — не файл (' + skipped.length + '):', ...skipped.map((p) => '  ' + p),
+      'Подмодуль или вложенный git-репозиторий: повтор не поможет — добавьте путь в «Не выкладывать».');
+  }
   console.log(head.join('\n'));
   if (!files.length && !dels.length) {
     console.log('\nНечего заливать.');

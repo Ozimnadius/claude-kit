@@ -119,7 +119,7 @@ const toc = [
 
 const lede = 'Плагин Claude Code, который ведёт проект по шагам: журнал с решениями и проверками, один коммит на проверенный шаг, выкладка, работа на сервере, снимки «до/после», ответ «почему так сделано» и отчёт заказчику. Внутри — общий каркас для любых проектов и модуль для сайтов на 1С-Битрикс.';
 const gate = '<b>Главное условие.</b> Плагин включается только в kit-проекте — там, где в <code>.claude/CLAUDE.md</code> есть раздел «Параметры для агентов» или лежит журнал (<code>.claude/docs/progress.md</code>, до переезда — <code>docs/progress.md</code>). В остальных папках хуки молчат. Ошибка внутри хука сессию не ломает: любой сбой — тихий выход с кодом 0.';
-const footer = 'Собрано по исходникам <code>plugins/kit</code> версии 2.17.0 (скиллы, агент, хуки и скрипты), 15 октября 2026. Пересборка страницы, схем и Markdown: <code>node .claude/docs/work/overview/build/build.js</code> из корня репозитория.';
+const footer = 'Собрано по исходникам <code>plugins/kit</code> версии 2.17.1 (скиллы, агент, хуки и скрипты), 15 октября 2026. Пересборка страницы, схем и Markdown: <code>node .claude/docs/work/overview/build/build.js</code> из корня репозитория.';
 
 // Основной текст. fig(ключ, подпись) — схема: на странице — встроенный SVG, в Markdown — картинка из img/.
 const main = (fig) => `
@@ -494,7 +494,7 @@ const head = `<title>Устройство плагина kit</title>
 
 const body = `<div class="page">
 <header class="hero">
-  <div class="eyebrow">claude-kit · плагин kit 2.17.0</div>
+  <div class="eyebrow">claude-kit · плагин kit 2.17.1</div>
   <h1>Как устроен kit</h1>
   <p class="lede">${lede}</p>
   <dl class="inv">

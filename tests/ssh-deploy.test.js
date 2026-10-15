@@ -84,6 +84,16 @@ test('файл убран из git, но лежит на диске (git rm --ca
   assert.match(r.stdout, /Не удаляю — файл есть локально \(1\):\n  b\.php/);
 });
 
+test('вложенный git-репозиторий — «Пропущено — не файл» с подсказкой: повтор не поможет, путь — в «Не выкладывать» (К56)', () => {
+  const dir = project('ok:/srv/site');
+  writeFiles(dir, { 'vendor/lib/x.php': 'x' });
+  git(path.join(dir, 'vendor', 'lib'), 'init', '-q');
+  const r = runScript('ssh-deploy.js', { cwd: dir, env: env() });
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /Пропущено — не файл \(1\):\n  vendor\/lib\//);
+  assert.match(r.stdout, /повтор не поможет — добавьте путь в «Не выкладывать»/);
+});
+
 test('пути после -- : есть локально — залить, нет — удалить; исключённый или недопустимый путь — код 4 (откат шага)', () => {
   const dir = project('ok:/srv/site');
   const r = runScript('ssh-deploy.js', { cwd: dir, args: ['--', 'a.php', 'gone/x.php'], env: env() });
