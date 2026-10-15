@@ -169,6 +169,31 @@ test('report: отчёт заказчику простыми словами, п�
   assert.doesNotMatch(body, /docs-keeper"|git commit|git add/, 'отчёт ничего не коммитит');
 });
 
+test('step-done: порядок SSH — просмотр → заливка ssh-deploy.js → проверка на сервере → docs-keeper → коммит (этап 32)', () => {
+  const { fm, body } = skill('step-done');
+  assert.ok(fm.description.includes('Claude по SSH'));
+  for (const s of ['scripts/ssh-deploy.js"', 'scripts/ssh-deploy.js" --go', 'порядком **SSH**', '«Залить на сервер»', '«Не заливать пока»',
+    '## 3б. Заливка по SSH и проверка на сервере', 'повтор безопасен', '«Повторить заливку» / «Остановиться»', '«Работает» / «Не работает — опишу»',
+    'снова п. 3а', '`Коммит` — не передавай', 'DEPLOY Файлы:', 'Нечего заливать']) {
+    assert.ok(body.includes(s), s);
+  }
+  const i3a = body.indexOf('## 3а. Просмотр перед коммитом');
+  const i3b = body.indexOf('## 3б. Заливка по SSH');
+  assert.ok(i3a > 0 && i3b > i3a && i3b < body.indexOf('## 4. Коммит'), '3б — между просмотром и коммитом');
+});
+
+test('docs-keeper: «Залито на прод» или «Залито на дев», COMMITS — и пустые «Коммит» плана по «Шаг» (этап 32)', () => {
+  const { body } = agent('docs-keeper');
+  for (const s of ['«Залито на дев»', 'какая есть в плане', 'по колонке «Шаг»']) assert.ok(body.includes(s), s);
+});
+
+test('deploy-list и report: таблица по окружению, режим «Claude по SSH» (этап 32)', () => {
+  const dl = skill('deploy-list');
+  assert.ok(dl.fm.description.includes('Claude по SSH'));
+  for (const s of ['«Залито на дев»', '`--env прод|дев`', 'ssh-deploy.js']) assert.ok(dl.body.includes(s), s);
+  assert.ok(skill('report').body.includes('«Залито на дев»'));
+});
+
 test('deploy-list: вызывает скрипт и записывает выкладку через step-done', () => {
   const { fm, body } = skill('deploy-list');
   assert.equal(fm.name, 'deploy-list');
