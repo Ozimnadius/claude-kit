@@ -45,7 +45,8 @@ test('baseFromPlan: хеш из «Коммит»; пустой — по ID то�
 test('changes с worktree: незакоммиченное, удалённое и новые файлы; игнорируемое и исключённое — нет; без worktree — только коммиты', () => {
   const dir = gitRepo({ '.gitignore': 'ign/\n', 'a.php': '1', 'b.php': '1', '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'Claude по SSH' }) });
   const base = git(dir, 'rev-parse', 'HEAD').trim();
-  writeFiles(dir, { 'a.php': '2', 'new/с пробелом.php': 'n', 'ign/x.php': 'i', '.claude/docs/x.md': 'd', '.idea/w.xml': 'x' });
+  writeFiles(dir, { 'a.php': '2', 'new/с пробелом.php': 'n', 'ign/x.php': 'i', '.claude/docs/x.md': 'd', '.idea/w.xml': 'x',
+    '.superpowers/brainstorm/a.html': 's', '.worktrees/w/a.php': 'w', 'docs/superpowers/specs/s.md': 'p' });
   fs.unlinkSync(path.join(dir, 'b.php'));
   const rules = skipRules(kitInfo(dir));
   const wt = changes(dir, base, rules, { worktree: true });

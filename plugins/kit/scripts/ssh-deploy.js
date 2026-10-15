@@ -4,26 +4,36 @@
 // подключением, сценарием sh на stdin: файлы в base64, удаления, сверка md5.
 //   node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек]         список, без подключения
 //   node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] --go    залить, удалить, сверить md5
+//   node ssh-deploy.js [--env прод|дев] [--go] -- <пути>                         только эти пути (откат шага): есть
+//                                                                                 локально — залить, нет — удалить
 // Сервер — --env, иначе «Окружение»; куда — «SSH прод» / «SSH дев» (хост:/папка). База — как у deploy-list.js
-// (lib/deploy.js), но изменения — до папки проекта: и незакоммиченное, и новые файлы. Повтор безопасен.
+// (lib/deploy.js), но изменения — до папки проекта: и незакоммиченное, и новые файлы. Удаляется на сервере только то,
+// чего нет на диске (файл, убранный из git через git rm --cached, остаётся). Повтор безопасен.
 // Коды: 0 — залито и сверено (или нечего); 1 — часть не вышла; 2 — SSH не задан или параметр неверный;
 // 3 — нет подключения, обрыв, вышло время; 4 — аргументы, git, недопустимый путь (на сервер ничего не ушло).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { kitInfo, serverEnv } = require('./lib/project');
+const { matchRules } = require('./lib/paths');
 const { shq, serverSsh, runSsh, lastLine } = require('./lib/ssh');
 const { skipRules, git, resolveBase, changes } = require('./lib/deploy');
 
-const USAGE = 'Использование: node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] [--go]';
+const USAGE = 'Использование: node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] [--go] [-- <пути>]';
 // Меньше предела инструмента Bash (120 с): при зависании — код 3, а не обрыв вызова.
 const DEFAULT_TIMEOUT = 100;
 const EOF = 'KIT_B64'; // в алфавите base64 нет «_» — строка тела с ней не совпадёт
 
 function parseArgs(argv) {
-  const o = { env: null, base: null, timeout: DEFAULT_TIMEOUT, go: false };
+  const o = { env: null, base: null, timeout: DEFAULT_TIMEOUT, go: false, paths: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    if (a === '--') {
+      o.paths = argv.slice(i + 1).map((p) => String(p).replace(/\\/g, '/').replace(/^(\.\/)+/, ''));
+      if (!o.paths.length) throw new Error('после -- нет путей');
+      if (o.base !== null) throw new Error('--base и пути после -- вместе не задаются');
+      break;
+    }
     if (a === '--go') o.go = true;
     else if (a === '--env' || a === '--base' || a === '--timeout') {
       if (i + 1 >= argv.length) throw new Error('нет значения у ' + a);
@@ -121,17 +131,38 @@ async function main(argv) {
       : 'SSH для сервера «' + env + '» не задан (параметр «' + key + '») — заливать некуда: /kit:project-init'));
     return 2;
   }
-  const b = resolveBase(cwd, info, env, o.base);
-  if (b.error) {
-    console.error('ssh-deploy: ' + b.error);
-    return 4;
+  const rules = skipRules(info);
+  const onDisk = (p) => fs.existsSync(path.join(cwd, p));
+  let b;
+  let upload;
+  let del;
+  if (o.paths) {
+    // Откат шага: только названные пути, по текущему состоянию папки; исключённое из выкладки не трогаем.
+    const refused = o.paths.filter((p) => !safePath(p) || matchRules(p, rules));
+    if (refused.length) {
+      console.error('ssh-deploy: недопустимые или исключённые из выкладки пути — на сервер ничего не ушло: '
+        + refused.map((p) => JSON.stringify(p)).join(', '));
+      return 4;
+    }
+    b = { short: '—', source: 'пути из аргументов' };
+    upload = o.paths.filter(onDisk).map((p) => ({ status: 'M', path: p }));
+    del = o.paths.filter((p) => !onDisk(p)).map((p) => ({ status: 'D', path: p }));
+  } else {
+    b = resolveBase(cwd, info, env, o.base);
+    if (b.error) {
+      console.error('ssh-deploy: ' + b.error);
+      return 4;
+    }
+    ({ upload, del } = changes(cwd, b.base, rules, { worktree: true }));
   }
-  const { upload, del } = changes(cwd, b.base, skipRules(info), { worktree: true });
   const bad = [...upload, ...del].filter((it) => !safePath(it.path));
   if (bad.length) {
     console.error('ssh-deploy: недопустимые пути — на сервер ничего не ушло: ' + bad.map((it) => JSON.stringify(it.path)).join(', '));
     return 4;
   }
+  // Удалён в git, но лежит на диске (git rm --cached) — на сервере не удаляем: его могли перестать отслеживать нарочно.
+  const kept = del.filter((it) => onDisk(it.path)).map((it) => it.path);
+  del = del.filter((it) => !onDisk(it.path));
   const files = [];
   const skipped = [];
   for (const it of upload) {
@@ -148,6 +179,7 @@ async function main(argv) {
     '', 'Залить (' + files.length + '):', ...files.map((f) => '  ' + f.path),
     '', 'Удалить (' + dels.length + '):', ...dels.map((p) => '  ' + p),
   ];
+  if (kept.length) head.push('', 'Не удаляю — файл есть локально (' + kept.length + '):', ...kept.map((p) => '  ' + p));
   if (skipped.length) head.push('', 'Пропущено — не файл (' + skipped.length + '):', ...skipped.map((p) => '  ' + p));
   console.log(head.join('\n'));
   if (!files.length && !dels.length) {

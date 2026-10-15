@@ -187,6 +187,18 @@ test('docs-keeper: «Залито на прод» или «Залито на д�
   for (const s of ['«Залито на дев»', 'какая есть в плане', 'по колонке «Шаг»']) assert.ok(body.includes(s), s);
 });
 
+test('финальное ревью этапа 32: чужие правки при SSH, откат шага, точка отсчёта, таблица по окружению у docs-keeper', () => {
+  const sd = skill('step-done').body;
+  for (const s of ['«В этот шаг (уедут на сервер и в коммит)» / «Остановиться — разберусь с ними»', 'уезжает на сервер всё равно',
+    '**Отказ от шага**', 'ssh-deploy.js" --go -- <пути>']) {
+    assert.ok(sd.includes(s), 'step-done: ' + s);
+  }
+  const pi = skill('project-init').body;
+  for (const s of ['**Точка отсчёта заливки**', '«Сервер совпадает с проектом — записать точку отсчёта»']) assert.ok(pi.includes(s), 'project-init: ' + s);
+  const dk = agent('docs-keeper').body;
+  for (const s of ['по параметру «Окружение»', 'нужной таблицы нет — добавь раздел', 'в «Файлы» есть `ssh-deploy.js`']) assert.ok(dk.includes(s), 'docs-keeper: ' + s);
+});
+
 test('deploy-list и report: таблица по окружению, режим «Claude по SSH» (этап 32)', () => {
   const dl = skill('deploy-list');
   assert.ok(dl.fm.description.includes('Claude по SSH'));

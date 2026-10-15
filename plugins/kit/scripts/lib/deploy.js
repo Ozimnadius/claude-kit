@@ -10,7 +10,8 @@ const { parseRules, matchRules } = require('./paths');
 // Как у хука исключений PhpStorm (phpstorm-exclude.js): .claude в корне (правила, документы, скрипты)
 // и папка журнала вне .claude (старая docs/) на сервер не выкладываются никогда. Файл-канал /kit:server
 // (/kit-exec.php, только в корне) — служебный: его кладёт и удаляет Claude, в списки выкладки он не входит.
-const ALWAYS_SKIP = ['.git', '.idea', '/.claude', '/kit-exec.php'];
+// Служебные папки superpowers — как у хука исключений: в них спеки, планы и макеты, а не сайт.
+const ALWAYS_SKIP = ['.git', '.idea', '/.claude', '/kit-exec.php', '/.superpowers', '/.worktrees', '/docs/superpowers'];
 
 function skipRules(info) {
   const d = info.docsRel;

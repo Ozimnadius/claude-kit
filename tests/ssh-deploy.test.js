@@ -31,9 +31,10 @@ function project(target, extra = {}) {
 const env = (extra = {}) => ({ KIT_SSH: FAKE, FAKE_SH: SH || '', ...extra });
 
 test('parseArgs и safePath: флаги, --env, --timeout; пути — не абсолютные, без .. и управляющих символов', () => {
-  assert.deepEqual(parseArgs([]), { env: null, base: null, timeout: 100, go: false });
-  assert.deepEqual(parseArgs(['--go', '--env', 'дев', '--base', 'abc1234', '--timeout', '5']), { env: 'дев', base: 'abc1234', timeout: 5, go: true });
-  for (const bad of [['--env', 'тест'], ['--timeout', '0'], ['--timeout', '601'], ['--нет'], ['--base']]) assert.throws(() => parseArgs(bad), bad.join(' '));
+  assert.deepEqual(parseArgs([]), { env: null, base: null, timeout: 100, go: false, paths: null });
+  assert.deepEqual(parseArgs(['--go', '--env', 'дев', '--base', 'abc1234', '--timeout', '5']), { env: 'дев', base: 'abc1234', timeout: 5, go: true, paths: null });
+  assert.deepEqual(parseArgs(['--go', '--', 'a.php', 'b c/d.php']).paths, ['a.php', 'b c/d.php']);
+  for (const bad of [['--env', 'тест'], ['--timeout', '0'], ['--timeout', '601'], ['--нет'], ['--base'], ['--'], ['--base', 'x', '--', 'a.php']]) assert.throws(() => parseArgs(bad), bad.join(' '));
   for (const ok of ['a.php', "local/it's файл.php", 'a b/c.php']) assert.ok(safePath(ok), ok);
   for (const bad of ['/etc/passwd', '../x', 'a/../../x', 'C:/x', 'a\nb', '']) assert.ok(!safePath(bad), JSON.stringify(bad));
 });
@@ -72,6 +73,27 @@ test('без --go — список: изменённое, незакоммиче
   assert.match(r.stdout, /Удалить \(1\):\n  b\.php/);
   assert.doesNotMatch(r.stdout, /\.claude|\.gitignore/);
   assert.ok(!fs.existsSync(log), 'без --go подключения нет');
+});
+
+test('файл убран из git, но лежит на диске (git rm --cached) — на сервере не удаляется (финальное ревью этапа 32)', () => {
+  const dir = project('ok:/srv/site');
+  git(dir, 'rm', '-q', '--cached', 'b.php');
+  const r = runScript('ssh-deploy.js', { cwd: dir, env: env() });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /Удалить \(0\):/);
+  assert.match(r.stdout, /Не удаляю — файл есть локально \(1\):\n  b\.php/);
+});
+
+test('пути после -- : есть локально — залить, нет — удалить; исключённый или недопустимый путь — код 4 (откат шага)', () => {
+  const dir = project('ok:/srv/site');
+  const r = runScript('ssh-deploy.js', { cwd: dir, args: ['--', 'a.php', 'gone/x.php'], env: env() });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /База: — \(пути из аргументов\)/);
+  assert.match(r.stdout, /Залить \(1\):\n  a\.php/);
+  assert.match(r.stdout, /Удалить \(1\):\n  gone\/x\.php/);
+  for (const bad of [['--', '.claude/CLAUDE.md'], ['--', '../x.php'], ['--', '/etc/x']]) {
+    assert.equal(runScript('ssh-deploy.js', { cwd: dir, args: bad, env: env() }).code, 4, bad.join(' '));
+  }
 });
 
 test('нечего заливать — код 0 без подключения и с --go; после шага со строкой «Залито на прод» без хеша — тоже', () => {
@@ -167,6 +189,16 @@ test('--go через локальный sh: записано побайтно, 
   assert.deepEqual(left, []);
   const again = await runScriptAsync('ssh-deploy.js', { cwd: dir, args: ['--go'], env: env() });
   assert.equal(again.code, 0, again.stdout + again.stderr);
+});
+
+test('откат через пути после -- на локальном sh: правка вернулась, новый файл шага удалён на сервере', { skip: !SH }, async () => {
+  const server = tmpDir('kit-server-');
+  writeFiles(server, { 'a.php': 'плохая версия', 'new.php': 'файл шага' });
+  const dir = project('sh:' + shPath(server));
+  const r = await runScriptAsync('ssh-deploy.js', { cwd: dir, args: ['--go', '--', 'a.php', 'new.php'], env: env() });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(fs.readFileSync(path.join(server, 'a.php'), 'utf8'), '1');
+  assert.ok(!fs.existsSync(path.join(server, 'new.php')));
 });
 
 test('нет папки сайта на сервере — код 1, ничего не записано', { skip: !SH }, async () => {
