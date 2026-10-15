@@ -91,7 +91,8 @@ test('progress.md и journal/*.md: журнал по частям — разде
   for (const s of ['Сейчас', 'Этапы', 'Документы', 'Прод: не забыть', 'Этап 0']) assert.ok(getSection(md, s) !== null, 'нет раздела ' + s);
   for (const s of ['## Решения', '## Баги на потом', '## Справочник', '## Материалы заказчика']) assert.ok(!md.includes(s), s + ' — в частях, не в журнале');
   assert.ok(md.indexOf('## Сейчас') < md.indexOf('## Этапы') && md.indexOf('## Этапы') < md.indexOf('## Документы') && md.indexOf('## Документы') < md.indexOf('## Этап 0'));
-  assert.ok(getSection(md, 'Этапы').includes('| 0 | подготовка | ниже |'));
+  assert.ok(getSection(md, 'Этапы').includes('| 0 | инициализация проекта | ниже |'));
+  assert.ok(md.includes('## Этап 0 — инициализация проекта') && !md.includes('подготовка'), 'этап 0 — инициализация проекта');
   assert.ok(getSection(md, 'Документы').includes('| Файл | О чём | Статус |'));
   assert.ok(!md.includes('`docs/`'), 'старых путей docs/ в журнале нет');
   const dec = read('journal/decisions.md');

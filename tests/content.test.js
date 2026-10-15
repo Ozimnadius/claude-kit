@@ -220,15 +220,14 @@ test('project-init: только командой, все шаги и шабло
   const steps = ['1. **Исключения.**', '2. **`.gitignore`.**', '3. **Старые копии на сервере.**', '4. **Таблица «файл → куда»**', '5. **Перенос**', '6. **Закрытие**'].map((t) => body.indexOf(t, i47));
   assert.ok(steps.every((v, i) => v > i47 && (i === 0 || v > steps[i - 1])), 'переезд: исключения → .gitignore → старые копии → таблица → перенос → закрытие');
   assert.ok(!body.includes('docs/.htaccess` и `.claude/.htaccess`'), 'docs/.htaccess — только при старой раскладке');
-  const q4 = /4\. Как файлы попадают на сервер: [^\n]*?\./.exec(body)[0];
-  assert.deepEqual(q4.match(/«[^»]*»/g), ['«PhpStorm Always на прод»', '«PhpStorm Always только на дев, прод вручную»', '«вручную списком файлов»']);
   for (const s of ['`autoUpload="Always"` / `myAutoUpload` = `ALWAYS`', 'Дальше — только при автозаливке на любой сервер',
     '| PhpStorm Always на прод | `PhpStorm Always` |', '| PhpStorm Always только на дев, прод вручную | `вручную; дев — PhpStorm Always` |',
     '| вручную списком файлов | `вручную` |']) {
     assert.ok(body.includes(s), s);
   }
   const pstorm = fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', 'reference', 'phpstorm.md'), 'utf8');
-  for (const s of ['`.claude/worktrees`', '## Что исключать — хук `phpstorm-exclude.js`', 'Всегда: `.idea`, `.git`, `.claude`', 'File → Reload All from Disk', 'маски (`*.back*`)']) {
+  for (const s of ['`.claude/worktrees`', '## Что исключать — хук `phpstorm-exclude.js`', 'Всегда: `.idea`, `.git`, `.claude`', 'File → Reload All from Disk', 'маски (`*.back*`)',
+    'Tools → Deployment → Automatic Upload']) {
     assert.ok(pstorm.includes(s), 'phpstorm.md: ' + s);
   }
   assert.match(fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', 'templates', 'CLAUDE.md'), 'utf8'), /- Не выкладывать: \{\{ИСКЛЮЧЕНИЯ — через запятую: всегда \.idea, \.git, \.claude;/);
@@ -240,13 +239,43 @@ test('project-init: только командой, все шаги и шабло
 
 test('project-init: вопрос «Документы на сервере» — только при автозаливке, шаблон пишет ответ (К55)', () => {
   const { body } = skill('project-init');
-  for (const s of ['вопрос «Документы на сервере»', 'Без автозаливки вопрос не задавай', 'Параметр «Документы на сервере» — ответ третьего вызова',
+  for (const s of ['вопрос «Документы на сервере»', 'Без автозаливки вопрос не задавай', 'Параметр «Документы на сервере» — ответ на вопрос «Документы на сервере»',
     'исключение `.claude` сменится поимённым', '[kit] Документы на сервер не уедут', 'при «Документы на сервере: да» — 403']) {
     assert.ok(body.includes(s), s);
   }
   const tpl = fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', 'templates', 'CLAUDE.md'), 'utf8');
   assert.match(tpl, /^- Документы на сервере: \{\{да \| нет\}\}$/m);
   assert.ok(tpl.includes('| из `.claude/` автозаливка везёт на сервер только документы'), 'шаблон: вариант строки про .claude при «да»');
+});
+
+test('project-init: выкладка — после SSH, варианты по окружению; автозаливка выключена на время настройки; этап 0 закрывается (этап 31)', () => {
+  const { body } = skill('project-init');
+  const at = (s, from = 0) => { const i = body.indexOf(s, from); assert.ok(i >= 0, 'нет: ' + s); return i; };
+  // Первый вызов вопросов — без выкладки; вопрос «Выкладка» — после разведки SSH и до плана на согласие.
+  const call1 = body.slice(at('Первый вызов'), at('Второй вызов'));
+  assert.doesNotMatch(call1, /^\d\. Как файлы попадают/m, 'в первом вызове нет вопроса о выкладке: окружение ещё неизвестно');
+  assert.ok(call1.includes('после SSH (раздел «Выкладка» ниже)'));
+  const ssh = at('### SSH — после site-probe');
+  const deploy = at('### Выкладка — после SSH');
+  const plan = at('## 3. План на согласие');
+  assert.ok(ssh < deploy && deploy < plan, 'порядок: SSH → выкладка → план на согласие');
+  const sect = body.slice(deploy, plan);
+  for (const s of ['«PhpStorm Always на прод» / «вручную списком файлов»', '«PhpStorm Always только на дев, прод вручную» / «вручную списком файлов»']) {
+    assert.ok(sect.includes(s), 'варианты по окружению: ' + s);
+  }
+  assert.ok(sect.indexOf('Как файлы попадают на сервер') < sect.indexOf('вопрос «Документы на сервере»'), '«Документы на сервере» — после ответа о выкладке');
+  assert.ok(!body.includes('расходится с разведкой'), 'отдельного вопроса о расхождении нет — его снимает выключение автозаливки');
+  // Автозаливка: выключить в начале п. 4.0 (до исключений), включить и залить нужное в п. 4.8 до /kit:step-done.
+  const s40 = at('### 4.0');
+  const off = at('Tools → Deployment → Automatic Upload', s40);
+  assert.ok(off < at('1. Дописать исключения', s40), 'автозаливку выключают до исключений');
+  assert.ok(body.slice(s40, at('### 4.1 ')).includes('File → Save All'));
+  const s48 = at('### 4.8 Закрыть шаг');
+  const on = body.slice(s48, at('`/kit:step-done`:', s48));
+  for (const s of ['включает автозаливку', 'Upload to', '`.claude/.htaccess` — первым', 'check-closed.js']) assert.ok(on.includes(s), 'п. 4.8: ' + s);
+  // Этап 0 — только инициализация: шаг 0.2 закрывает его, следующий — этап 1.
+  for (const s of ['STAGE `1 — ', '«1.1 — изучение задачи»']) assert.ok(body.slice(s48).includes(s), 'п. 4.8: ' + s);
+  assert.ok(!body.includes('0.3 — изучение задачи'), 'рабочие шаги — не в этапе 0');
 });
 
 test('server: сначала SSH (BatchMode, remote-php, --timeout, коды), иначе файл kit-exec.php; правила изменений', () => {

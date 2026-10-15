@@ -3,7 +3,7 @@
 ## Где настройки
 
 - **Исключения деплоя:** Settings → Build, Execution, Deployment → Deployment → сервер (например `ftp`) → вкладка **Excluded Paths**. С 2.3.0 руками туда не ходить: исключения дописывает хук kit `phpstorm-exclude.js` (ниже); руками — только если хук сообщил, что `deployment.xml` не разобран.
-- **Автозаливка:** Settings → Build, Execution, Deployment → Deployment → **Options** → «Upload changed files automatically to the default server»: `Always` / `On explicit save action (Ctrl+S)` / `Never`. Флажок «Upload external changes» — заливать и правки, сделанные вне IDE (правки Claude).
+- **Автозаливка:** Settings → Build, Execution, Deployment → Deployment → **Options** → «Upload changed files automatically to the default server»: `Always` / `On explicit save action (Ctrl+S)` / `Never`. Флажок «Upload external changes» — заливать и правки, сделанные вне IDE (правки Claude). Быстрый переключатель — Tools → Deployment → Automatic Upload: `/kit:project-init` просит снять его на время настройки и включить в конце; записанное, пока он снят, само не уезжает — залить: правый щелчок → Deployment → Upload to.
 - **File Watchers:** Settings → Tools → **File Watchers** — снять флажок у вотчера или удалить его.
 
 ## Что лежит в `.idea` (только читать; `excludedPath` дописывает только `phpstorm-exclude.js`)
