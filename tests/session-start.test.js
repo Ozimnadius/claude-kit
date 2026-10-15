@@ -130,3 +130,35 @@ test('«Коммит»: без параметра и «после просмот
   assert.match(out({ 'Коммит': 'после просмотра' }), rule);
   assert.doesNotMatch(out({ 'Коммит': 'сразу' }), rule);
 });
+
+const XML = '<?xml version="1.0" encoding="UTF-8"?>\n<project version="4">\n  <component name="PublishConfigData" autoUpload="Always" serverName="alpha">\n  </component>\n</project>\n';
+
+test('«Claude по SSH»: правило заливки в /kit:step-done, «Код пишет Claude» — проверка после заливки; правил автозаливки нет (с 2.17.0)', () => {
+  const md = paramsMd({ 'Код пишет': 'Claude', 'Выкладка': 'Claude по SSH', 'Окружение': 'прод' });
+  const out = run(makeProject({ '.claude/CLAUDE.md': md, '.claude/docs/progress.md': progressMd() })).stdout;
+  assert.match(out, /- Выкладка: Claude по SSH — правки остаются локально, пока \/kit:step-done не зальёт их после просмотра/);
+  assert.match(out, /Вне \/kit:step-done на сервер не заливай/);
+  assert.match(out, /- Код пишет Claude: результат на сервере проверяй после заливки в \/kit:step-done/);
+  assert.doesNotMatch(out, /после записи проверить результат на сервере/);
+  assert.doesNotMatch(out, /PhpStorm Always|Superpowers при автозаливке|уедут на сервер дважды/);
+});
+
+test('«Claude по SSH», а в deployment.xml автозаливка — предупреждение; без Always и при «PhpStorm Always» — нет', () => {
+  const md = paramsMd({ 'Код пишет': 'Claude', 'Выкладка': 'Claude по SSH' });
+  const base = { '.claude/CLAUDE.md': md, '.claude/docs/progress.md': progressMd() };
+  const on = run(makeProject({ ...base, '.idea/deployment.xml': XML })).stdout;
+  assert.match(on, /в PhpStorm включена автозаливка .*уедут на сервер дважды/);
+  assert.match(on, /Tools → Deployment → Automatic Upload/);
+  const off = run(makeProject({ ...base, '.idea/deployment.xml': XML.replace(' autoUpload="Always"', '') })).stdout;
+  assert.doesNotMatch(off, /уедут на сервер дважды/);
+  const always = run(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'PhpStorm Always' }), '.claude/docs/progress.md': progressMd(),
+    '.idea/deployment.xml': XML })).stdout;
+  assert.doesNotMatch(always, /уедут на сервер дважды/, 'при PhpStorm Always автозаливка — норма');
+});
+
+test('PhpStorm Always при «Окружение: дев» — сохранение уходит на дев-сервер; при «прод» — на сервер', () => {
+  const dev = run(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'PhpStorm Always', 'Окружение': 'дев' }), '.claude/docs/progress.md': progressMd() })).stdout;
+  assert.match(dev, /- Выкладка: PhpStorm Always — любое сохранение в проекте сразу уходит на дев-сервер\./);
+  const prod = run(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'PhpStorm Always', 'Окружение': 'прод' }), '.claude/docs/progress.md': progressMd() })).stdout;
+  assert.match(prod, /- Выкладка: PhpStorm Always — любое сохранение в проекте сразу уходит на сервер\./);
+});
