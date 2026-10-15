@@ -44,10 +44,15 @@ test('gitignore-general: служебное, снимки и секреты иг
   for (const p of no) assert.ok(!set.has(p), 'не должен игнорироваться: ' + p);
 });
 
-test('CLAUDE.md: у параметра «Выкладка» три варианта', () => {
-  const line = /^- Выкладка: \{\{(.*)\}\}$/m.exec(read('CLAUDE.md'));
+test('CLAUDE.md: «Выкладка» — PhpStorm Always / Claude по SSH / вручную; «Окружение» — прод / дев (с 2.17.0)', () => {
+  const md = read('CLAUDE.md');
+  const line = /^- Выкладка: \{\{(.*)\}\}$/m.exec(md);
   assert.ok(line, 'нет строки параметра «Выкладка» с плейсхолдером');
-  assert.deepEqual(line[1].split(' | '), ['PhpStorm Always', 'вручную; дев — PhpStorm Always', 'вручную']);
+  assert.deepEqual(line[1].split(' | '), ['PhpStorm Always', 'Claude по SSH', 'вручную']);
+  const env = /^- Окружение: \{\{(.*)\}\}$/m.exec(md);
+  assert.deepEqual(env[1].split(' | '), ['прод', 'дев']);
+  assert.ok(!md.includes('дев+прод') && !md.includes('вручную; дев'), 'вилки «дев + прод» в шаблоне нет');
+  assert.ok(md.includes('ssh-deploy.js'), 'вариант пункта «Выкладка» для SSH');
 });
 
 test('CLAUDE.md: документы — в .claude/docs, в «Не выкладывать» — .claude', () => {
@@ -116,12 +121,14 @@ test('spec.md: разделы kit поверх дизайна brainstorming', ()
   assert.ok(md.includes('Т-1.') && md.includes('[УТОЧНИТЬ:') && md.includes('work/spec-<тема>.md') && md.includes('DECISIONS'));
 });
 
-test('deploy-prod.md: разделы и колонки «Залито на прод»', () => {
+test('deploy-prod.md: разделы, таблица «Залито на прод | дев» по окружению, вариант для «Claude по SSH»', () => {
   const md = read('deploy-prod.md');
-  for (const s of ['Общие правила', 'Залито на прод', 'Удалить с сервера', 'Чек-лист переключения']) {
+  for (const s of ['Общие правила', 'Залито на {{прод | дев}}', 'Удалить с сервера', 'Чек-лист переключения']) {
     assert.ok(getSection(md, s) !== null, 'нет раздела ' + s);
   }
-  assert.match(getSection(md, 'Залито на прод'), /\| Шаг \| Дата \| Файлы \| Коммит \| Проверка \|/);
+  assert.match(md, /^# Выкладка на \{\{прод \| дев\}\} — \{\{ДОМЕН\}\}$/m);
+  assert.ok(getSection(md, 'Общие правила').includes('ssh-deploy.js'));
+  assert.match(getSection(md, 'Залито на {{прод | дев}}'), /\| Шаг \| Дата \| Файлы \| Коммит \| Проверка \|/);
   assert.match(getSection(md, 'Удалить с сервера'), /\| Путь \| Почему \| Удалён \|/);
 });
 

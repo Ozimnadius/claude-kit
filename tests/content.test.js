@@ -186,8 +186,8 @@ test('project-init: только командой, все шаги и шабло
     'Варианта «это не секрет» нет', '4.0', 'сам не коммить', 'не больше 4 вопросов', 'Grep с `-o` по `rootFolder=',
     '${CLAUDE_PLUGIN_ROOT}/scripts/phpstorm-exclude.js" --also', '${CLAUDE_PLUGIN_ROOT}/scripts/phpstorm-exclude.js" --check --also', 'Код 2 — `deployment.xml` не разобран',
     'File → Reload All from Disk', '`.idea`, `.git` и `.claude` исключаются всегда', '«Больше ничего»', 'сервера автозаливки',
-    'Always только на дев — дев', 'норма — 404 «нет на сервере»',
-    '4.5 Проверки выкладки — любой режим, если известен адрес сервера (прод, дев или адрес из п. 4.0)', 'по обоим',
+    'это сервер окружения', 'норма — 404 «нет на сервере»',
+    '4.5 Проверки выкладки — любой режим, если известен адрес сервера (прод, дев или адрес из п. 4.0)', 'Проверяй адрес сервера окружения',
     '### 4.7 Переезд со старой раскладки', '### 4.8 Закрыть шаг', 'git check-ignore -q .claude/docs/progress.md', '`!/.claude/docs/`, `!/.claude/docs/**`',
     'git remote -v', '### 4.1а Удалённый репозиторий', 'git remote add origin <адрес>', 'Удалённый репозиторий: origin',
     'закрытым и **пустым**', 'с логином, паролем или токеном', 'Git Credential Manager', 'git remote set-url origin <адрес>',
@@ -220,8 +220,8 @@ test('project-init: только командой, все шаги и шабло
   const steps = ['1. **Исключения.**', '2. **`.gitignore`.**', '3. **Старые копии на сервере.**', '4. **Таблица «файл → куда»**', '5. **Перенос**', '6. **Закрытие**'].map((t) => body.indexOf(t, i47));
   assert.ok(steps.every((v, i) => v > i47 && (i === 0 || v > steps[i - 1])), 'переезд: исключения → .gitignore → старые копии → таблица → перенос → закрытие');
   assert.ok(!body.includes('docs/.htaccess` и `.claude/.htaccess`'), 'docs/.htaccess — только при старой раскладке');
-  for (const s of ['`autoUpload="Always"` / `myAutoUpload` = `ALWAYS`', 'Дальше — только при автозаливке на любой сервер',
-    '| PhpStorm Always на прод | `PhpStorm Always` |', '| PhpStorm Always только на дев, прод вручную | `вручную; дев — PhpStorm Always` |',
+  for (const s of ['`autoUpload="Always"` / `myAutoUpload` = `ALWAYS`', 'Дальше — только при автозаливке (в любом режиме)',
+    '| PhpStorm Always | `PhpStorm Always` |', '| Claude по SSH | `Claude по SSH` |',
     '| вручную списком файлов | `вручную` |']) {
     assert.ok(body.includes(s), s);
   }
@@ -260,8 +260,8 @@ test('project-init: выкладка — после SSH, варианты по �
   const plan = at('## 3. План на согласие');
   assert.ok(ssh < deploy && deploy < plan, 'порядок: SSH → выкладка → план на согласие');
   const sect = body.slice(deploy, plan);
-  for (const s of ['«PhpStorm Always на прод» / «вручную списком файлов»', '«PhpStorm Always только на дев, прод вручную» / «вручную списком файлов»']) {
-    assert.ok(sect.includes(s), 'варианты по окружению: ' + s);
+  for (const s of ['«PhpStorm Always» / «Claude по SSH» / «вручную списком файлов»', '«Claude по SSH» — только если SSH-разведка']) {
+    assert.ok(sect.includes(s), 'варианты выкладки: ' + s);
   }
   assert.ok(sect.indexOf('Как файлы попадают на сервер') < sect.indexOf('вопрос «Документы на сервере»'), '«Документы на сервере» — после ответа о выкладке');
   assert.ok(!body.includes('расходится с разведкой'), 'отдельного вопроса о расхождении нет — его снимает выключение автозаливки');
@@ -276,6 +276,21 @@ test('project-init: выкладка — после SSH, варианты по �
   // Этап 0 — только инициализация: шаг 0.2 закрывает его, следующий — этап 1.
   for (const s of ['STAGE `1 — ', '«1.1 — изучение задачи»']) assert.ok(body.slice(s48).includes(s), 'п. 4.8: ' + s);
   assert.ok(!body.includes('0.3 — изучение задачи'), 'рабочие шаги — не в этапе 0');
+});
+
+test('project-init: один сервер на проект — окружение прод/дев, адрес и SSH одного сервера, «Claude по SSH» (этап 32)', () => {
+  const { body } = skill('project-init');
+  const call1 = body.slice(body.indexOf('Первый вызов'), body.indexOf('Второй вызов'));
+  assert.ok(call1.includes('«Прод» / «Дев'), 'окружение — прод или дев');
+  for (const old of ['PhpStorm Always только на дев', 'Третий вызов — адрес дева', 'заданы оба (прод и дев)', '«PhpStorm Always на прод»']) {
+    assert.ok(!body.includes(old), 'осталась вилка «дев + прод»: ' + old);
+  }
+  for (const s of ['Адрес сервера (прода или дева — по окружению)', 'Третий вызов — удалённый репозиторий', '`Окружение: дев+прод`',
+    '| Claude по SSH | `Claude по SSH` |', 'ssh-deploy.js', '«Claude по SSH» или «вручную», а в `deployment.xml` Always']) {
+    assert.ok(body.includes(s), s);
+  }
+  const s48 = body.indexOf('### 4.8 Закрыть шаг');
+  assert.ok(body.slice(s48).includes('Выбрано «вручную» или «Claude по SSH»'), 'п. 4.8: автозаливку не включать');
 });
 
 test('server: сначала SSH (BatchMode, remote-php, --timeout, коды), иначе файл kit-exec.php; правила изменений', () => {
