@@ -2,10 +2,10 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
-const { parseParams, splitList, readParams } = require('../plugins/kit/scripts/lib/params');
+const { parseParams, splitList, readParams, makeParams } = require('../plugins/kit/scripts/lib/params');
 const { getSection, parseTable } = require('../plugins/kit/scripts/lib/md');
 const { parseRules, matchRules, norm } = require('../plugins/kit/scripts/lib/paths');
-const { kitInfo, resolveProjectDir, docsInClaude } = require('../plugins/kit/scripts/lib/project');
+const { kitInfo, resolveProjectDir, docsInClaude, serverEnv } = require('../plugins/kit/scripts/lib/project');
 const { makeProject } = require('./helpers');
 const { ALPHA_CLAUDE_MD, paramsMd, progressMd } = require('./fixtures');
 
@@ -183,4 +183,13 @@ test('resolveProjectDir: CLAUDE_PROJECT_DIR важнее cwd из stdin', () => 
   process.env.CLAUDE_PROJECT_DIR = saved === undefined ? '' : saved;
   if (saved === undefined) delete process.env.CLAUDE_PROJECT_DIR;
   assert.equal(path.isAbsolute(resolveProjectDir({})), true);
+});
+
+test('serverEnv: «дев» — дев; «прод», старое «дев+прод» и нет параметра — прод (с 2.17.0)', () => {
+  assert.equal(serverEnv(makeParams({ 'окружение': 'дев' })), 'дев');
+  assert.equal(serverEnv(makeParams({ 'окружение': '`Дев`' })), 'дев');
+  assert.equal(serverEnv(makeParams({ 'окружение': 'прод' })), 'прод');
+  assert.equal(serverEnv(makeParams({ 'окружение': 'дев+прод' })), 'прод');
+  assert.equal(serverEnv(makeParams({})), 'прод');
+  assert.equal(serverEnv(makeParams(null)), 'прод');
 });

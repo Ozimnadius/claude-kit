@@ -19,7 +19,7 @@ const { buildSummary, consoleLines, buildHtml } = require('./lib/visual/report')
 const { diffPng } = require('./lib/visual/image');
 const home = require('./lib/visual/home');
 const { checkDeploy, ensureGitignore } = require('./lib/visual/guard');
-const { kitInfo } = require('./lib/project');
+const { kitInfo, serverEnv } = require('./lib/project');
 
 const USAGE = 'Команды: deps | install | login | discover [адрес…] [--ctx guest] | shoot <метка> [--only a,b] [--ctx имя] [--vp desktop|mobile] [--no-setup]'
   + ' | check <метка> [фильтры] | compare <до> <после> | list; флаги --env прод|дев, --url адрес';
@@ -149,7 +149,7 @@ async function runShoot(p, flags, label) {
     pw, base, cfg, groups: sel.groups, outDir, authFile: file, noSetup: !!flags['no-setup'], log,
   });
   writeJson(metaFile, mergeMeta(old, {
-    base, env: flags.url ? null : flags.env || 'прод', date, full: sel.full, filters: sel.filters,
+    base, env: flags.url ? null : flags.env || serverEnv(p.params), date, full: sel.full, filters: sel.filters,
     groups: sel.groups.map((g) => `${g.ctx.name}/${g.vp}`), setup: res.setup, pages: res.pages,
   }));
   const failed = res.pages.filter((r) => r.fail);

@@ -2,6 +2,7 @@
 'use strict';
 // Собрать kit-exec.php — файл-канал /kit:server для Битрикса без SSH (спек §7.4).
 // node kit-exec.js <код.php> --run N --out <файл> [--env прод|дев] [--url U] [--php P] [--bitrix]
+// --env — сервер; по умолчанию — по «Окружению» (дев — только при «Окружение: дев», иначе прод).
 // Код в файле — UTF-8, без <?php (если есть — отрезается). Собранный файл проверяется `php -l`; без проверки файл не
 // собирается: ошибку компиляции на сервере увидел бы любой посетитель раньше, чем PHP дошёл бы до проверки прав.
 // Скрипт только собирает файл (во временную папку сессии); в корень сайта его кладёт Claude одной записью.
@@ -11,6 +12,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { readParams } = require('./lib/params');
+const { serverEnv } = require('./lib/project');
 const { buildKitExec, validRun } = require('./lib/kitexec');
 const { fixLines } = require('./remote-php');
 
@@ -18,7 +20,7 @@ const USAGE = 'Использование: node kit-exec.js <код.php> --run N
 const VALUE_FLAGS = { '--run': 'run', '--out': 'out', '--env': 'env', '--url': 'url', '--php': 'php' };
 
 function parseArgs(argv) {
-  const o = { env: 'прод', file: null, bitrix: false };
+  const o = { env: null, file: null, bitrix: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (VALUE_FLAGS[a]) {
@@ -36,7 +38,7 @@ function parseArgs(argv) {
   }
   if (!o.file) throw new Error('не указан файл с кодом');
   if (!o.out) throw new Error('не указан --out');
-  if (o.env !== 'прод' && o.env !== 'дев') throw new Error('--env: прод или дев');
+  if (o.env !== null && o.env !== 'прод' && o.env !== 'дев') throw new Error('--env: прод или дев');
   if (!validRun(o.run)) throw new Error('--run: номер запуска — латиница и цифры, 4–32 знака');
   return o;
 }
@@ -64,6 +66,7 @@ function main(argv) {
     return 4;
   }
   const params = readParams(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+  if (!o.env) o.env = serverEnv(params);
   const bitrix = o.bitrix || String(params.get('Режим', 'общий')).toLowerCase() === 'bitrix';
   const url = o.url || params.get(o.env === 'дев' ? 'Дев' : 'Прод');
   if (!bitrix) {

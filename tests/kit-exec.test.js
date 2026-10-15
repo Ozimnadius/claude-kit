@@ -249,3 +249,11 @@ test('kit-exec.js: не удалось записать --out (нет папки
   assert.equal(r.code, 4, r.stderr);
   assert.match(r.stderr, /не удалось записать/);
 });
+
+test('kit-exec.js: «Окружение: дев» — адрес из «Дев» без --env (с 2.17.0)', () => {
+  const out = path.join(tmpDir('kit-out-'), 'kit-exec.php');
+  const dev = makeProject({ 'a.php': 'echo 1;\n', '.claude/CLAUDE.md': params(['- Режим: bitrix', '- Окружение: дев', '- Прод: https://x.ru', '- Дев: —']) });
+  const r = runScript('kit-exec.js', { args: ['a.php', '--run', 'abc123', '--out', out], cwd: dev });
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /нет адреса сервера «дев» \(параметр «Дев»/);
+});

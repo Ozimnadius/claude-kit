@@ -120,3 +120,11 @@ test('siteBase и siteMode: адрес из параметров, --env дев, 
   assert.throws(() => siteBase(makeParams(null)), code2(/«Прод»/));
   assert.throws(() => siteBase(params, { url: 'beta.example' }), code2(/http/));
 });
+
+test('siteBase: «Окружение: дев» — адрес из «Дев» без --env; --env прод перекрывает; «дев+прод» — прод (с 2.17.0)', () => {
+  const params = makeParams({ 'окружение': 'дев', 'прод': '—', 'дев': 'https://dev.example.com/' });
+  assert.equal(siteBase(params), 'https://dev.example.com');
+  assert.throws(() => siteBase(params, { env: 'прод' }), code2(/«Прод»/));
+  const old = makeParams({ 'окружение': 'дев+прод', 'прод': 'https://p.example.com', 'дев': 'https://d.example.com' });
+  assert.equal(siteBase(old), 'https://p.example.com');
+});

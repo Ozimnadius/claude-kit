@@ -56,4 +56,10 @@ function docsInClaude(docsRel) {
   return /^\.claude(\/|$)/i.test(docsRel);
 }
 
-module.exports = { JOURNAL_DEFAULTS, readStdinJson, resolveProjectDir, kitInfo, docsInClaude };
+// Сервер проекта (с 2.17.0 проект ведёт один сервер — прод или дев): «Окружение: дев» — дев; «прод», старое «дев+прод»
+// и нет параметра — прод, как раньше. По нему скрипты с --env выбирают сервер по умолчанию.
+function serverEnv(params) {
+  return /^дев$/i.test(String(params.get('Окружение', '')).trim()) ? 'дев' : 'прод';
+}
+
+module.exports = { JOURNAL_DEFAULTS, readStdinJson, resolveProjectDir, kitInfo, docsInClaude, serverEnv };

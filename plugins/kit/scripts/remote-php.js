@@ -2,6 +2,7 @@
 'use strict';
 // Выполнить PHP-код на сервере по SSH (канал SSH скилла /kit:server).
 // node remote-php.js [--env прод|дев] [--timeout сек] [--plain|--bitrix] [--host H --root R --php P --url U] <файл>
+// --env — сервер; по умолчанию — по «Окружению» (дев — только при «Окружение: дев», иначе прод).
 // Код в файле — без <?php (если есть — отрезается). Режим bitrix (параметр «Режим» или --bitrix): перед кодом
 // подключается ядро Битрикса. Код уходит на stdin «PHP на сервере», файл на сервер не пишется. PHP запускается под
 // `timeout` сервера (если он есть) на --timeout секунд (по умолчанию 90), сам ssh останавливается на 10 секунд позже.
@@ -11,6 +12,7 @@
 const fs = require('fs');
 const path = require('path');
 const { readParams } = require('./lib/params');
+const { serverEnv } = require('./lib/project');
 const { shq, validHost, serverSsh, runSsh, lastLine } = require('./lib/ssh');
 const { isMsysRewritten } = require('./lib/msys');
 
@@ -31,7 +33,7 @@ const pq = (s) => "'" + String(s).replace(/\\/g, '\\\\').replace(/'/g, "\\'") + 
 const isAbsolute = (p) => path.posix.isAbsolute(p) || path.win32.isAbsolute(p);
 
 function parseArgs(argv) {
-  const o = { env: 'прод', mode: null, file: null };
+  const o = { env: null, mode: null, file: null };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (VALUE_FLAGS[a]) {
@@ -48,7 +50,7 @@ function parseArgs(argv) {
     }
   }
   if (!o.file) throw new Error('не указан файл с кодом');
-  if (o.env !== 'прод' && o.env !== 'дев') throw new Error('--env: прод или дев');
+  if (o.env !== null && o.env !== 'прод' && o.env !== 'дев') throw new Error('--env: прод или дев');
   if (o.host !== undefined && !validHost(o.host)) throw new Error('недопустимый хост ' + o.host);
   if (o.timeout !== undefined && !(/^\d+$/.test(o.timeout) && Number(o.timeout) >= 1 && Number(o.timeout) <= 3600)) {
     throw new Error('--timeout: секунды, от 1 до 3600');
@@ -138,6 +140,7 @@ async function main(argv) {
     return 4;
   }
   const params = readParams(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+  if (!o.env) o.env = serverEnv(params);
   const sshKey = 'SSH ' + o.env;
   const parsed = serverSsh(params, o.env);
   // Значение задано, но не разобралось (~, порт, кавычки в папке) — это ошибка, а не «SSH не задан».

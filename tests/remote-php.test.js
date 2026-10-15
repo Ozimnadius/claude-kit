@@ -255,3 +255,17 @@ for (const v of ['7.2', '7.4', '8.3']) {
     }
   });
 }
+
+test('remote-php: «Окружение: дев» — без --env берётся «SSH дев»; --env прод перекрывает; «дев+прод» — прод (с 2.17.0)', () => {
+  const dev = makeProject({ 'a.php': 'echo 1;\n', '.claude/CLAUDE.md': params(['- Режим: общий', '- Окружение: дев', '- Прод: —', '- SSH прод: —',
+    '- Дев: https://dev.example.com', '- SSH дев: devhost:/var/www/dev']) });
+  const r = run(dev, ['a.php'], { FAKE_SSH_OUT: 'ok' });
+  assert.equal(r.code, 0, r.stderr);
+  assert.equal(r.sent.host, 'devhost');
+  const prod = run(dev, ['--env', 'прод', 'a.php'], { FAKE_SSH_OUT: 'ok' });
+  assert.equal(prod.code, 2);
+  assert.match(prod.stderr, /SSH прод/);
+  const old = makeProject({ 'a.php': 'echo 1;\n', '.claude/CLAUDE.md': params(['- Режим: общий', '- Окружение: дев+прод',
+    '- SSH прод: prodhost:/var/www/p', '- SSH дев: devhost:/var/www/d']) });
+  assert.equal(run(old, ['a.php'], { FAKE_SSH_OUT: 'ok' }).sent.host, 'prodhost');
+});

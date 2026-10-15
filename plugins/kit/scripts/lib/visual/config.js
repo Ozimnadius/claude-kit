@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { VisualError, NAME_RE } = require('./args');
 const { dangerReason } = require('./links');
+const { serverEnv } = require('../project');
 
 const CONFIG_REL = '.claude/scripts/visual/pages.json';
 const VIEWPORTS = ['desktop', 'mobile'];
@@ -24,10 +25,10 @@ function siteMode(params) {
   return m ? m.toLowerCase() : null;
 }
 
-// Адрес сайта: --url, иначе «Прод» (с --env дев — «Дев»); без завершающего /.
+// Адрес сайта: --url, иначе по «Окружению» — «Прод» или «Дев» (--env перекрывает); без завершающего /.
 function siteBase(params, { env, url } = {}) {
   if (env && env !== 'прод' && env !== 'дев') throw new VisualError(2, '--env: прод или дев');
-  const key = env === 'дев' ? 'Дев' : 'Прод';
+  const key = (env || serverEnv(params)) === 'дев' ? 'Дев' : 'Прод';
   const base = url || params.get(key, null);
   if (!base) throw new VisualError(2, `адрес сайта не задан: параметр «${key}» в .claude/CLAUDE.md или --url`);
   if (!/^https?:\/\/[^/]+/i.test(base)) throw new VisualError(2, `адрес сайта должен начинаться с http:// или https://: ${base}`);

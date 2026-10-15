@@ -15,7 +15,7 @@ argument-hint: "[discover | login | before | after <метка> | compare <до>
 | Зависимости (playwright-core, pixelmatch, pngjs) | `%LOCALAPPDATA%\kit\visual\deps` — одни на все проекты |
 | Сессия входа | `%LOCALAPPDATA%\kit\visual\auth\…` — вне проекта, своя на проект и хост |
 
-Адрес сайта — параметр «Прод»; для дева — `--env дев` («Дев»); вне kit-проекта — `--url https://…`.
+Адрес сайта — параметр «Прод», а при «Окружение: дев» — «Дев»; другой сервер — `--env прод` или `--env дев`; вне kit-проекта — `--url https://…`.
 
 ## Правила
 
