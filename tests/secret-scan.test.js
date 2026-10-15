@@ -130,6 +130,50 @@ test('пароль или токен: вывод PHP и подстановки �
   }
 });
 
+test('склейка строк после ключа — подстановка, а не секрет; литерал — находка', () => {
+  for (const line of [
+    // Шаблон сайта на Битриксе: header.php подключает карты Яндекса с ключом из переменной.
+    "Asset::getInstance()->addJs('https://api-maps.yandex.ru/2.1/?apikey='.$yandexApiKey.'&lang=ru_RU');",
+    "$url = 'https://example.com/?apikey=' . $yandexApiKey . '&lang=ru_RU';",
+    '$url = "https://example.com/?token=".$this->token."&lang=ru";',
+    "$url = '?apikey='.$arParams['API_KEY'].'&lang=ru';",
+    "$url = '?apikey='.Option::get('fileman', 'yandex_map_api_key').'&lang=ru';",
+    "$url = '?apikey='.YANDEX_MAPS_KEY.'&lang=ru';",
+    "const url = '?apikey='+yandexApiKey+'&lang=ru';",
+    "const url = '?apikey=' + yandexApiKey + '&lang=ru';",
+    "const url = '?token='+encodeURIComponent(token)+'&lang=ru';",
+    'const url = `?apikey=${yandexApiKey}&lang=ru`;',
+  ]) {
+    assert.deepEqual(scanLine(line, []), [], line);
+  }
+  // Значения склеены, чтобы сам тест не был находкой secret-scan при коммите.
+  assert.deepEqual(scanLine("addJs('https://api-maps.yandex.ru/2.1/?apikey=" + REAL_KEY + "&lang=ru_RU');", []), ['ключ в URL — 0a1…(36 симв.)']);
+  assert.equal(scanLine("$c = ['password' => '" + '.Qw3rty!x9' + "'];", []).length, 1, 'точка в начале литерала — не склейка');
+  assert.equal(scanLine("$c = ['token' => '" + '+Ab3/xyz9+Q' + "'];", []).length, 1, '«+» в начале base64 — не склейка');
+});
+
+test('ключи SERVER_KEY, PRIVATE_KEY, SECRET_KEY и серверный ключ SmartCaptcha (ysc2_) — находки', () => {
+  // Значения склеены, чтобы сам тест не был находкой secret-scan при коммите.
+  const ysc = 'ysc2_' + 'AbC123dEf456GhI789jKl012MnO345pQr678StU9';
+  const pw = 'Qw3rty' + '!x9';
+  for (const line of [
+    "define('SMARTCAPTCHA_SERVER_KEY', '" + ysc + "');",
+    "$c = ['SERVER_KEY' => '" + pw + "'];",
+    "$c = ['private_key' => '" + pw + "'];",
+    "$c = ['secretKey' => '" + pw + "'];",
+    "$c = ['SECRET_KEY' => '" + pw + "'];",
+  ]) {
+    assert.match(scanLine(line, []).join('\n'), /^пароль или токен — /m, line);
+  }
+  assert.deepEqual(scanLine("$captcha = '" + ysc + "';", []), ['серверный ключ Яндекс SmartCaptcha — ysc…(45 симв.)']);
+  assert.match(scanLine('SMARTCAPTCHA_SERVER_KEY=' + ysc, [], '.env.example').join('\n'), /^пароль или токен \(без кавычек\) — /m);
+  assert.equal(scanLine('PRIVATE_KEY=Secr3t123', [], '.env.example').length, 1);
+  // Клиентский ключ SmartCaptcha (ysc1_) открыт — он и так стоит в HTML страницы; имя без значения и указатель — не находки.
+  assert.deepEqual(scanLine('<div class="smart-captcha" data-sitekey="ysc1_' + 'AbC123dEf456GhI789jKl012MnO345pQr678StU9"></div>', []), []);
+  assert.deepEqual(scanLine("$f = ['SERVER_KEY', 'PRIVATE_KEY'];", []), []);
+  assert.deepEqual(scanLine('PRIVATE_KEY_FILE=/run/secrets/key', [], '.env.example'), []);
+});
+
 test('--cached: шаблон sale.order.ajax с картами Яндекса — чисто; настоящий ключ в URL — находка', () => {
   const tpl = 'local/templates/t/components/bitrix/sale.order.ajax/.default/template.php';
   const dir = gitRepo({ 'x.txt': '' });

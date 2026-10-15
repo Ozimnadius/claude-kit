@@ -28,7 +28,10 @@ const PARAM_LINE = /^\s*[-*]\s+Секреты\s*:/i;
 // Подстановка, а не литерал: переменная (`$key`, `${KEY}`), вывод PHP (`<?=$key?>`, `<?echo …`),
 // ERB/EJS/ASP (`<%=key%>`), Twig/Blade/Vue (`{{key}}`, `{!!$key!!}`), Smarty и PHP в строке (`{$key}`),
 // макрос Битрикса целиком (`#API_KEY#`). Литерал с `#` в начале (`#Qw3rty`) — не подстановка.
-const PLACEHOLDER = /^(?:\$|<\?|<%|\{\{|\{!!|\{\$)|^#[A-Z][A-Z0-9_]*#$/;
+// Склейка строк: между закрывающей и открывающей кавычками — код с `.` или `+` с обеих сторон
+// (`'.$key.'`, `".KEY."`, `'+key+'`) или до `(`/`[` перед кавычкой аргумента (`'.$arParams['`, `'.Option::get('`).
+// Литерал с `.` или `+` в начале (`+Ab3/xyz9` в base64) — не склейка: оператора в конце у него нет.
+const PLACEHOLDER = /^(?:\$|<\?|<%|\{\{|\{!!|\{\$)|^#[A-Z][A-Z0-9_]*#$|^[.+].*[.+([]$/;
 
 // Слова вроде «Пароль» или «password_field» — подписи, а не секреты; `%s`, `%PASSWORD%` — формат.
 function looksSecret(v) {
@@ -64,10 +67,13 @@ const isKeyValueFile = (file) => {
 const PATTERNS = [
   { kind: 'вебхук Битрикс24', re: /bitrix24\.[a-z.]+\/rest\/\d+\/([a-z0-9]{6,})/gi },
   { kind: 'приватный ключ', re: /-----BEGIN [A-Z ]*PRIVATE KEY-----()/g },
+  // Серверный ключ Яндекс SmartCaptcha — под любым именем; клиентский (`ysc1_`) открыт, он стоит в HTML страницы.
+  { kind: 'серверный ключ Яндекс SmartCaptcha', re: /\b(ysc2_[A-Za-z0-9]{20,})/g },
   {
     kind: 'пароль или токен',
     // Разделитель после ключа: `=>`, `=`, `:` — обычная проверка; `,` — строже (listItemSecret).
-    re: /(?:password|passwd|secret|token|api_?key)['"]?\s*(?<sep>=>|=|:|,)\s*['"](?<v>[^'"\s]{6,})['"]/gi,
+    // Имя ключа кончается словом-признаком: `password`, `token`, `api_key`, `SECRET_KEY`, `SERVER_KEY` (SmartCaptcha), `private_key`.
+    re: /(?:password|passwd|secret|token|(?:api|secret|server|private)_?key)['"]?\s*(?<sep>=>|=|:|,)\s*['"](?<v>[^'"\s]{6,})['"]/gi,
     check: (v, m) => (m.groups.sep === ',' ? listItemSecret(v) : looksSecret(v)),
   },
   // `%` в URL — не формат: ключ бывает закодирован (`%2B…`). `;` — конец `&amp;` в HTML-экранированном URL.
@@ -75,7 +81,7 @@ const PATTERNS = [
   {
     kind: 'пароль или токен (без кавычек)',
     // Только в .env*, YAML, INI, conf, TOML; строка с кавычками уже найдена шаблоном «пароль или токен» — без дубля.
-    re: /^\s*(?:export\s+|-\s+)?["']?(?<key>[\w.-]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY)[\w.-]*)["']?\s*[=:]\s*['"]?(?<v>[^'"\s#]{6,})/gi,
+    re: /^\s*(?:export\s+|-\s+)?["']?(?<key>[\w.-]*(?:PASSWORD|PASSWD|SECRET|TOKEN|(?:API|SERVER|PRIVATE)_?KEY)[\w.-]*)["']?\s*[=:]\s*['"]?(?<v>[^'"\s#]{6,})/gi,
     onlyIf: (file, found) => isKeyValueFile(file) && !found.some((f) => f.startsWith('пароль или токен —')),
     check: (v, m) => looksSecret(v) && !isStructural(v) && !(isPointerKey(m.groups.key) && !v.includes('@')),
   },
