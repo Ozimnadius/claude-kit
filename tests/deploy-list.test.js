@@ -128,3 +128,45 @@ test('не git-репозиторий и неверная база — код 1'
   const dir = gitRepo({ 'a.php': '1' });
   assert.equal(runScript('deploy-list.js', { cwd: dir, args: ['--base', 'deadbeef'] }).code, 1);
 });
+
+const planFor = (title, rows) => ['# Выкладка', '', '## Общие правила', '', '- тест', '', '## ' + title, '',
+  '| Шаг | Дата | Файлы | Коммит | Проверка |', '|---|---|---|---|---|',
+  ...rows.map(([step, commit]) => '| ' + step + ' | 2026-10-15 | a.php | ' + (commit ? '`' + commit + '`' : '') + ' | ок |'), ''].join('\n');
+
+test('«Окружение: дев» — база из «Залито на дев»; --env прод — из «Залито на прод» (с 2.17.0)', () => {
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'вручную', 'Окружение': 'дев' }), 'a.php': '1', 'b.php': '1' });
+  const first = git(dir, 'rev-parse', '--short', 'HEAD').trim();
+  writeFiles(dir, { 'a.php': '2' });
+  git(dir, 'commit', '-q', '-am', '1.1: правка a');
+  const devBase = git(dir, 'rev-parse', '--short', 'HEAD').trim();
+  writeFiles(dir, { 'b.php': '2', '.claude/docs/deploy-prod.md': planFor('Залито на дев', [['1.1', devBase]]) });
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', '1.2: правка b');
+  const r = runScript('deploy-list.js', { cwd: dir });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, new RegExp('База: ' + devBase + ' \\(«Залито на дев» в \\.claude/docs/deploy-prod\\.md\\)'));
+  assert.match(r.stdout, /Залить \(1\):\n  M b\.php/);
+  const prod = runScript('deploy-list.js', { cwd: dir, args: ['--env', 'прод'] });
+  assert.match(prod.stdout, new RegExp('База: ' + first + ' \\(первый коммит репозитория\\)'));
+  assert.equal(runScript('deploy-list.js', { cwd: dir, args: ['--env', 'тест'] }).code, 1);
+});
+
+test('«Claude по SSH»: пустой «Коммит» — коммит шага по ID; пометка «заливает /kit:step-done»; при «вручную» строка пропускается', () => {
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'Claude по SSH' }), 'a.php': '1', 'b.php': '1' });
+  const first = git(dir, 'rev-parse', '--short', 'HEAD').trim();
+  writeFiles(dir, { 'a.php': '2', '.claude/docs/deploy-prod.md': planFor('Залито на прод', [['32.1', '']]) });
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', '32.1: правка a');
+  const step = git(dir, 'rev-parse', '--short', 'HEAD').trim();
+  writeFiles(dir, { 'b.php': '2' });
+  git(dir, 'commit', '-q', '-am', '32.2: правка b');
+  const r = runScript('deploy-list.js', { cwd: dir });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, new RegExp('База: ' + step + ' \\(«Залито на прод»'));
+  assert.match(r.stdout, /Claude по SSH — заливает \/kit:step-done/);
+  assert.match(r.stdout, /Залить \(1\):\n  M b\.php/);
+  writeFiles(dir, { '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'вручную' }) });
+  const manual = runScript('deploy-list.js', { cwd: dir });
+  assert.match(manual.stdout, new RegExp('База: ' + first + ' \\(первый коммит репозитория\\)'));
+  assert.doesNotMatch(manual.stdout, /Claude по SSH/);
+});
