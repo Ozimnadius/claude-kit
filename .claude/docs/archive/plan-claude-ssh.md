@@ -8,7 +8,7 @@
 - [x] 32.4 — `/kit:project-init` и шаблоны: окружение прод/дев, один сервер, три варианта выкладки
 - [x] 32.5 — `/kit:step-done` в порядке SSH, docs-keeper («Залито на дев», COMMITS по «Шаг»), `/kit:deploy-list`, `/kit:report`
 - [x] 32.6 — хук `session-start.js`: правило SSH, предупреждение об автозаливке, автозаливка на дев
-- [ ] 32.7 — выпуск 2.17.0: версии, спек плагина, README, обзор, `MyIdeas.md`
+- [x] 32.7 — выпуск 2.17.0: версии, спек плагина, README, обзор, `MyIdeas.md`
 
 > Каждая задача — шаг kit, закрывается `/kit:step-done`; остановка на проверку пользователя — после каждой. Строки чек-листа отмечает docs-keeper. Исполнение — superpowers:executing-plans или subagent-driven-development; сам superpowers не коммитит.
 
