@@ -3,7 +3,7 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { docsInClaude } = require('./project');
+const { docsInClaude, isDocOnServer } = require('./project');
 const { getSection, parseTable } = require('./md');
 const { parseRules, matchRules } = require('./paths');
 
@@ -95,4 +95,35 @@ function changes(cwd, base, rules, { worktree = false } = {}) {
   return { upload: items.filter((it) => it.status !== 'D'), del: items.filter((it) => it.status === 'D') };
 }
 
-module.exports = { ALWAYS_SKIP, skipRules, git, sectionOf, isSsh, commitOfStep, baseFromPlan, resolveBase, changes };
+// Документы на сервер («Документы на сервере: да», ssh-deploy.js --docs, с 2.18.0). Записи «Не выкладывать», которые
+// закрывают .claude целиком, — для ручной выкладки; документам они не мешают (как у хука PhpStorm). Остальные — действуют.
+function docsRules(info) {
+  return parseRules(info.params.list('Не выкладывать').filter((r) => !/^\/?\.claude\/?$/i.test(String(r).trim())));
+}
+
+const HTACCESS = '.claude/.htaccess';
+
+// all — все документы на диске (отслеживаемые и новые неигнорируемые), без удалений; иначе — изменения от base до папки
+// проекта. Есть что залить или удалить — .claude/.htaccess (если он на диске) первым: папка закрыта раньше, чем на сервер
+// попадёт первый документ, а удалённый на сервере .htaccess восстанавливается.
+function docsChanges(cwd, info, { base = null, all = false } = {}) {
+  const rules = docsRules(info);
+  const keep = (p) => isDocOnServer(p, info) && !matchRules(p, rules);
+  let upload;
+  let del = [];
+  if (all) {
+    const listed = (extra) => git(cwd, ['ls-files', '-z', ...extra, '--', '.claude']).out.split('\0').filter(Boolean);
+    upload = [...listed([]), ...listed(['--others', '--exclude-standard'])]
+      .filter((p) => keep(p) && fs.existsSync(path.join(cwd, p)))
+      .map((p) => ({ status: 'M', path: p }));
+  } else {
+    const ch = changes(cwd, base, rules, { worktree: true });
+    upload = ch.upload.filter((it) => keep(it.path));
+    del = ch.del.filter((it) => keep(it.path));
+  }
+  upload = upload.filter((it) => it.path.toLowerCase() !== HTACCESS);
+  if ((upload.length || del.length) && fs.existsSync(path.join(cwd, HTACCESS))) upload.unshift({ status: 'M', path: HTACCESS });
+  return { upload, del };
+}
+
+module.exports = { ALWAYS_SKIP, skipRules, git, sectionOf, isSsh, commitOfStep, baseFromPlan, resolveBase, changes, docsRules, docsChanges };

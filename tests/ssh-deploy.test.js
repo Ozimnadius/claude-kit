@@ -7,6 +7,7 @@ const { spawnSync } = require('child_process');
 const { gitRepo, git, writeFiles, runScript, runScriptAsync, tmpDir } = require('./helpers');
 const { paramsMd } = require('./fixtures');
 const { parseArgs, safePath, buildScript, parseResult } = require('../plugins/kit/scripts/ssh-deploy');
+const { isDocOnServer } = require('../plugins/kit/scripts/lib/project');
 
 const FAKE = path.join(__dirname, 'fake-ssh.js');
 // Локальный sh с base64 и md5sum (Git для Windows или системный) — для заливки через заглушку; нет — эти тесты пропускаются.
@@ -30,11 +31,23 @@ function project(target, extra = {}) {
 }
 const env = (extra = {}) => ({ KIT_SSH: FAKE, FAKE_SH: SH || '', ...extra });
 
+// «Документы на сервере: да» (этап 35): .htaccess и документы — в git, как в kit-проекте.
+function docsProject(target, extra = {}) {
+  return gitRepo({
+    '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'Claude по SSH', 'Окружение': 'прод', 'SSH прод': target, 'Документы на сервере': 'да', ...extra }),
+    '.claude/.htaccess': 'Require all denied\n',
+    '.claude/docs/progress.md': 'журнал',
+    '.claude/docs/work/plan-a.md': 'план',
+    'a.php': '1',
+  });
+}
+
 test('parseArgs и safePath: флаги, --env, --timeout; пути — не абсолютные, без .. и управляющих символов', () => {
-  assert.deepEqual(parseArgs([]), { env: null, base: null, timeout: 100, go: false, paths: null });
-  assert.deepEqual(parseArgs(['--go', '--env', 'дев', '--base', 'abc1234', '--timeout', '5']), { env: 'дев', base: 'abc1234', timeout: 5, go: true, paths: null });
+  assert.deepEqual(parseArgs([]), { env: null, base: null, timeout: 100, go: false, paths: null, docs: false, all: false });
+  assert.deepEqual(parseArgs(['--go', '--env', 'дев', '--base', 'abc1234', '--timeout', '5']), { env: 'дев', base: 'abc1234', timeout: 5, go: true, paths: null, docs: false, all: false });
   assert.deepEqual(parseArgs(['--go', '--', 'a.php', 'b c/d.php']).paths, ['a.php', 'b c/d.php']);
-  for (const bad of [['--env', 'тест'], ['--timeout', '0'], ['--timeout', '601'], ['--нет'], ['--base'], ['--'], ['--base', 'x', '--', 'a.php']]) assert.throws(() => parseArgs(bad), bad.join(' '));
+  assert.deepEqual(parseArgs(['--docs', '--all', '--go']), { env: null, base: null, timeout: 100, go: true, paths: null, docs: true, all: true });
+  for (const bad of [['--env', 'тест'], ['--timeout', '0'], ['--timeout', '601'], ['--нет'], ['--base'], ['--'], ['--base', 'x', '--', 'a.php'], ['--all'], ['--docs', '--', 'a.php']]) assert.throws(() => parseArgs(bad), bad.join(' '));
   for (const ok of ['a.php', "local/it's файл.php", 'a b/c.php']) assert.ok(safePath(ok), ok);
   for (const bad of ['/etc/passwd', '../x', 'a/../../x', 'C:/x', 'a\nb', '']) assert.ok(!safePath(bad), JSON.stringify(bad));
 });
@@ -217,4 +230,83 @@ test('нет папки сайта на сервере — код 1, ничег�
   const r = await runScriptAsync('ssh-deploy.js', { cwd: dir, args: ['--go'], env: env() });
   assert.equal(r.code, 1);
   assert.match(r.stderr, /нет папки сайта/);
+});
+
+test('isDocOnServer: .htaccess, CLAUDE.md и docs без visual; регистр не важен; остальное в .claude и вне её — нет (этап 35)', () => {
+  const info = { visualRel: '.claude/docs/visual' };
+  for (const p of ['.claude/.htaccess', '.claude/CLAUDE.md', '.claude/claude.md', '.claude/docs/progress.md', '.Claude/Docs/work/a.md', '.claude\\docs\\archive\\b.md']) {
+    assert.ok(isDocOnServer(p, info), p);
+  }
+  for (const p of ['.claude/docs/visual/a.png', '.claude/skills/x/SKILL.md', '.claude/scripts/a.php', '.claude/settings.local.json', '.claude/kit-inbox.jsonl', '.claude/docsx/a.md', 'docs/progress.md', 'a.php']) {
+    assert.ok(!isDocOnServer(p, info), p);
+  }
+});
+
+test('--docs: изменённые, новые и удалённые документы; .htaccess первым; служебное в .claude, снимки и сайт — нет; основная заливка — без .claude (этап 35)', () => {
+  const dir = docsProject('ok:/srv/site', { 'Не выкладывать': '.idea, .git, .claude, .claude/docs/work/secret.md' });
+  writeFiles(dir, {
+    '.claude/docs/progress.md': 'журнал 2', '.claude/docs/archive/plan-b.md': 'новый', '.claude/docs/work/secret.md': 'нет',
+    '.claude/docs/visual/a.png': 'снимок', '.claude/skills/x/SKILL.md': 's', '.claude/scripts/a.php': 'p',
+    '.claude/settings.local.json': '{}', '.claude/kit-inbox.jsonl': '', 'a.php': '2',
+  });
+  fs.unlinkSync(path.join(dir, '.claude', 'docs', 'work', 'plan-a.md'));
+  const log = path.join(tmpDir('kit-ssh-log-'), 'log.json');
+  const r = runScript('ssh-deploy.js', { cwd: dir, args: ['--docs'], env: env({ FAKE_SSH_LOG: log }) });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /Документы — залить \(3\):\n  \.claude\/\.htaccess\n  \.claude\/docs\/progress\.md\n  \.claude\/docs\/archive\/plan-b\.md\n/);
+  assert.match(r.stdout, /Документы — удалить \(1\):\n  \.claude\/docs\/work\/plan-a\.md/);
+  assert.doesNotMatch(r.stdout, /secret|visual|skills|scripts|settings\.local|kit-inbox|a\.php/);
+  assert.ok(!fs.existsSync(log), 'без --go подключения нет');
+  const main = runScript('ssh-deploy.js', { cwd: dir, env: env() });
+  assert.equal(main.code, 0, main.stderr);
+  assert.match(main.stdout, /Залить \(1\):\n  a\.php\n/);
+  assert.doesNotMatch(main.stdout, /\.claude/);
+});
+
+test('--docs: документы не менялись — «Нечего заливать» без подключения, один .htaccess не едет; --all — все документы набора без удалений (этап 35)', () => {
+  const dir = docsProject('ok:/srv/site');
+  writeFiles(dir, { 'a.php': '2', '.claude/skills/x/SKILL.md': 's', '.claude/docs/visual/a.png': 'снимок' });
+  const log = path.join(tmpDir('kit-ssh-log-'), 'log.json');
+  const none = runScript('ssh-deploy.js', { cwd: dir, args: ['--docs', '--go'], env: env({ FAKE_SSH_LOG: log }) });
+  assert.equal(none.code, 0, none.stderr);
+  assert.match(none.stdout, /Нечего заливать/);
+  assert.ok(!fs.existsSync(log), 'подключения нет');
+  fs.unlinkSync(path.join(dir, '.claude', 'docs', 'work', 'plan-a.md'));
+  const all = runScript('ssh-deploy.js', { cwd: dir, args: ['--docs', '--all'], env: env() });
+  assert.equal(all.code, 0, all.stderr);
+  assert.match(all.stdout, /База: — \(все документы, --all\)/);
+  assert.match(all.stdout, /Документы — залить \(3\):\n  \.claude\/\.htaccess\n  \.claude\/CLAUDE\.md\n  \.claude\/docs\/progress\.md\n/);
+  assert.match(all.stdout, /Документы — удалить \(0\):/);
+});
+
+test('--docs: «Документы на сервере» не «да» — код 2; нет .claude/.htaccess — код 2; --all без --docs и --docs с путями — код 4 (этап 35)', () => {
+  const off = docsProject('ok:/srv/site', { 'Документы на сервере': 'нет' });
+  const r = runScript('ssh-deploy.js', { cwd: off, args: ['--docs'], env: env() });
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /документы на сервер не выкладываются/);
+  const noDeny = docsProject('ok:/srv/site');
+  fs.unlinkSync(path.join(noDeny, '.claude', '.htaccess'));
+  const d = runScript('ssh-deploy.js', { cwd: noDeny, args: ['--docs', '--all'], env: env() });
+  assert.equal(d.code, 2);
+  assert.match(d.stderr, /нет \.claude\/\.htaccess/);
+  assert.equal(runScript('ssh-deploy.js', { cwd: noDeny, args: ['--all'], env: env() }).code, 4);
+  assert.equal(runScript('ssh-deploy.js', { cwd: noDeny, args: ['--docs', '--', '.claude/docs/progress.md'], env: env() }).code, 4);
+});
+
+test('--docs --go через локальный sh: документы записаны, удалённое удалено, md5 сверен, строки DEPLOY нет; повтор — снова 0 (этап 35)', { skip: !SH }, async () => {
+  const server = tmpDir('kit-server-');
+  writeFiles(server, { '.claude/docs/work/plan-a.md': 'план' });
+  const dir = docsProject('sh:' + shPath(server));
+  writeFiles(dir, { '.claude/docs/progress.md': 'журнал шага 35.1\n' });
+  fs.unlinkSync(path.join(dir, '.claude', 'docs', 'work', 'plan-a.md'));
+  const r = await runScriptAsync('ssh-deploy.js', { cwd: dir, args: ['--docs', '--go'], env: env() });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /Залито и сверено: 2 из 2/);
+  assert.match(r.stdout, /Удалено: 1 из 1/);
+  assert.doesNotMatch(r.stdout, /DEPLOY Файлы/);
+  assert.equal(fs.readFileSync(path.join(server, '.claude', '.htaccess'), 'utf8'), 'Require all denied\n');
+  assert.equal(fs.readFileSync(path.join(server, '.claude', 'docs', 'progress.md'), 'utf8'), 'журнал шага 35.1\n');
+  assert.ok(!fs.existsSync(path.join(server, '.claude', 'docs', 'work', 'plan-a.md')));
+  const again = await runScriptAsync('ssh-deploy.js', { cwd: dir, args: ['--docs', '--go'], env: env() });
+  assert.equal(again.code, 0, again.stdout + again.stderr);
 });

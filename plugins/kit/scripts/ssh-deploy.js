@@ -6,26 +6,32 @@
 //   node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] --go    залить, удалить, сверить md5
 //   node ssh-deploy.js [--env прод|дев] [--go] -- <пути>                         только эти пути (откат шага): есть
 //                                                                                 локально — залить, нет — удалить
+//   node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] --docs [--all] [--go]
+//                                                                                 документы на сервер («Документы на сервере: да»):
+//                                                                                 .claude/.htaccess (первым), .claude/CLAUDE.md,
+//                                                                                 .claude/docs без visual — изменённые с базы;
+//                                                                                 --all — все, без удалений (первая заливка)
 // Сервер — --env, иначе «Окружение»; куда — «SSH прод» / «SSH дев» (хост:/папка). База — как у deploy-list.js
 // (lib/deploy.js), но изменения — до папки проекта: и незакоммиченное, и новые файлы. Удаляется на сервере только то,
 // чего нет на диске (файл, убранный из git через git rm --cached, остаётся). Повтор безопасен.
-// Коды: 0 — залито и сверено (или нечего); 1 — часть не вышла; 2 — SSH не задан или параметр неверный;
+// Коды: 0 — залито и сверено (или нечего); 1 — часть не вышла; 2 — SSH не задан или параметр неверный; с --docs —
+// «Документы на сервере» не «да» или нет .claude/.htaccess;
 // 3 — нет подключения, обрыв, вышло время; 4 — аргументы, git, недопустимый путь (на сервер ничего не ушло).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
-const { kitInfo, serverEnv } = require('./lib/project');
+const { kitInfo, serverEnv, docsOnServer } = require('./lib/project');
 const { matchRules } = require('./lib/paths');
 const { shq, serverSsh, runSsh, lastLine } = require('./lib/ssh');
-const { skipRules, git, resolveBase, changes } = require('./lib/deploy');
+const { skipRules, git, resolveBase, changes, docsChanges } = require('./lib/deploy');
 
-const USAGE = 'Использование: node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] [--go] [-- <пути>]';
+const USAGE = 'Использование: node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] [--docs [--all]] [--go] [-- <пути>]';
 // Меньше предела инструмента Bash (120 с): при зависании — код 3, а не обрыв вызова.
 const DEFAULT_TIMEOUT = 100;
 const EOF = 'KIT_B64'; // в алфавите base64 нет «_» — строка тела с ней не совпадёт
 
 function parseArgs(argv) {
-  const o = { env: null, base: null, timeout: DEFAULT_TIMEOUT, go: false, paths: null };
+  const o = { env: null, base: null, timeout: DEFAULT_TIMEOUT, go: false, paths: null, docs: false, all: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--') {
@@ -35,11 +41,15 @@ function parseArgs(argv) {
       break;
     }
     if (a === '--go') o.go = true;
+    else if (a === '--docs') o.docs = true;
+    else if (a === '--all') o.all = true;
     else if (a === '--env' || a === '--base' || a === '--timeout') {
       if (i + 1 >= argv.length) throw new Error('нет значения у ' + a);
       o[a.slice(2)] = argv[++i];
     } else throw new Error('неизвестный аргумент ' + a);
   }
+  if (o.all && !o.docs) throw new Error('--all — только вместе с --docs');
+  if (o.docs && o.paths) throw new Error('--docs и пути после -- вместе не задаются');
   if (o.env !== null && o.env !== 'прод' && o.env !== 'дев') throw new Error('--env: прод или дев');
   if (typeof o.timeout === 'string') {
     if (!/^\d+$/.test(o.timeout) || Number(o.timeout) < 1 || Number(o.timeout) > 600) throw new Error('--timeout: секунды, от 1 до 600');
@@ -131,6 +141,16 @@ async function main(argv) {
       : 'SSH для сервера «' + env + '» не задан (параметр «' + key + '») — заливать некуда: /kit:project-init'));
     return 2;
   }
+  if (o.docs) {
+    if (!docsOnServer(info.params)) {
+      console.error('ssh-deploy: документы на сервер не выкладываются (параметр «Документы на сервере» — не «да»)');
+      return 2;
+    }
+    if (!fs.existsSync(path.join(cwd, '.claude', '.htaccess'))) {
+      console.error('ssh-deploy: нет .claude/.htaccess — документы были бы открыты снаружи; создайте его (/kit:project-init) — на сервер ничего не ушло');
+      return 2;
+    }
+  }
   const rules = skipRules(info);
   const onDisk = (p) => fs.existsSync(path.join(cwd, p));
   let b;
@@ -147,13 +167,16 @@ async function main(argv) {
     b = { short: '—', source: 'пути из аргументов' };
     upload = o.paths.filter(onDisk).map((p) => ({ status: 'M', path: p }));
     del = o.paths.filter((p) => !onDisk(p)).map((p) => ({ status: 'D', path: p }));
+  } else if (o.all) {
+    b = { short: '—', source: 'все документы, --all' };
+    ({ upload, del } = docsChanges(cwd, info, { all: true }));
   } else {
     b = resolveBase(cwd, info, env, o.base);
     if (b.error) {
       console.error('ssh-deploy: ' + b.error);
       return 4;
     }
-    ({ upload, del } = changes(cwd, b.base, rules, { worktree: true }));
+    ({ upload, del } = o.docs ? docsChanges(cwd, info, { base: b.base }) : changes(cwd, b.base, rules, { worktree: true }));
   }
   const bad = [...upload, ...del].filter((it) => !safePath(it.path));
   if (bad.length) {
@@ -173,11 +196,12 @@ async function main(argv) {
     else skipped.push(it.path);
   }
   const dels = del.map((it) => it.path);
+  const [put, rm] = o.docs ? ['Документы — залить', 'Документы — удалить'] : ['Залить', 'Удалить'];
   const head = [
     'Сервер: ' + env + ' — ' + target.host + ':' + target.root,
     'База: ' + b.short + ' (' + b.source + ')',
-    '', 'Залить (' + files.length + '):', ...files.map((f) => '  ' + f.path),
-    '', 'Удалить (' + dels.length + '):', ...dels.map((p) => '  ' + p),
+    '', put + ' (' + files.length + '):', ...files.map((f) => '  ' + f.path),
+    '', rm + ' (' + dels.length + '):', ...dels.map((p) => '  ' + p),
   ];
   if (kept.length) head.push('', 'Не удаляю — файл есть локально (' + kept.length + '):', ...kept.map((p) => '  ' + p));
   if (skipped.length) {
@@ -220,7 +244,8 @@ async function main(argv) {
   if (problems.length) {
     out.push('', 'Не вышло (' + problems.length + ') — повтор безопасен:', ...problems.map((p) => '  ' + p));
     if (r.stderr) process.stderr.write(r.stderr);
-  } else if (!skipped.length) {
+  } else if (!skipped.length && !o.docs) {
+    // Строка DEPLOY — только у основной заливки: документы уезжают после docs-keeper.
     out.push('', 'DEPLOY Файлы: ' + deployLine(files.map((f) => f.path), dels));
   }
   console.log(out.join('\n'));

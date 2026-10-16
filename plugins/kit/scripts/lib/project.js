@@ -62,4 +62,23 @@ function serverEnv(params) {
   return /^дев$/i.test(String(params.get('Окружение', '')).trim()) ? 'дев' : 'прод';
 }
 
-module.exports = { JOURNAL_DEFAULTS, readStdinJson, resolveProjectDir, kitInfo, docsInClaude, serverEnv };
+// «Документы на сервере: да» (с 2.6.0): из .claude на сервер уезжают только эти имена — автозаливкой PhpStorm
+// (phpstorm-exclude.js) и заливкой по SSH (ssh-deploy.js --docs, с 2.18.0). Снимки visual внутри docs — нет.
+const DOCS_KEEP = ['docs', 'CLAUDE.md', '.htaccess'];
+
+function docsOnServer(params) {
+  return /^да$/i.test(String(params.get('Документы на сервере', '')).trim());
+}
+
+// Путь от корня проекта входит в документы на сервере: .claude/.htaccess, .claude/CLAUDE.md, .claude/docs/… без снимков
+// visual. Регистр не важен (Windows).
+function isDocOnServer(rel, info) {
+  const p = slash(rel).toLowerCase();
+  const visual = slash(info.visualRel).toLowerCase() + '/';
+  return DOCS_KEEP.some((n) => {
+    const k = '.claude/' + n.toLowerCase();
+    return p === k || p.startsWith(k + '/');
+  }) && !p.startsWith(visual);
+}
+
+module.exports = { JOURNAL_DEFAULTS, readStdinJson, resolveProjectDir, kitInfo, docsInClaude, serverEnv, DOCS_KEEP, docsOnServer, isDocOnServer };

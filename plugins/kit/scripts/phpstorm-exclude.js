@@ -12,7 +12,7 @@
 // Из git worktree Claude Code (<проект>/.claude/worktrees/<имя>) работает с основной папкой: её .idea и параметры.
 const fs = require('fs');
 const path = require('path');
-const { readStdinJson, resolveProjectDir, kitInfo, docsInClaude } = require('./lib/project');
+const { readStdinJson, resolveProjectDir, kitInfo, docsInClaude, DOCS_KEEP, docsOnServer } = require('./lib/project');
 const { splitList } = require('./lib/params');
 const { DeploymentError, readDeployment, isExcluded, addExclusions, removeExclusions } = require('./lib/deployment');
 
@@ -20,7 +20,7 @@ const MUST = ['.idea', '.git', '.claude'];
 const RELOAD = 'Если PhpStorm открыт и не подхватил — File → Reload All from Disk.';
 // «Документы на сервере: да»: что из .claude уезжает; worktrees, settings.local.json и скиллы (bitrix-skills.js)
 // исключаются заранее — они появляются посреди сессии, а хук увидит их только на следующем старте.
-const KEEP = ['docs', 'CLAUDE.md', '.htaccess'];
+const KEEP = DOCS_KEEP;
 const EARLY = ['.claude/worktrees', '.claude/settings.local.json', '.claude/skills', '.claude/kit-inbox.jsonl'];
 // Служебные папки superpowers (визуальный помощник, git worktree, спеки и планы по умолчанию) — тоже заранее:
 // появляются посреди сессии. specs и .specify не исключаем — так может называться папка сайта.
@@ -28,8 +28,6 @@ const TOOLS = ['.superpowers', '.worktrees', 'docs/superpowers'];
 const DENY = path.join(__dirname, '..', 'skills', 'project-init', 'templates', 'htaccess-deny');
 const OPEN_NOTE = 'На сервер уезжают .claude/docs, .claude/CLAUDE.md и .claude/.htaccess (параметр «Документы на сервере: да») — '
   + 'после заливки проверьте снаружи, что /.claude/ закрыта (check-closed).';
-
-const docsOnServer = (info) => /^да$/i.test(info.params.get('Документы на сервере', ''));
 
 // Простой путь от корня проекта: без масок, без «(кроме …)», не абсолютный и не наружу — иначе null.
 function plainPath(item) {
@@ -58,7 +56,7 @@ function claudeRest(dir) {
 }
 
 function required(info, also) {
-  const open = docsOnServer(info);
+  const open = docsOnServer(info.params);
   const list = open ? ['.idea', '.git', ...claudeRest(info.dir), ...EARLY, info.visualRel] : [...MUST];
   if (!docsInClaude(info.docsRel)) list.push(info.docsRel);
   for (const item of [...info.params.list('Не выкладывать'), ...also, ...TOOLS]) list.push(item);
@@ -106,7 +104,7 @@ function run(start, { hook = false, check = false, also = [] } = {}) {
   if (!/<component\s+name="PublishConfigData"/.test(xml)) {
     return { code: 0, lines: hook ? [] : ['Настроек выкладки PhpStorm нет (.idea/deployment.xml) — исключать нечего.'] };
   }
-  const open = docsOnServer(info);
+  const open = docsOnServer(info.params);
   const deployment = readDeployment(xml);
   const live = open && deployment.servers.some((s) => s.root);
   const notes = live ? [blockedByName(deployment.names)].filter(Boolean) : [];
