@@ -3,20 +3,18 @@
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { docsInClaude, isDocOnServer } = require('./project');
+const { isDocOnServer } = require('./project');
 const { getSection, parseTable } = require('./md');
 const { parseRules, matchRules } = require('./paths');
 
 // Как у хука исключений PhpStorm (phpstorm-exclude.js): .claude в корне (правила, документы, скрипты)
-// и папка журнала вне .claude (старая docs/) на сервер не выкладываются никогда. Файл-канал /kit:server
+// на сервер не выкладывается никогда. Файл-канал /kit:server
 // (/kit-exec.php, только в корне) — служебный: его кладёт и удаляет Claude, в списки выкладки он не входит.
 // Служебные папки superpowers — как у хука исключений: в них спеки, планы и макеты, а не сайт.
 const ALWAYS_SKIP = ['.git', '.idea', '/.claude', '/kit-exec.php', '/.superpowers', '/.worktrees', '/docs/superpowers'];
 
 function skipRules(info) {
-  const d = info.docsRel;
-  const own = d !== '.' && !docsInClaude(d) && !path.isAbsolute(d) && !d.split('/').includes('..') ? ['/' + d] : [];
-  return parseRules([...ALWAYS_SKIP, ...own, ...info.params.list('Не выкладывать')]);
+  return parseRules([...ALWAYS_SKIP, ...info.params.list('Не выкладывать')]);
 }
 
 function git(cwd, args) {

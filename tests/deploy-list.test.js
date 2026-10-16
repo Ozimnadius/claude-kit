@@ -18,10 +18,10 @@ const planMd = (commit) => [
 function setup(mode) {
   const dir = gitRepo({
     '.claude/CLAUDE.md': paramsMd({ 'Выкладка': mode, 'Не выкладывать': '.claude, .gitignore' }),
-    'a.php': '1', 'b.php': '1', 'docs/progress.md': '# журнал\n', 'docs/deploy-prod.md': '# пусто\n',
+    'a.php': '1', 'b.php': '1', '.claude/docs/progress.md': '# журнал\n', '.claude/docs/deploy-prod.md': '# пусто\n',
   });
   const base = git(dir, 'rev-parse', '--short', 'HEAD').trim();
-  writeFiles(dir, { 'docs/deploy-prod.md': planMd(base), 'a.php': '2', 'c.php': 'new', '.claude/scripts/x.php': 'x' });
+  writeFiles(dir, { '.claude/docs/deploy-prod.md': planMd(base), 'a.php': '2', 'c.php': 'new', '.claude/scripts/x.php': 'x' });
   fs.unlinkSync(path.join(dir, 'b.php'));
   git(dir, 'add', '-A');
   git(dir, 'commit', '-q', '-m', '1.2: изменения');
@@ -33,11 +33,10 @@ test('вручную: база из «Залито на прод», залить
   const { dir, base } = setup('вручную');
   const r = runScript('deploy-list.js', { cwd: dir });
   assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, new RegExp('База: ' + base + ' \\(«Залито на прод» в docs/deploy-prod\\.md\\)'));
+  assert.match(r.stdout, new RegExp('База: ' + base + ' \\(«Залито на прод» в \\.claude/docs/deploy-prod\\.md\\)'));
   assert.match(r.stdout, /Залить \(2\):/);
   assert.match(r.stdout, /\n  M a\.php/);
   assert.match(r.stdout, /\n  A c\.php/);
-  assert.doesNotMatch(r.stdout, /docs\/deploy-prod\.md\n/, 'папка журнала (старая docs/) не выкладывается — как у хука исключений');
   assert.match(r.stdout, /Удалить с сервера \(1\):\n  D b\.php/);
   assert.doesNotMatch(r.stdout, /x\.php/);
   assert.match(r.stdout, /Не закоммичено[^\n]*\n  \?\? d\.php/);
@@ -49,17 +48,6 @@ test('PhpStorm Always: только удаления', () => {
   assert.match(r.stdout, /PhpStorm Always/);
   assert.doesNotMatch(r.stdout, /Залить \(/);
   assert.match(r.stdout, /Удалить с сервера \(1\)/);
-});
-
-test('«вручную; дев — PhpStorm Always»: прод вручную — полный список', () => {
-  const { dir } = setup('вручную; дев — PhpStorm Always');
-  const r = runScript('deploy-list.js', { cwd: dir });
-  assert.equal(r.code, 0, r.stderr);
-  assert.match(r.stdout, /Залить \(2\):/);
-  assert.match(r.stdout, /Удалить с сервера \(1\)/);
-  assert.doesNotMatch(r.stdout, /показаны только удаления/);
-  const lower = setup('  phpstorm always  ');
-  assert.doesNotMatch(runScript('deploy-list.js', { cwd: lower.dir }).stdout, /Залить \(/, 'регистр и пробелы не важны');
 });
 
 test('новая раскладка: план выкладки — .claude/docs/deploy-prod.md без параметра', () => {
@@ -77,21 +65,21 @@ test('новая раскладка: план выкладки — .claude/docs/
   assert.match(r.stdout, /Залить \(1\):\n  M a\.php/, '.claude — в «Не выкладывать», план не предлагается');
 });
 
-test('.claude и папка журнала вне .claude не выкладываются всегда — даже без «Не выкладывать»; перенос в архив — не «удаления»', () => {
+test('.claude не выкладывается всегда — даже без «Не выкладывать»; перенос в архив — не «удаления»', () => {
   const dir = gitRepo({
-    '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'вручную', 'Журнал': 'notes/progress.md' }),
-    'a.php': '1', 'notes/progress.md': '# журнал\n', 'notes/work/plan.md': 'план', 'local/.claude/x.txt': 'x',
+    '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'вручную' }),
+    'a.php': '1', '.claude/docs/progress.md': '# журнал\n', '.claude/docs/work/plan.md': 'план', 'local/.claude/x.txt': 'x',
   });
-  writeFiles(dir, { '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'вручную', 'Журнал': 'notes/progress.md', 'Код пишет': 'Claude' }), 'a.php': '2', 'local/.claude/x.txt': 'y' });
-  fs.mkdirSync(path.join(dir, 'notes', 'archive'));
-  fs.renameSync(path.join(dir, 'notes', 'work', 'plan.md'), path.join(dir, 'notes', 'archive', 'plan.md'));
+  writeFiles(dir, { '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'вручную', 'Режим': 'общий' }), 'a.php': '2', 'local/.claude/x.txt': 'y' });
+  fs.mkdirSync(path.join(dir, '.claude', 'docs', 'archive'));
+  fs.renameSync(path.join(dir, '.claude', 'docs', 'work', 'plan.md'), path.join(dir, '.claude', 'docs', 'archive', 'plan.md'));
   git(dir, 'add', '-A');
   git(dir, 'commit', '-q', '-m', '1.1: правка и архив');
   const r = runScript('deploy-list.js', { cwd: dir });
   assert.equal(r.code, 0, r.stderr);
   assert.match(r.stdout, /Залить \(2\):\n  M a\.php\n  M local\/\.claude\/x\.txt/, 'только корневая .claude');
   assert.match(r.stdout, /Удалить с сервера \(0\)/);
-  assert.doesNotMatch(r.stdout, /CLAUDE\.md|notes\//);
+  assert.doesNotMatch(r.stdout, /CLAUDE\.md|\.claude\/docs/);
 });
 
 test('kit-exec.php в корне (файл-канал /kit:server) не попадает ни в «Не закоммичено», ни в «Залить»; в подпапке — попадает', () => {

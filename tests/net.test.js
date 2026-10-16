@@ -50,7 +50,7 @@ test('site-probe: версия скрыта — подсказка про кон
 });
 
 test('check-closed: 403 — закрыт, 404 — нет, 200 — ОТКРЫТ с подсказкой; исключения не запрашиваются', async () => {
-  const codes = { '/docs/': 403, '/docs/a.md': 403, '/docs/b.pdf': 200, '/docs/план.md': 403, '/.claude/': 403, '/.claude/CLAUDE.md': 404 };
+  const codes = { '/.claude/': 403, '/.claude/docs/a.md': 403, '/.claude/docs/b.pdf': 200, '/.claude/docs/план.md': 403, '/.claude/CLAUDE.md': 404 };
   const { server, url, seen } = await serve((req, res) => {
     res.statusCode = codes[decodeURIComponent(req.url)] || 500;
     res.end();
@@ -58,13 +58,13 @@ test('check-closed: 403 — закрыт, 404 — нет, 200 — ОТКРЫТ �
   const dir = makeProject({
     '.claude/CLAUDE.md': paramsMd({ 'Не выкладывать': '.claude/scripts' }),
     '.claude/scripts/01-x.php': 'x',
-    'docs/a.md': 'a', 'docs/b.pdf': 'b', 'docs/план.md': 'п',
+    '.claude/docs/a.md': 'a', '.claude/docs/b.pdf': 'b', '.claude/docs/план.md': 'п',
   });
   try {
     const r = await runScriptAsync('check-closed.js', { args: [url], cwd: dir });
     assert.equal(r.code, 1);
-    assert.match(r.stdout, /200\s+ОТКРЫТ\s+docs\/b\.pdf — nginx отдаёт \.pdf/);
-    assert.match(r.stdout, /403\s+закрыт\s+docs\/план\.md/);
+    assert.match(r.stdout, /200\s+ОТКРЫТ\s+\.claude\/docs\/b\.pdf — nginx отдаёт \.pdf/);
+    assert.match(r.stdout, /403\s+закрыт\s+\.claude\/docs\/план\.md/);
     assert.match(r.stdout, /404\s+нет на сервере\s+\.claude\/CLAUDE\.md/);
     assert.match(r.stdout, /ОТКРЫТО: 1/);
     assert.ok(!seen.some((p) => p.includes('scripts')), seen.join(', '));
@@ -78,7 +78,7 @@ test('check-closed: всё закрыто — код 0', async () => {
     res.statusCode = 403;
     res.end();
   });
-  const dir = makeProject({ 'docs/progress.md': '# журнал', '.claude/CLAUDE.md': '# правила' });
+  const dir = makeProject({ '.claude/docs/progress.md': '# журнал', '.claude/CLAUDE.md': '# правила' });
   try {
     const r = await runScriptAsync('check-closed.js', { args: [url], cwd: dir });
     assert.equal(r.code, 0, r.stdout);
@@ -158,7 +158,6 @@ test('check-closed: .claude/worktrees и скиллы .claude/skills не обх
     '.claude/worktrees/x/docs/progress.md': 'копия журнала',
     '.claude/skills/bitrix-orm/SKILL.md': 'скилл',
     '.claude/skills/bitrix-orm/rules/reading.md': 'правило',
-    'docs/a.md': 'a',
   });
   try {
     const r = await runScriptAsync('check-closed.js', { args: [url], cwd: dir });
@@ -177,11 +176,11 @@ test('check-closed: 401 — закрыт (авторизация), код 0', as
     res.setHeader('WWW-Authenticate', 'Basic realm="dev"');
     res.end();
   });
-  const dir = makeProject({ 'docs/a.md': 'a' });
+  const dir = makeProject({ '.claude/docs/a.md': 'a' });
   try {
     const r = await runScriptAsync('check-closed.js', { args: [url], cwd: dir });
     assert.equal(r.code, 0, r.stdout);
-    assert.match(r.stdout, /401\s+закрыт \(авторизация\)\s+docs\/a\.md/);
+    assert.match(r.stdout, /401\s+закрыт \(авторизация\)\s+\.claude\/docs\/a\.md/);
     assert.match(r.stdout, /закрыто\/нет: 2, ОТКРЫТО: 0, прочее: 0/);
   } finally {
     server.close();
@@ -213,7 +212,7 @@ test('check-closed: редирект всего на страницу входа
     res.setHeader('Location', '/auth/login');
     res.end();
   });
-  const dir = makeProject({ 'docs/a.md': 'a' });
+  const dir = makeProject({ '.claude/docs/a.md': 'a' });
   try {
     const r = await runScriptAsync('check-closed.js', { args: [url], cwd: dir });
     assert.equal(r.code, 1);
@@ -236,7 +235,7 @@ test('check-closed: редирект на тот же путь другого х
     res.setHeader('Location', second.url + req.url);
     res.end();
   });
-  const dir = makeProject({ 'docs/a.md': 'a' });
+  const dir = makeProject({ '.claude/docs/a.md': 'a' });
   try {
     const r = await runScriptAsync('check-closed.js', { args: [first.url], cwd: dir });
     assert.equal(r.code, 0, r.stdout);

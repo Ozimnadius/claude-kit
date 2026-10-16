@@ -64,7 +64,7 @@ for (const [shell, cmd, want] of CASES) {
 }
 
 test('хук: в kit-проекте — JSON deny, в чужом и для безопасной команды — тишина', () => {
-  const kit = makeProject({ 'docs/progress.md': progressMd() });
+  const kit = makeProject({ '.claude/docs/progress.md': progressMd() });
   const r = runScript('guard-bash.js', {
     input: { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'cd /c/x && ls' }, cwd: kit },
   });

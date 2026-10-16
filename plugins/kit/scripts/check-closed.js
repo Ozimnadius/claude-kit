@@ -6,10 +6,10 @@
 // сотни файлов без секретов), папки снимков visual (сотни картинок; на сервер их не пускает защита выкладки visual.js)
 // и «Не выкладывать». Папка, которая сама (или через предка) в «Не выкладывать», всё равно
 // проверяется: на сервере могли остаться её старые копии (с 2.3.0 в «Не выкладывать» — .claude целиком).
-// Запуск в корне проекта: node check-closed.js <url> [--dirs a,b]; по умолчанию — docs, .claude и папка журнала вне .claude.
+// Запуск в корне проекта: node check-closed.js <url> [--dirs a,b]; по умолчанию — .claude.
 const fs = require('fs');
 const path = require('path');
-const { kitInfo, docsInClaude } = require('./lib/project');
+const { kitInfo } = require('./lib/project');
 const { parseRules, matchRules } = require('./lib/paths');
 
 const TIMEOUT = Number(process.env.KIT_HTTP_TIMEOUT_MS) || 15000;
@@ -19,7 +19,7 @@ const TIMEOUT = Number(process.env.KIT_HTTP_TIMEOUT_MS) || 15000;
 // тестов при восьми падали 3 прогона из 4, при двух — 1 из 9. KIT_HTTP_CONCURRENCY=N — параллельно, если у машины сбоя нет
 // (при сотнях файлов в docs или .claude проверка идёт в разы быстрее).
 const CONCURRENCY = Math.max(1, Number(process.env.KIT_HTTP_CONCURRENCY) || 1);
-const ALWAYS_SKIP = ['.git', '.idea', '.claude/worktrees', '.claude/skills', 'docs/visual', '.claude/docs/visual'];
+const ALWAYS_SKIP = ['.git', '.idea', '.claude/worktrees', '.claude/skills', '.claude/docs/visual'];
 const CLOSED = new Set(['закрыт', 'закрыт (авторизация)', 'нет на сервере']);
 
 // Расширения, которые nginx часто отдаёт сам, мимо .htaccess (epsilon, 2026-09-22).
@@ -104,8 +104,7 @@ async function main(argv) {
   const di = argv.indexOf('--dirs');
   const cwd = process.cwd();
   const info = kitInfo(cwd);
-  const own = info.docsRel !== '.' && !docsInClaude(info.docsRel) && info.docsRel !== 'docs' ? [info.docsRel] : [];
-  const dirs = di >= 0 && argv[di + 1] ? argv[di + 1].split(',').map((s) => s.trim()).filter(Boolean) : ['docs', '.claude', ...own];
+  const dirs = di >= 0 && argv[di + 1] ? argv[di + 1].split(',').map((s) => s.trim()).filter(Boolean) : ['.claude'];
   const skip = parseRules([...ALWAYS_SKIP, '/' + info.visualRel]);
   const deploy = info.params.list('Не выкладывать');
   const targets = [];

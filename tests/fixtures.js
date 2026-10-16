@@ -13,14 +13,13 @@ function paramsMd(values, title = '# Тестовый проект — прав�
 
 const ALPHA = {
   'Режим': 'bitrix',
-  'Код пишет': 'Claude',
   'Окружение': 'прод',
   'Выкладка': 'PhpStorm Always',
   'Прод': 'https://alpha.example.com',
   'Дев': '—',
   'PHP': '`C:\\OSPanel\\modules\\PHP-7.4\\php.exe`',
-  'Журнал': 'docs/progress.md',
-  'План выкладки': 'docs/deploy-prod.md',
+  'Журнал': '.claude/docs/progress.md',
+  'План выкладки': '.claude/docs/deploy-prod.md',
   'ID шага': 'N.M (например 0.3, 2.1)',
   'Не выкладывать': '.idea, .git, .claude/scripts, .claude/settings.local.json',
   'Не коммитить': 'bitrix/, upload/ (кроме upload/docs/), *.back*',
@@ -29,8 +28,7 @@ const ALPHA = {
 
 const GAMMA = {
   'Режим': 'bitrix',
-  'Код пишет': 'пользователь',
-  'Окружение': 'дев+прод',
+  'Окружение': 'прод',
   'Выкладка': 'вручную',
   'Прод': 'https://gamma.example.com',
   'Дев': 'http://user200.hosting.example',
@@ -56,4 +54,24 @@ function progressMd(now = DEFAULT_NOW) {
   ].join('\n');
 }
 
-module.exports = { paramsMd, ALPHA, GAMMA, ALPHA_CLAUDE_MD, GAMMA_CLAUDE_MD, progressMd };
+// Журнал формата kit 3.0 по частям: progress.md с таблицей этапа «… | Как проверено |» и journal/decisions.md
+// с таблицей решений «| № | … | Почему | Что отвергли | Кто |». docs — папка журнала (для старой раскладки — 'docs').
+function journalFiles(now = DEFAULT_NOW, docs = '.claude/docs') {
+  return {
+    [docs + '/progress.md']: [
+      '# Журнал работ — тест', '',
+      '## Сейчас', '', now, '',
+      '## Этапы', '', '| Этап | Название | Файл |', '|---|---|---|', '| 1 | изучение | ниже |', '',
+      '## Этап 1 — изучение', '',
+      '| Шаг | Статус | Что сделано | Как проверено |', '|---|---|---|---|',
+      '| 1.1 | ✅ | инвентаризация | тест |', '| 1.2 | ⏳ | инвентаризация на проде | |', '',
+    ].join('\n'),
+    [docs + '/journal/decisions.md']: [
+      '# Решения', '',
+      '| № | Дата | Шаг | Решение | Почему | Что отвергли | Кто |', '|---|---|---|---|---|---|---|',
+      '| 1 | 2026-10-01 | 1.1 | тест | проверка | — | пользователь |', '',
+    ].join('\n'),
+  };
+}
+
+module.exports = { paramsMd, ALPHA, GAMMA, ALPHA_CLAUDE_MD, GAMMA_CLAUDE_MD, progressMd, journalFiles };

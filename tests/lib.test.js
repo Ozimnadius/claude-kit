@@ -5,7 +5,7 @@ const path = require('path');
 const { parseParams, splitList, readParams, makeParams } = require('../plugins/kit/scripts/lib/params');
 const { getSection, parseTable } = require('../plugins/kit/scripts/lib/md');
 const { parseRules, matchRules, norm } = require('../plugins/kit/scripts/lib/paths');
-const { kitInfo, resolveProjectDir, docsInClaude, serverEnv } = require('../plugins/kit/scripts/lib/project');
+const { kitInfo, resolveProjectDir, serverEnv } = require('../plugins/kit/scripts/lib/project');
 const { makeProject } = require('./helpers');
 const { ALPHA_CLAUDE_MD, paramsMd, progressMd } = require('./fixtures');
 
@@ -134,44 +134,32 @@ test('paths: «**/» — ноль или больше папок, как в .git
 });
 
 test('kitInfo: журнал, параметры, чужой проект', () => {
-  const onlyJournal = kitInfo(makeProject({ 'docs/progress.md': progressMd() }));
+  const onlyJournal = kitInfo(makeProject({ '.claude/docs/progress.md': progressMd() }));
   assert.equal(onlyJournal.isKit, true);
   assert.equal(onlyJournal.params.found, false);
-  const onlyParams = kitInfo(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Журнал': 'docs/log.md' }) }));
+  const onlyParams = kitInfo(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Журнал': '.claude/docs/log.md' }) }));
   assert.equal(onlyParams.isKit, true);
   assert.equal(onlyParams.hasJournal, false);
-  assert.equal(onlyParams.journalRel, 'docs/log.md');
-  assert.equal(onlyParams.planRel, 'docs/deploy-prod.md');
+  assert.equal(onlyParams.journalRel, '.claude/docs/log.md');
+  assert.equal(onlyParams.planRel, '.claude/docs/deploy-prod.md');
   assert.equal(kitInfo(makeProject({ 'index.php': '' })).isKit, false);
 });
 
-test('kitInfo: папка документов — .claude/docs по умолчанию, старая docs/ — запасной путь, параметр важнее', () => {
+test('kitInfo: папка документов — .claude/docs; старый docs/progress.md без параметра не ищется (с 3.0.0); параметр важнее', () => {
   const fresh = kitInfo(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Режим': 'общий' }) }));
   assert.equal(fresh.journalRel, '.claude/docs/progress.md');
   assert.equal(fresh.docsRel, '.claude/docs');
   assert.equal(fresh.planRel, '.claude/docs/deploy-prod.md');
   assert.equal(fresh.visualRel, '.claude/docs/visual');
   assert.equal(fresh.hasJournal, false);
-  const moved = kitInfo(makeProject({ '.claude/docs/progress.md': progressMd(), 'docs/progress.md': progressMd() }));
-  assert.equal(moved.journalRel, '.claude/docs/progress.md', 'новая раскладка важнее старой');
-  assert.equal(moved.isKit, true);
-  const old = kitInfo(makeProject({ 'docs/progress.md': progressMd() }));
-  assert.equal(old.journalRel, 'docs/progress.md');
-  assert.equal(old.docsRel, 'docs');
-  assert.equal(old.planRel, 'docs/deploy-prod.md');
-  assert.equal(old.visualRel, 'docs/visual');
+  const old = kitInfo(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Режим': 'общий' }), 'docs/progress.md': progressMd() }));
+  assert.equal(old.journalRel, '.claude/docs/progress.md');
+  assert.equal(old.hasJournal, false);
   const param = kitInfo(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Журнал': 'docs\\progress.md', 'План выкладки': 'deploy.md' }), '.claude/docs/progress.md': progressMd() }));
   assert.equal(param.journalRel, 'docs/progress.md', 'параметр важнее найденного файла; \\ → /');
   assert.equal(param.hasJournal, false);
   assert.equal(param.planRel, 'deploy.md');
   assert.equal(param.visualRel, 'docs/visual');
-  const root = kitInfo(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Журнал': 'progress.md' }) }));
-  assert.equal(root.docsRel, '.');
-  assert.equal(root.planRel, 'deploy-prod.md');
-  assert.equal(root.visualRel, 'visual');
-  assert.equal(docsInClaude('.claude/docs'), true);
-  assert.equal(docsInClaude('docs'), false);
-  assert.equal(docsInClaude('.claudex/docs'), false);
 });
 
 test('resolveProjectDir: CLAUDE_PROJECT_DIR важнее cwd из stdin', () => {
@@ -185,11 +173,10 @@ test('resolveProjectDir: CLAUDE_PROJECT_DIR важнее cwd из stdin', () => 
   assert.equal(path.isAbsolute(resolveProjectDir({})), true);
 });
 
-test('serverEnv: «дев» — дев; «прод», старое «дев+прод» и нет параметра — прод (с 2.17.0)', () => {
+test('serverEnv: «дев» — дев; «прод» и нет параметра — прод (с 2.17.0)', () => {
   assert.equal(serverEnv(makeParams({ 'окружение': 'дев' })), 'дев');
   assert.equal(serverEnv(makeParams({ 'окружение': '`Дев`' })), 'дев');
   assert.equal(serverEnv(makeParams({ 'окружение': 'прод' })), 'прод');
-  assert.equal(serverEnv(makeParams({ 'окружение': 'дев+прод' })), 'прод');
   assert.equal(serverEnv(makeParams({})), 'прод');
   assert.equal(serverEnv(makeParams(null)), 'прод');
 });

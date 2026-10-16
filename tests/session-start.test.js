@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 const { makeProject, writeFiles, runScript } = require('./helpers');
-const { ALPHA_CLAUDE_MD, GAMMA_CLAUDE_MD, paramsMd, progressMd } = require('./fixtures');
+const { ALPHA_CLAUDE_MD, GAMMA_CLAUDE_MD, paramsMd, progressMd, journalFiles } = require('./fixtures');
 
 const run = (dir) => runScript('session-start.js', {
   input: { hook_event_name: 'SessionStart', source: 'startup', cwd: dir },
@@ -16,9 +16,9 @@ test('чужой проект — тишина', () => {
 });
 
 test('alpha: «Сейчас», общие правила, Always и «код пишет Claude»', () => {
-  const r = run(makeProject({ '.claude/CLAUDE.md': ALPHA_CLAUDE_MD, 'docs/progress.md': progressMd() }));
+  const r = run(makeProject({ '.claude/CLAUDE.md': ALPHA_CLAUDE_MD, ...journalFiles() }));
   assert.equal(r.code, 0);
-  assert.match(r.stdout, /## Сейчас \(из docs\/progress\.md\)/);
+  assert.match(r.stdout, /## Сейчас \(из \.claude\/docs\/progress\.md\)/);
   assert.match(r.stdout, /1\.2 — инвентаризация на проде/);
   assert.match(r.stdout, /\/kit:step-done/);
   assert.match(r.stdout, /AskUserQuestion/);
@@ -26,6 +26,7 @@ test('alpha: «Сейчас», общие правила, Always и «код п�
   assert.match(r.stdout, /Код пишет Claude/);
   assert.doesNotMatch(r.stdout, /Код пишет пользователь/);
   assert.doesNotMatch(r.stdout, /нет раздела «Параметры для агентов»/);
+  assert.doesNotMatch(r.stdout, /в старом формате/, 'журнал kit 3.0 — без правила о переезде');
 });
 
 test('superpowers по правилам kit: правило всегда, с путём к шаблону спеки; ветки и worktree — только при автозаливке', () => {
@@ -36,8 +37,7 @@ test('superpowers по правилам kit: правило всегда, с п�
   const tpl = /по шаблону (\S+?), plan/.exec(alpha)[1];
   assert.ok(require('fs').existsSync(tpl), 'шаблон есть: ' + tpl);
   assert.match(alpha, /Superpowers при автозаливке: без отдельных веток и worktree/);
-  const gamma = run(makeProject({ '.claude/CLAUDE.md': GAMMA_CLAUDE_MD, 'docs/progress.md': progressMd() })).stdout;
-  assert.match(gamma, /спеки и планы — в docs\/work\//);
+  const gamma = run(makeProject({ '.claude/CLAUDE.md': GAMMA_CLAUDE_MD, ...journalFiles() })).stdout;
   assert.doesNotMatch(gamma, /Superpowers при автозаливке/, 'выкладка вручную — без правила про ветки');
 });
 
@@ -51,7 +51,7 @@ test('журнал по частям: строка о journal/ — только 
 });
 
 test('git worktree в .claude/worktrees/ при PhpStorm Always — предупреждение про автозаливку', () => {
-  const files = { '.claude/CLAUDE.md': ALPHA_CLAUDE_MD, 'docs/progress.md': progressMd() };
+  const files = { '.claude/CLAUDE.md': ALPHA_CLAUDE_MD, ...journalFiles() };
   const main = makeProject();
   const wt = writeFiles(path.join(main, '.claude', 'worktrees', 'brave-turing-1a2b3c'), files);
   const r = run(wt);
@@ -66,79 +66,87 @@ test('git worktree в .claude/worktrees/ при PhpStorm Always — предуп
   assert.doesNotMatch(run(manual).stdout, /git worktree/, 'выкладка вручную — без предупреждения');
 });
 
-test('«вручную; дев — PhpStorm Always»: правило про черновики — про дев, не про прод', () => {
-  const md = paramsMd({ 'Код пишет': 'пользователь', 'Окружение': 'дев+прод', 'Выкладка': 'вручную; дев — PhpStorm Always' });
-  const r = run(makeProject({ '.claude/CLAUDE.md': md }));
-  assert.match(r.stdout, /Автозаливка на дев: любое сохранение в проекте сразу уходит на дев-сервер/);
-  assert.match(r.stdout, /Черновики — только во временной папке сессии/);
-  assert.doesNotMatch(r.stdout, /Выкладка: PhpStorm Always —/);
-  const alpha = run(makeProject({ '.claude/CLAUDE.md': ALPHA_CLAUDE_MD }));
-  assert.match(alpha.stdout, /Выкладка: PhpStorm Always — любое сохранение/);
-  assert.doesNotMatch(alpha.stdout, /Автозаливка на дев/);
-  const main = makeProject();
-  const wt = writeFiles(path.join(main, '.claude', 'worktrees', 'dev'), { '.claude/CLAUDE.md': md });
-  assert.match(run(wt).stdout, /git worktree/, 'worktree при автозаливке на дев — тоже предупреждение');
+test('старый формат — правило о переезде с признаками через «; »; правил автозаливки по старому значению нет (с 3.0.0)', () => {
+  const md = paramsMd({ 'Окружение': 'дев+прод', 'Выкладка': 'вручную; дев — PhpStorm Always' });
+  const out = run(makeProject({ '.claude/CLAUDE.md': md, '.claude/docs/progress.md': progressMd() })).stdout;
+  assert.ok(out.includes('- Журнал или параметры в старом формате (журнал одним файлом; Окружение: дев+прод; Выкладка: вручную; дев — PhpStorm Always) '
+    + '— до работы предложи пользователю /kit:project-init: переезд на формат kit 3.0.\n'), out);
+  assert.doesNotMatch(out, /Автозаливка на дев|любое сохранение в проекте сразу уходит/);
 });
 
-test('gamma: код пишет пользователь, выкладка вручную', () => {
-  const r = run(makeProject({ '.claude/CLAUDE.md': GAMMA_CLAUDE_MD, 'docs/progress.md': progressMd() }));
-  assert.match(r.stdout, /Код пишет пользователь/);
-  assert.doesNotMatch(r.stdout, /PhpStorm Always/);
+test('правила «Код пишет пользователь» нет ни при каком параметре (с 3.0.0)', () => {
+  for (const who of ['пользователь', 'Claude', '—']) {
+    const out = run(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Код пишет': who }), ...journalFiles() })).stdout;
+    assert.doesNotMatch(out, /Код пишет пользователь/, who);
+  }
+});
+
+test('проверка результата на сервере — только при адресе сервера окружения, одним пакетным вызовом браузера (с 3.0.0)', () => {
+  const out = (params) => run(makeProject({ '.claude/CLAUDE.md': paramsMd(params), ...journalFiles() })).stdout;
+  const rule = /- Код пишет Claude: после записи проверить результат на сервере/;
+  assert.doesNotMatch(out({ 'Код пишет': 'Claude', 'Прод': '—', 'Дев': '—' }), rule, 'без адреса — правила нет');
+  const prod = out({ 'Прод': 'shop.example.com' });
+  assert.match(prod, rule);
+  assert.match(prod, /страницу проверяй одним пакетным вызовом браузера \(browser_batch: открыть, снимок на десктопе, мобильная ширина, снимок\), снимки — уменьшенные/);
+  assert.doesNotMatch(out({ 'Окружение': 'дев', 'Прод': 'shop.example.com' }), rule, '«дев» — адрес берётся из «Дев»');
+  assert.match(out({ 'Окружение': 'дев', 'Дев': 'dev.example.com' }), rule);
 });
 
 test('только журнал — подсказка про /kit:project-init', () => {
-  const r = run(makeProject({ 'docs/progress.md': progressMd() }));
+  const r = run(makeProject({ '.claude/docs/progress.md': progressMd() }));
   assert.match(r.stdout, /## Сейчас/);
   assert.match(r.stdout, /нет раздела «Параметры для агентов» — предложи пользователю \/kit:project-init/);
 });
 
 test('только параметры, журнала нет', () => {
-  const r = run(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Журнал': 'docs/log.md' }) }));
-  assert.match(r.stdout, /Журнала docs\/log\.md нет/);
+  const r = run(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Режим': 'общий' }) }));
+  assert.match(r.stdout, /Журнала \.claude\/docs\/progress\.md нет/);
   assert.match(r.stdout, /Правила процесса/);
+  assert.doesNotMatch(r.stdout, /в старом формате/, 'журнала ещё нет — это не старый формат');
 });
 
 test('длинное «Сейчас» обрезается', () => {
-  const r = run(makeProject({ 'docs/progress.md': progressMd('- **Этап:** ' + 'я'.repeat(10000)) }));
-  assert.match(r.stdout, /обрезано — полностью в docs\/progress\.md/);
+  const r = run(makeProject({ '.claude/docs/progress.md': progressMd('- **Этап:** ' + 'я'.repeat(10000)) }));
+  assert.match(r.stdout, /обрезано — полностью в \.claude\/docs\/progress\.md/);
   assert.ok(r.stdout.length < 8000, 'длина ' + r.stdout.length);
 });
 
 test('CLAUDE_PROJECT_DIR важнее cwd; мусор на stdin не ломает хук', () => {
-  const dir = makeProject({ 'docs/progress.md': progressMd() });
+  const dir = makeProject({ '.claude/docs/progress.md': progressMd() });
   const r = runScript('session-start.js', { input: 'не json', env: { CLAUDE_PROJECT_DIR: dir } });
   assert.equal(r.code, 0);
   assert.match(r.stdout, /## Сейчас/);
 });
 
-test('документы: новая раскладка — правило про .claude/docs без подсказки о переезде; старая — с подсказкой', () => {
-  const md = paramsMd({ 'Режим': 'bitrix', 'Код пишет': 'Claude', 'Выкладка': 'вручную' });
-  const fresh = run(makeProject({ '.claude/CLAUDE.md': md, '.claude/docs/progress.md': progressMd() }));
+test('документы — правило про .claude/docs без подсказки о переезде; журнал в docs/ — правило старого формата (с 3.0.0)', () => {
+  const md = paramsMd({ 'Режим': 'bitrix', 'Выкладка': 'вручную' });
+  const fresh = run(makeProject({ '.claude/CLAUDE.md': md, ...journalFiles() }));
   assert.match(fresh.stdout, /## Сейчас \(из \.claude\/docs\/progress\.md\)/);
   assert.ok(fresh.stdout.includes('- Документы проекта — в .claude/docs/: планы, спеки, чек-листы, материалы — в work/, готовое — в archive/, '
     + 'реестр — раздел «Документы» журнала; новый документ — строкой DOCS в /kit:step-done.\n'), fresh.stdout);
   assert.doesNotMatch(fresh.stdout, /Переезд в \.claude\/docs/);
-  const old = run(makeProject({ 'docs/progress.md': progressMd() }));
-  assert.match(old.stdout, /- Документы проекта — в docs\/: .* Переезд в \.claude\/docs — через \/kit:project-init\./);
+  const old = run(makeProject({ '.claude/CLAUDE.md': md, ...journalFiles(undefined, 'docs') }));
+  assert.match(old.stdout, /- Журнал или параметры в старом формате \(журнал не в \.claude\/docs\) — до работы предложи пользователю \/kit:project-init: переезд на формат kit 3\.0\./);
+  assert.doesNotMatch(old.stdout, /Переезд в \.claude\/docs/);
   assert.equal(run(makeProject({ 'index.php': '' })).stdout, '', 'вне kit-проекта — тишина');
 });
 
-test('«Коммит»: без параметра и «после просмотра» — правило просмотра перед коммитом; «сразу» — без него (с 2.15.0)', () => {
+test('правило просмотра перед коммитом — всегда, в том числе при «Коммит: сразу» (с 3.0.0)', () => {
   const rule = /- Коммит — после просмотра: \/kit:step-done показывает незакоммиченные изменения/;
-  const out = (params) => run(makeProject({ '.claude/CLAUDE.md': paramsMd(params), '.claude/docs/progress.md': progressMd() })).stdout;
-  assert.match(out({ 'Код пишет': 'Claude' }), rule);
+  const out = (params) => run(makeProject({ '.claude/CLAUDE.md': paramsMd(params), ...journalFiles() })).stdout;
+  assert.match(out({ 'Режим': 'общий' }), rule);
   assert.match(out({ 'Коммит': 'после просмотра' }), rule);
-  assert.doesNotMatch(out({ 'Коммит': 'сразу' }), rule);
+  assert.match(out({ 'Коммит': 'сразу' }), rule);
 });
 
 const XML = '<?xml version="1.0" encoding="UTF-8"?>\n<project version="4">\n  <component name="PublishConfigData" autoUpload="Always" serverName="alpha">\n  </component>\n</project>\n';
 
 test('«Claude по SSH»: правило заливки в /kit:step-done, «Код пишет Claude» — проверка после заливки; правил автозаливки нет (с 2.17.0)', () => {
-  const md = paramsMd({ 'Код пишет': 'Claude', 'Выкладка': 'Claude по SSH', 'Окружение': 'прод' });
-  const out = run(makeProject({ '.claude/CLAUDE.md': md, '.claude/docs/progress.md': progressMd() })).stdout;
+  const md = paramsMd({ 'Выкладка': 'Claude по SSH', 'Окружение': 'прод', 'Прод': 'https://shop.example.com' });
+  const out = run(makeProject({ '.claude/CLAUDE.md': md, ...journalFiles() })).stdout;
   assert.match(out, /- Выкладка: Claude по SSH — правки остаются локально, пока \/kit:step-done не зальёт их после просмотра/);
   assert.match(out, /Вне \/kit:step-done на сервер не заливай/);
-  assert.match(out, /- Код пишет Claude: результат на сервере проверяй после заливки в \/kit:step-done/);
+  assert.match(out, /- Код пишет Claude: результат на сервере проверяй после заливки в \/kit:step-done .*browser_batch/);
   assert.doesNotMatch(out, /после записи проверить результат на сервере/);
   assert.doesNotMatch(out, /PhpStorm Always|Superpowers при автозаливке|уедут на сервер дважды/);
   assert.match(out, /после ответа «Коммитить» \(в режиме «Claude по SSH» — «Залить на сервер»\)/, 'К60: правило просмотра');

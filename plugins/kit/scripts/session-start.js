@@ -4,9 +4,10 @@
 // Вне kit-проекта молчит. Любая ошибка — тихий выход 0.
 const fs = require('fs');
 const path = require('path');
-const { readStdinJson, resolveProjectDir, kitInfo, docsInClaude, serverEnv } = require('./lib/project');
+const { readStdinJson, resolveProjectDir, kitInfo, serverEnv } = require('./lib/project');
 const { getSection } = require('./lib/md');
 const { readDeployment } = require('./lib/deployment');
+const { oldFormat, oldFormatText } = require('./lib/journal');
 
 const MAX_NOW = 4000;
 
@@ -21,18 +22,18 @@ const RULES = [
 const ruleAlways = (where) => '- Выкладка: PhpStorm Always — любое сохранение в проекте сразу уходит на ' + where + '. Черновики — только во временной папке сессии; PHP собрать и проверить php -l там, в проект — одной правкой. Удаление локально сервер не трогает.';
 const RULE_ALWAYS = ruleAlways('сервер');
 const RULE_ALWAYS_ON_DEV = ruleAlways('дев-сервер');
-const RULE_ALWAYS_DEV = '- Автозаливка на дев: любое сохранение в проекте сразу уходит на дев-сервер (на прод — вручную). Черновики — только во временной папке сессии; PHP собрать и проверить php -l там, в проект — одной правкой. Удаление локально дев-сервер не трогает.';
-const RULE_USER = '- Код пишет пользователь: Claude даёт один маленький шаг и ждёт ответа; «сделай сам» относится только к текущему шагу.';
-const RULE_CLAUDE = '- Код пишет Claude: после записи проверить результат на сервере (страница, десктоп и мобильная ширина).';
+// Проверка страницы — одним пакетным вызовом браузера (с 3.0.0): по замерам браузер — четверть всех ходов модели.
+const BATCH = 'страницу проверяй одним пакетным вызовом браузера (browser_batch: открыть, снимок на десктопе, мобильная ширина, снимок), снимки — уменьшенные';
+const RULE_CLAUDE = '- Код пишет Claude: после записи проверить результат на сервере (страница, десктоп и мобильная ширина); ' + BATCH + '.';
 // «Выкладка: Claude по SSH» (с 2.17.0): на сервер шаг уезжает только из /kit:step-done — после просмотра пользователем.
 const RULE_SSH = '- Выкладка: Claude по SSH — правки остаются локально, пока /kit:step-done не зальёт их после просмотра '
   + '(ssh-deploy.js: всё, что изменилось с последней заливки, удаления — тоже); проверка на сервере — после заливки, потом коммит; '
   + 'не прошла — правка и снова просмотр. Вне /kit:step-done на сервер не заливай.';
 const RULE_CLAUDE_SSH = '- Код пишет Claude: результат на сервере проверяй после заливки в /kit:step-done (страница, десктоп и мобильная ширина); '
-  + 'до неё — php -l и локальные проверки.';
+  + 'до неё — php -l и локальные проверки; ' + BATCH + '.';
 const WARN_SSH_ALWAYS = '- Внимание: выкладка — Claude по SSH, а в PhpStorm включена автозаливка (.idea/deployment.xml: Always) — '
   + 'файлы уедут на сервер дважды и до просмотра. В первом ответе скажи пользователю выключить: PhpStorm → Tools → Deployment → Automatic Upload.';
-// С 2.15.0: без параметра «Коммит» или с любым значением, кроме «сразу», коммит — только после просмотра пользователем.
+// Коммит — только после просмотра пользователем (с 2.15.0; с 3.0.0 — всегда, параметра «Коммит» нет).
 const RULE_REVIEW = '- Коммит — после просмотра: /kit:step-done показывает незакоммиченные изменения (панель изменений приложения Claude) '
   + 'и коммитит только после ответа «Коммитить» (в режиме «Claude по SSH» — «Залить на сервер»); вопросы пользователь задаёт комментариями к строкам.';
 const RULE_NO_PARAMS = '- В .claude/CLAUDE.md нет раздела «Параметры для агентов» — предложи пользователю /kit:project-init (дополнит недостающее).';
@@ -40,17 +41,15 @@ const SPEC_TEMPLATE = path.join(__dirname, '..', 'skills', 'project-init', 'temp
 const RULE_SP_ALWAYS = '- Superpowers при автозаливке: без отдельных веток и worktree (.worktrees, using-git-worktrees) — правки из них не дойдут до сервера.';
 const RULE_WORKTREE ='- Сессия работает в git worktree — правки здесь не попадут на сервер автозаливкой основной папки, пока их не сольют в основную ветку; не проверяй результат на сервере сразу после записи.';
 
-// Где лежат документы проекта; старая раскладка (docs/) — подсказка о переезде.
+// Где лежат документы проекта (старую раскладку docs/ ловит правило старого формата).
 function docsRule(docsRel) {
-  const where = docsRel === '.' ? 'корне проекта' : docsRel + '/';
-  const rule = '- Документы проекта — в ' + where + ': планы, спеки, чек-листы, материалы — в work/, готовое — в archive/, '
+  return '- Документы проекта — в ' + docsRel + '/: планы, спеки, чек-листы, материалы — в work/, готовое — в archive/, '
     + 'реестр — раздел «Документы» журнала; новый документ — строкой DOCS в /kit:step-done.';
-  return docsInClaude(docsRel) ? rule : rule + ' Переезд в .claude/docs — через /kit:project-init.';
 }
 
 // Superpowers работает по правилам kit: его скиллы сами пишут в docs/superpowers/ и коммитят — правила проекта важнее.
 function superpowersRule(docsRel) {
-  const work = (docsRel === '.' ? '' : docsRel + '/') + 'work/';
+  const work = docsRel + '/work/';
   return '- Superpowers по правилам kit: спеки и планы — в ' + work + ' (spec-<тема>.md по шаблону ' + SPEC_TEMPLATE.replace(/\\/g, '/')
     + ', plan-<тема>.md с разделом «Чек-лист» в начале: строка на задачу «- [ ] N.M — …», шаги внутри задач — без чекбоксов), '
     + 'не в docs/superpowers/; superpowers сам не коммитит — коммит только через /kit:step-done; '
@@ -88,27 +87,27 @@ function buildContext(info) {
   }
   out.push('', '## Правила процесса (плагин kit)', ...RULES);
   const p = info.params;
-  // «PhpStorm Always» — автозаливка на сервер окружения (при «Окружение: дев» — на дев); «вручную; дев — PhpStorm Always»
-  // (до 2.17.0) — только на дев; «Claude по SSH» — заливает /kit:step-done.
+  // «PhpStorm Always» — автозаливка на сервер окружения (при «Окружение: дев» — на дев); «Claude по SSH» — заливает /kit:step-done.
   const deploy = p.get('Выкладка', '').trim();
-  const always = /always/i.test(deploy);
+  const always = /^phpstorm always/i.test(deploy);
   const ssh = /^claude по ssh/i.test(deploy);
-  if (always) out.push(/^phpstorm always/i.test(deploy) ? (serverEnv(p) === 'дев' ? RULE_ALWAYS_ON_DEV : RULE_ALWAYS) : RULE_ALWAYS_DEV);
+  if (always) out.push(serverEnv(p) === 'дев' ? RULE_ALWAYS_ON_DEV : RULE_ALWAYS);
   if (ssh) {
     out.push(RULE_SSH);
     if (phpStormAlways(info.dir)) out.push(WARN_SSH_ALWAYS);
   }
-  const who = p.get('Код пишет', '').toLowerCase();
-  if (who.startsWith('пользов')) out.push(RULE_USER);
-  else if (who.startsWith('claude')) out.push(ssh ? RULE_CLAUDE_SSH : RULE_CLAUDE);
-  // После правил автозаливки и «Код пишет» — уточняет их для worktree.
+  // Проверка на сервере — только если у окружения есть адрес («Прод» при «Окружение: прод», «Дев» при «дев»).
+  if (p.get(serverEnv(p) === 'дев' ? 'Дев' : 'Прод', '')) out.push(ssh ? RULE_CLAUDE_SSH : RULE_CLAUDE);
+  // После правил автозаливки и проверки на сервере — уточняет их для worktree.
   if (always && inWorktree(info.dir)) out.push(RULE_WORKTREE);
-  if (!/^сразу/i.test(p.get('Коммит', '').trim())) out.push(RULE_REVIEW);
+  out.push(RULE_REVIEW);
+  const signs = oldFormat(info);
+  if (signs.length) out.push('- ' + oldFormatText(signs));
   if (!p.found) out.push(RULE_NO_PARAMS);
   out.push(docsRule(info.docsRel));
   // Журнал по частям (с 2.13.0): в журнале — только текущее, остальное — в journal/ рядом с ним.
   if (info.hasJournal && fs.existsSync(path.join(path.dirname(info.journalPath), 'journal'))) {
-    const parts = (info.docsRel === '.' ? '' : info.docsRel + '/') + 'journal/';
+    const parts = info.docsRel + '/journal/';
     out.push('- Журнал по частям: решения — ' + parts + 'decisions.md, баги — ' + parts + 'bugs.md, справочник и материалы заказчика — '
       + parts + 'reference.md, закрытые этапы — ' + parts + 'stages/; ищи и там.');
   }

@@ -226,19 +226,12 @@ test('shoot: автозаливка PhpStorm без исключения .claude
   assert.ok(!fs.existsSync(path.join(dir, ...VIS)));
 });
 
-test('shoot: исключена .claude (предок папки снимков) — не код 4; старая раскладка — снимки в docs/visual', () => {
+test('shoot: исключена .claude (предок папки снимков) — не код 4', () => {
   const xml = '<project><component name="PublishConfigData" autoUpload="Always" serverName="ftp"><serverData><paths name="ftp"><serverdata><excludedPaths>'
     + '<excludedPath local="true" path="$PROJECT_DIR$/.claude" /></excludedPaths></serverdata></paths></serverData></component></project>';
   const home = () => ({ KIT_VISUAL_HOME: tmpDir('kit-visual-home-') });
   const r = visual(project({ extra: { '.idea/deployment.xml': xml } }), ['shoot', 'before'], home());
   assert.equal(r.code, 5, r.stdout + r.stderr);
-  const old = project({ extra: { 'docs/progress.md': '# журнал\n' } });
-  const r2 = visual(old, ['shoot', 'before'], home());
-  assert.equal(r2.code, 5, r2.stdout + r2.stderr);
-  assert.match(r2.stdout, /Создан docs\/visual\/\.gitignore/);
-  assert.match(r2.stdout, /нет docs\/visual/, '«Не выкладывать» без docs — предупреждение');
-  assert.ok(fs.existsSync(path.join(old, 'docs', 'visual', '.gitignore')));
-  assert.ok(!fs.existsSync(path.join(old, ...VIS)));
 });
 
 test('shoot без зависимостей — код 5 с командой установки; .gitignore в папке снимков уже создан', () => {
