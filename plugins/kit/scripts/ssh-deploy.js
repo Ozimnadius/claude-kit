@@ -245,7 +245,7 @@ async function main(argv) {
     out.push('', 'Не вышло (' + problems.length + ') — повтор безопасен:', ...problems.map((p) => '  ' + p));
     if (r.stderr) process.stderr.write(r.stderr);
   } else if (!skipped.length && !o.docs) {
-    // Строка DEPLOY — только у основной заливки: документы уезжают после docs-keeper.
+    // Строка DEPLOY — только у основной заливки: документы уезжают после записи журнала (kit-journal.js).
     out.push('', 'DEPLOY Файлы: ' + deployLine(files.map((f) => f.path), dels));
   }
   console.log(out.join('\n'));

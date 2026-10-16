@@ -23,7 +23,7 @@ test('frontmatter навыков и агентов: значение с «: » �
     const f = path.join(PLUGIN, 'skills', d, 'SKILL.md');
     if (fs.existsSync(f)) files.push(f);
   }
-  for (const a of fs.readdirSync(path.join(PLUGIN, 'agents'))) files.push(path.join(PLUGIN, 'agents', a));
+  if (fs.existsSync(path.join(PLUGIN, 'agents'))) for (const a of fs.readdirSync(path.join(PLUGIN, 'agents'))) files.push(path.join(PLUGIN, 'agents', a));
   assert.ok(files.length >= 7, 'нашлось файлов: ' + files.length);
   for (const file of files) {
     const src = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
@@ -37,30 +37,7 @@ test('frontmatter навыков и агентов: значение с «: » �
   }
 });
 
-const agent = (name) => frontmatter(path.join(PLUGIN, 'agents', name + '.md'));
 const skill = (name) => frontmatter(path.join(PLUGIN, 'skills', name, 'SKILL.md'));
-
-test('docs-keeper: sonnet, без оболочки, читает параметры, COMMITS и отчёт со списком файлов', () => {
-  const { fm, body } = agent('docs-keeper');
-  assert.equal(fm.name, 'docs-keeper');
-  assert.equal(fm.model, 'sonnet');
-  assert.equal(fm.tools, 'Read, Edit, Write, Grep, Glob');
-  assert.ok(fm.description.length > 40);
-  for (const s of ['Параметры для агентов', 'COMMITS', 'STEP', 'DEPLOY', 'RULES', 'Сейчас', 'Залито на прод', 'Удалить с сервера', 'список изменённых файлов', '/kit:project-init', 'не нашёл строку',
-    '**DOCS**', '`.claude/docs/progress.md`', 'а если его нет, но есть `docs/progress.md`', '**папка документов**', '`deploy-prod.md` в папке документов',
-    '«Решения», «Документы», этапы', '| Файл | О чём | Статус |', '(было <старый путь>)', 'в работе, этап N', 'готово, этап N (ГГГГ-ММ-ДД)', 'перенос в архив делает `/kit:step-done`',
-    '`постоянный` (документ на все этапы',
-    '`—` — следующего шага нет', 'строку шага не добавляй и ничего не помечай `⏳`',
-    '`ГГГГ-ММ-ДД | решение | почему | что отвергли | пользователь`', '| № | Дата | Шаг | Решение | Почему | Что отвергли | Кто |',
-    'старого формата `| Дата | Решение |` — в неё не дописывай', '`С kit 2.8 — с обоснованием:`', 'не записано: нет "почему"',
-    '` → заменено №M`', '`Правило: <что изменилось>`',
-    '**RECONCILE**', '8а. RECONCILE — под таблицей этапа N', '**Раскладка.** Есть папка `journal/`', '`journal/decisions.md` — «Решения»', 'строку шага ищи в журнале, а по частям — и в `journal/stages/`', 'строку `| N | название | ниже |` в оглавление «Этапы»', '5б. Чек-лист плана — только при STATUS `✅` и после DOCS', 'последний шаг этапа закрывается вместе с переносом плана', 'замени `[ ]` на `[x]`', '«в плане <путь> нет строки <STEP>»', 'строк чек-листа в плане этапа (п. 5б)', '«Что сделано» — строка из NEXT после ID', 'Строку «Отчёт заказчику: …» — в «Справочник» дословно',
-    '«Сейчас» — снимок текущего состояния, а не история', '**переписывай целиком**', 'Прежние этапы сюда не переноси', 'Старые пометки', '— кроме «Сейчас» (п. 3а)', '`Сверка ГГГГ-ММ-ДД (сверено с: <…>): пунктов M, сделано K; расхождения: <…>.`', '`на следующий этап (сверка этапа N): <пункты>`',
-    '**CHECK**', '«нет CHECK»', '`| Шаг | Статус | Что сделано | Как проверено | Коммит |`', '`SUMMARY; проверено: CHECK`', 'ячейку «Коммит» — по заголовку колонки']) {
-    assert.ok(body.includes(s), s);
-  }
-  assert.ok(fm.description.includes('DOCS'));
-});
 
 test('коммит — скрипт kit-commit.js, агента git-keeper нет (К54, с 2.14.0)', () => {
   assert.ok(!fs.existsSync(path.join(PLUGIN, 'agents', 'git-keeper.md')), 'агент git-keeper удалён');
@@ -75,10 +52,10 @@ test('коммит — скрипт kit-commit.js, агента git-keeper не�
     const src = fs.readFileSync(f, 'utf8');
     const rel = path.relative(PLUGIN, f).replace(/\\/g, '/');
     assert.ok(!src.includes('kit:git-keeper'), rel + ': агента kit:git-keeper больше нет');
-    if (rel !== 'skills/project-init/SKILL.md') assert.ok(!src.includes('git-keeper'), rel + ': упоминание git-keeper');
+    assert.ok(!src.includes('git-keeper'), rel + ': упоминание git-keeper');
   }
   const { body } = skill('project-init');
-  for (const s of ['kit-commit.js', '`.claude/agents/docs-keeper.md` / `git-keeper.md` — предложи удалить']) assert.ok(body.includes(s), s);
+  for (const s of ['kit-commit.js', 'Проектные копии старых агентов kit']) assert.ok(body.includes(s), s);
 });
 
 test('ссылки ${CLAUDE_PLUGIN_ROOT}/… в агентах и скиллах ведут на существующие файлы', () => {
@@ -99,49 +76,62 @@ test('ссылки ${CLAUDE_PLUGIN_ROOT}/… в агентах и скиллах
   }
 });
 
-test('step-done: docs-keeper, один коммит скриптом kit-commit.js, сообщение heredoc', () => {
+const ref = (name) => fs.readFileSync(path.join(PLUGIN, 'skills', 'step-done', 'reference', name), 'utf8');
+
+test('step-done: ядро — kit-step.js → блоки → kit-journal.js → просмотр → kit-commit.js --inbox; не больше 14 КБ, ветки — в справках (3.0.0)', () => {
+  const file = path.join(PLUGIN, 'skills', 'step-done', 'SKILL.md');
+  assert.ok(fs.statSync(file).size <= 14336, 'ядро step-done — ' + fs.statSync(file).size + ' байт');
   const { fm, body } = skill('step-done');
   assert.equal(fm.name, 'step-done');
-  assert.ok(fm.description.length > 40);
+  assert.ok(fm.description.length > 40 && fm.description.includes('Claude по SSH'));
   assert.notEqual(fm['disable-model-invocation'], 'true', 'Claude вызывает сам');
-  for (const s of ['kit:docs-keeper', 'rev-list --count', 'COMMITS', 'scripts/kit-commit.js" --', "<<'KIT_MSG'", 'Co-Authored-By', 'Код 3', '**Bash**',
-    'AskUserQuestion', 'general-purpose', '/kit:project-init',
-    'сообщение совпало с поданным', 'git -c core.quotepath=false status --porcelain=v1',
-    '/kit:visual', '<папка документов>/visual/', '.claude/scripts/visual/pages.json',
-    '`.claude/docs/progress.md`', '**папка документов**', '`DOCS`', 'work/<имя> — <о чём> — в работе, этап N', '### Закрытие этапа — архив',
-    '«Все в archive/ (Рекомендую)»', '«Оставить в work/»', 'Move-Item -LiteralPath', 'без git', '**оба** пути, старый и новый', 'git увидит переименование',
-    'старые и новые пути документов, перенесённых в архив',
-    '(`постоянный` кандидатом не бывает)', 'статусом `в работе, этап <номер следующего этапа>`', '`git ls-files <старый путь>` пусто', '`NEXT` пустой или `—` при `STEP` вида `N.M`', 'ID не вида `N.M` (`Р6а`) — только по `STAGE`',
-    '### Закрытие этапа — сверка', '`| Пункт | Шаги | Итог |`', '«В «Баги на потом» (Рекомендую)» / «На следующий этап» / «Не делаем — решением»',
-    'RECONCILE: ГГГГ-ММ-ДД | этап N | сверено с:', 'строка «Сверка …» из `RECONCILE`', 'не уверен — «частично» с пояснением',
-    '## 5а. Отправка в удалённый репозиторий', 'Удалённый репозиторий', 'git rev-parse --verify --quiet refs/remotes/<имя>/<ветка>',
-    '${CLAUDE_PLUGIN_ROOT}/scripts/secret-scan.js" --history', 'git push -u <имя> HEAD', 'Git Credential Manager',
-    '`--force`, `pull`, `rebase` и слияния — только после его явного выбора', 'коммит остаётся локально',
-    'находки только «запрещённый путь»', '«Отправить как есть» / «Не отправлять»',
-    'Сам коммит в обход скрипта не делай',
-    '`ГГГГ-ММ-ДД | решение | почему | что отвергли (или —) | пользователь / агент`', 'Не больше 1–3 за шаг', 'не придумывай',
-    '«Заменяет №N»', 'не записано: нет "почему"', '«Решения агента на этом шаге (можно возразить)»',
-    'CHECK: …', '<CHECK дословно>', '**Журнал по частям**', 'journal-split.js" --stage <N>', '`journal/stages/stage-NN.md` и журнал — в FILES', 'строка `- [x] <STEP>` в плане этапа из реестра', 'Заметки («заметка: …»', 'в `NOTES` дословно', '`SUMMARY` (одна строка: что сделано)',
-    '**Входящие ответы**', '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --list', 'Запомни N из последней строки «записей: N»', 'Процедурные ответы пропусти',
-    '${CLAUDE_PLUGIN_ROOT}/scripts/decision-inbox.js" --clear N', 'входящие не трогай',
-    '## 3а. Просмотр перед коммитом', 'mcp__ccd_view__show_pane', '`diff_scope` — `uncommitted`', '«Коммит: сразу»', 'Ctrl+Enter',
-    '«Коммитить»', '«Есть вопросы — оставлю комментарии»', '«Не коммитить пока»', 'продолжи с п. 3а',
-    'mcp__ccd_view__get_layout', 'mcp__ccd_view__close_pane', 'панель уже была открыта — не закрывай']) {
+  for (const s of ['scripts/kit-step.js"', "scripts/kit-journal.js\" <<'KIT_BLOCKS'", 'scripts/kit-commit.js" --inbox', "<<'KIT_MSG'", 'Co-Authored-By', '**Bash**',
+    'reference/ssh.md', 'reference/stage-close.md', 'reference/push.md', '/kit:project-init', 'Код 3', 'Код 4', '<CHECK дословно>',
+    '«Коммитить»', '«Есть вопросы — оставлю комментарии»', '«Не коммитить пока»', 'mcp__ccd_view__show_pane', '`uncommitted`', 'mcp__ccd_view__get_layout',
+    'mcp__ccd_view__close_pane', 'Ctrl+Enter', '«Заменяет №N»', '«Решения агента на этом шаге (можно возразить)»', 'Правило: <что изменилось>',
+    'описание выбранного варианта', '/kit:visual', '.claude/scripts/visual/pages.json', 'git -c core.quotepath=false']) {
     assert.ok(body.includes(s), s);
   }
-  const i5 = body.indexOf('## 5. Проверка');
-  const i5a = body.indexOf('## 5а. Отправка в удалённый репозиторий');
-  assert.ok(i5 > 0 && i5a > i5 && i5a < body.indexOf('## 6. Ответ пользователю'), 'отправка — после проверки коммита');
-  const iList = body.indexOf('decision-inbox.js" --list');
-  const iClear = body.indexOf('decision-inbox.js" --clear N');
-  assert.ok(iList > 0 && iList < body.indexOf('## 3. docs-keeper') && iClear > i5 && iClear < i5a, 'входящие: чтение — до docs-keeper, очистка — после проверки коммита');
-  const iArchive = body.indexOf('### Закрытие этапа — архив');
-  assert.ok(iArchive > 0 && iArchive < body.indexOf('## 3. docs-keeper'), 'архив — до вызова docs-keeper');
-  const iRec = body.indexOf('### Закрытие этапа — сверка');
-  assert.ok(iRec > 0 && iRec < iArchive, 'сверка — до архива: документы этапа ещё в work/');
-  const i3a = body.indexOf('## 3а. Просмотр перед коммитом');
-  assert.ok(i3a > body.indexOf('## 3. docs-keeper') && i3a < body.indexOf('## 4. Коммит'), 'просмотр — после журнала, до коммита');
-  assert.doesNotMatch(body, /^\s*git status/m, 'пути — только с core.quotepath=false');
+  const order = ['## 1. Подготовка', '## 2. Блоки', '## 3. Журнал', '## 4. Просмотр', '## 5. Коммит', '## 6. Ответ пользователю'].map((t) => body.indexOf(t));
+  assert.ok(order.every((v, i) => v > 0 && (i === 0 || v > order[i - 1])), 'порядок: подготовка → блоки → журнал → просмотр → коммит → ответ');
+  for (const old of ['COMMITS', 'Коммит: сразу', '«Работает»', 'general-purpose', 'decision-inbox.js']) assert.ok(!body.includes(old), 'осталось: ' + old);
+});
+
+test('step-done: справки ssh.md, stage-close.md, push.md — порядок SSH, закрытие этапа, отправка (3.0.0)', () => {
+  const ssh = ref('ssh.md');
+  for (const s of ['scripts/ssh-deploy.js" --go', '«Залить на сервер»', '«Не заливать пока»', 'свежий сухой прогон', '«Повторить заливку» / «Остановиться»', 'повтор безопасен',
+    '«Добавить в «Не выкладывать» (Рекомендую)» / «Остановиться»', '«В этот шаг (уедут на сервер и в коммит)» / «Остановиться — разберусь с ними»',
+    'уезжает на сервер всё равно', '**Отказ от шага**', 'ssh-deploy.js" --go -- <пути>', 'DEPLOY Файлы:', 'scripts/ssh-deploy.js" --go --docs',
+    '«Повторить заливку документов» (Рекомендую) / «Остановиться»', 'после проверки на сервере — коммит, а при заданном «Удалённом репозитории» — и отправка', 'browser_batch']) {
+    assert.ok(ssh.includes(s), 'ssh.md: ' + s);
+  }
+  assert.ok(!ssh.includes('«Работает»'), 'ssh.md: без проверки руками пользователя («Код пишет: пользователь» удалён)');
+  const sc = ref('stage-close.md');
+  for (const s of ['`| Пункт | Шаги | Итог |`', '«В «Баги на потом» (Рекомендую)» / «На следующий этап» / «Не делаем — решением»', 'RECONCILE: ГГГГ-ММ-ДД | этап N | сверено с:',
+    'не уверен — «частично» с пояснением', '«Все в archive/ (Рекомендую)»', '«Оставить в work/»', 'Move-Item -LiteralPath', '**оба** пути, старый и новый',
+    'git увидит переименование', '(`постоянный` кандидатом не бывает)', '`git ls-files <старый путь>` пусто', 'scripts/journal-split.js" --stage <N>']) {
+    assert.ok(sc.includes(s), 'stage-close.md: ' + s);
+  }
+  assert.ok(sc.indexOf('kit-journal.js') >= 0 && sc.indexOf('kit-journal.js') < sc.indexOf('journal-split.js" --stage'), 'перенос этапа — после записи журнала');
+  const push = ref('push.md');
+  for (const s of ['нет сети, входа или вышло время', 'на удалённом есть коммиты, которых здесь нет', 'в истории секреты', 'в истории запрещённые пути',
+    '«Отправить как есть» / «Не отправлять»', '`--force`, `pull`, `rebase`', 'Git Credential Manager', 'коммит остаётся локально']) {
+    assert.ok(push.includes(s), 'push.md: ' + s);
+  }
+});
+
+test('docs-keeper нет: ни агента, ни упоминаний в плагине, README и описании маркетплейса (3.0.0)', () => {
+  assert.ok(!fs.existsSync(path.join(PLUGIN, 'agents', 'docs-keeper.md')), 'агент docs-keeper удалён');
+  const hits = [];
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).forEach((e) => {
+    const p = path.join(d, e.name);
+    if (e.isDirectory()) {
+      if (e.name !== 'node_modules') walk(p);
+    } else if (/\.(md|js|json|php)$/.test(e.name) && fs.readFileSync(p, 'utf8').includes('docs-keeper')) hits.push(path.relative(PLUGIN, p));
+  });
+  walk(PLUGIN);
+  for (const f of ['README.md', '.claude-plugin/marketplace.json']) if (fs.readFileSync(path.join(PLUGIN, '..', '..', f), 'utf8').includes('docs-keeper')) hits.push(f);
+  assert.deepEqual(hits, []);
 });
 
 test('why: только чтение, цепочка git → журнал → документы, ответ со ссылками', () => {
@@ -163,59 +153,19 @@ test('report: отчёт заказчику простыми словами, п�
   assert.ok(fm.description.length > 40);
   for (const s of ['«Отчёт заказчику: ГГГГ-ММ-ДД …»', 'с начала текущего этапа', 'git log --since=<дата> --format="%ad %s" --date=short', '«Залито на прод»',
     '«Кто: агент»', 'Внутренние решения о процессе и инструментах', '«Баги на потом» без `✅`', '**Не включай никогда:**', 'хеши коммитов, ID шагов, пути и имена файлов',
-    'Раздел без пунктов не выводи', 'Нужно ваше подтверждение', '**Без кухни разработки:**', 'Из описаний шагов не бери', '**Журнал по частям**', '`journal/stages/stage-NN.md`', 'только по просьбе', 'decision-inbox.js" --note "Отчёт заказчику:']) {
+    'Раздел без пунктов не выводи', 'Нужно ваше подтверждение', '**Без кухни разработки:**', 'Из описаний шагов не бери', '**Журнал по частям**', '`journal/stages/stage-NN.md`', 'только по просьбе', 'decision-inbox.js" --note "Отчёт заказчику:',
+    'по ID в начале заголовка', 'git log --format="%h %s"', 'при «Выкладка: PhpStorm Always» — шаги, закоммиченные в периоде']) {
     assert.ok(body.includes(s), s);
   }
   assert.doesNotMatch(body, /docs-keeper"|git commit|git add/, 'отчёт ничего не коммитит');
 });
 
-test('step-done: порядок SSH — просмотр → заливка ssh-deploy.js → проверка на сервере → docs-keeper → коммит (этап 32)', () => {
-  const { fm, body } = skill('step-done');
-  assert.ok(fm.description.includes('Claude по SSH'));
-  for (const s of ['scripts/ssh-deploy.js"', 'scripts/ssh-deploy.js" --go', 'порядком **SSH**', '«Залить на сервер»', '«Не заливать пока»',
-    '## 3б. Заливка по SSH и проверка на сервере', 'повтор безопасен', '«Повторить заливку» / «Остановиться»', '«Работает» / «Не работает — опишу»',
-    'снова п. 3а', '`Коммит` — не передавай', 'DEPLOY Файлы:', 'Нечего заливать']) {
-    assert.ok(body.includes(s), s);
-  }
-  const i3a = body.indexOf('## 3а. Просмотр перед коммитом');
-  const i3b = body.indexOf('## 3б. Заливка по SSH');
-  assert.ok(i3a > 0 && i3b > i3a && i3b < body.indexOf('## 4. Коммит'), '3б — между просмотром и коммитом');
-});
-
-test('docs-keeper: «Залито на прод» или «Залито на дев», COMMITS — и пустые «Коммит» плана по «Шаг» (этап 32)', () => {
-  const { body } = agent('docs-keeper');
-  for (const s of ['«Залито на дев»', 'какая есть в плане', 'по колонке «Шаг»']) assert.ok(body.includes(s), s);
-});
-
-test('финальное ревью этапа 32: чужие правки при SSH, откат шага, точка отсчёта, таблица по окружению у docs-keeper', () => {
-  const sd = skill('step-done').body;
-  for (const s of ['«В этот шаг (уедут на сервер и в коммит)» / «Остановиться — разберусь с ними»', 'уезжает на сервер всё равно',
-    '**Отказ от шага**', 'ssh-deploy.js" --go -- <пути>']) {
-    assert.ok(sd.includes(s), 'step-done: ' + s);
-  }
+test('финальное ревью этапа 32: точка отсчёта заливки в project-init', () => {
   const pi = skill('project-init').body;
   for (const s of ['**Точка отсчёта заливки**', '«Сервер совпадает с проектом — записать точку отсчёта»']) assert.ok(pi.includes(s), 'project-init: ' + s);
-  const dk = agent('docs-keeper').body;
-  for (const s of ['по параметру «Окружение»', 'нужной таблицы нет — добавь раздел', 'в «Файлы» есть `ssh-deploy.js`']) assert.ok(dk.includes(s), 'docs-keeper: ' + s);
 });
 
-test('К56–К60: «не файл» — в «Не выкладывать», свежий сухой прогон, п. 3а в порядке SSH, описание «Залить на сервер»', () => {
-  const sd = skill('step-done').body;
-  for (const s of ['«Добавить в «Не выкладывать» (Рекомендую)» / «Остановиться»', 'свежий сухой прогон', 'в порядке **SSH** docs-keeper ещё не вызывался',
-    'после проверки на сервере — коммит, а при заданном «Удалённом репозитории» — и отправка']) {
-    assert.ok(sd.includes(s), 'step-done: ' + s);
-  }
-});
-
-test('«Документы на сервере» в режиме «Claude по SSH»: п. 3в step-done, вопрос и первая заливка в project-init, шаблоны (этап 35)', () => {
-  const sd = skill('step-done').body;
-  for (const s of ['## 3в. Заливка документов', 'scripts/ssh-deploy.js" --go --docs', '«Повторить заливку документов» (Рекомендую) / «Остановиться»',
-    'снова п. 3в', 'документы уедут на сервер (`ssh-deploy.js --docs`)', 'перед коммитом — п. 3в']) {
-    assert.ok(sd.includes(s), 'step-done: ' + s);
-  }
-  const i3b = sd.indexOf('## 3б. Заливка по SSH');
-  const i3v = sd.indexOf('## 3в. Заливка документов');
-  assert.ok(i3v > i3b && i3v < sd.indexOf('## 4. Коммит'), '3в — между 3б и коммитом');
+test('«Документы на сервере» в режиме «Claude по SSH»: вопрос и первая заливка в project-init, шаблоны (этап 35)', () => {
   const pi = skill('project-init').body;
   for (const s of ['при «PhpStorm Always» и «Claude по SSH» — вопрос «Документы на сервере»', 'scripts/ssh-deploy.js" --go --docs --all', '**Документы на сервер**']) {
     assert.ok(pi.includes(s), 'project-init: ' + s);
@@ -477,7 +427,7 @@ test('в плагине нет канала через Командную PHP-с
   assert.deepEqual(hits, []);
 });
 
-module.exports = { frontmatter, agent, skill };
+module.exports = { frontmatter, skill };
 
 test('скиллы Битрикса: project-init ставит их bitrix-skills.js (п. 4.6, только bitrix), шаблон CLAUDE.md — правило пользоваться ими', () => {
   const read = (...p) => fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', ...p), 'utf8');
