@@ -72,7 +72,7 @@ test('CLAUDE.md: документы — в .claude/docs, в «Не выклад�
 test('CLAUDE.md: раздел параметров со всеми ключами', () => {
   const v = parseParams(read('CLAUDE.md'));
   assert.ok(v, 'нет раздела «Параметры для агентов»');
-  for (const k of ['режим', 'код пишет', 'окружение', 'выкладка', 'прод', 'дев', 'ssh прод', 'ssh дев', 'php на сервере', 'php', 'журнал', 'план выкладки', 'id шага', 'не выкладывать', 'не коммитить', 'секреты', 'удалённый репозиторий']) {
+  for (const k of ['режим', 'окружение', 'выкладка', 'прод', 'дев', 'ssh прод', 'ssh дев', 'php на сервере', 'php', 'журнал', 'план выкладки', 'id шага', 'не выкладывать', 'не коммитить', 'секреты', 'удалённый репозиторий']) {
     assert.ok(k in v, 'нет ключа ' + k);
   }
 });
@@ -108,7 +108,8 @@ test('progress.md и journal/*.md: журнал по частям — разде
   const decisions = parseTable(getSection(dec, 'Решения'));
   assert.deepEqual(Object.keys(decisions[0]), ['№', 'Дата', 'Шаг', 'Решение', 'Почему', 'Что отвергли', 'Кто']);
   const rows = parseTable(getSection(md, 'Этап 0'));
-  assert.deepEqual(Object.keys(rows[0]), ['Шаг', 'Статус', 'Что сделано', 'Как проверено', 'Коммит']);
+  assert.deepEqual(Object.keys(rows[0]), ['Шаг', 'Статус', 'Что сделано', 'Как проверено'], 'без столбца «Коммит» (с 3.0.0)');
+  assert.ok(!md.includes('{{ХЕШ}}'), 'хеша первого коммита в журнале нет');
   assert.ok(rows[0]['Как проверено'], 'у 0.1 заполнено «Как проверено»');
   assert.equal(rows[0]['Шаг'], '0.1');
 });
@@ -129,6 +130,9 @@ test('deploy-prod.md: разделы, таблица «Залито на про�
   assert.match(md, /^# Выкладка на \{\{прод \| дев\}\} — \{\{ДОМЕН\}\}$/m);
   assert.ok(getSection(md, 'Общие правила').includes('ssh-deploy.js'));
   assert.match(getSection(md, 'Залито на {{прод | дев}}'), /\| Шаг \| Дата \| Файлы \| Коммит \| Проверка \|/);
+  const always = getSection(md, 'Общие правила').split(' | ').find((v) => v.includes('Заливает PhpStorm автоматически'));
+  assert.match(always, /таблица «Залито на …» не ведётся/, 'при автозаливке «Залито» не ведётся (с 3.0.0)');
+  assert.match(always, /«Удалить с сервера»/);
   assert.match(getSection(md, 'Удалить с сервера'), /\| Путь \| Почему \| Удалён \|/);
 });
 
@@ -138,6 +142,12 @@ test('htaccess-deny: Apache 2.4 и 2.2', () => {
   assert.match(h, /Deny from all/);
 });
 
-test('шаблон CLAUDE.md: «Коммит: после просмотра» (с 2.15.0)', () => {
-  assert.match(read('CLAUDE.md'), /^- Коммит: после просмотра$/m);
+test('шаблон CLAUDE.md: без параметров «Код пишет» и «Коммит», проверка страницы — пакетом browser_batch (с 3.0.0)', () => {
+  const md = read('CLAUDE.md');
+  const v = parseParams(md);
+  assert.ok(!('код пишет' in v) && !('коммит' in v), 'параметров «Код пишет» и «Коммит» нет');
+  assert.ok(!md.includes('Код пишет {{') && !md.includes('Claude даёт один маленький шаг'), 'варианта «код пишет пользователь» нет');
+  const how = /^- \*\*Код пишет Claude\.\*\* \{\{(.*)\}\}$/m.exec(md);
+  assert.ok(how, 'правило «Код пишет Claude» с вариантами по выкладке');
+  for (const variant of how[1].split(' | ')) assert.ok(variant.includes('browser_batch'), 'вариант без browser_batch: ' + variant);
 });

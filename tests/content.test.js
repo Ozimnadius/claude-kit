@@ -199,14 +199,12 @@ test('финальное ревью этапа 32: чужие правки пр�
   for (const s of ['по параметру «Окружение»', 'нужной таблицы нет — добавь раздел', 'в «Файлы» есть `ssh-deploy.js`']) assert.ok(dk.includes(s), 'docs-keeper: ' + s);
 });
 
-test('К56–К60: «не файл» — в «Не выкладывать», свежий сухой прогон, п. 3а в порядке SSH, описание «Залить на сервер», хук и шаблон', () => {
+test('К56–К60: «не файл» — в «Не выкладывать», свежий сухой прогон, п. 3а в порядке SSH, описание «Залить на сервер»', () => {
   const sd = skill('step-done').body;
   for (const s of ['«Добавить в «Не выкладывать» (Рекомендую)» / «Остановиться»', 'свежий сухой прогон', 'в порядке **SSH** docs-keeper ещё не вызывался',
     'после проверки на сервере — коммит, а при заданном «Удалённом репозитории» — и отправка']) {
     assert.ok(sd.includes(s), 'step-done: ' + s);
   }
-  const tpl = fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', 'templates', 'CLAUDE.md'), 'utf8');
-  assert.ok(tpl.includes('при «Claude по SSH» — после заливки в `/kit:step-done`'), 'шаблон: «Код пишет пользователь» в режиме SSH');
 });
 
 test('«Документы на сервере» в режиме «Claude по SSH»: п. 3в step-done, вопрос и первая заливка в project-init, шаблоны (этап 35)', () => {
@@ -249,13 +247,13 @@ test('project-init: только командой, все шаги и шабло
   assert.equal(fm.name, 'project-init');
   assert.equal(fm['disable-model-invocation'], 'true');
   for (const s of ['AskUserQuestion', 'secret-scan.js', 'site-probe.js', 'check-closed.js', 'deployment.xml', 'watcherTasks.xml',
-    'webServers.xml', '0.1: Исходники с прода (копия прода)', 'journal/decisions.md`, `journal/bugs.md`, `journal/reference.md` (журнал по частям', '«Перевести на части (Рекомендую)»', 'journal-split.js" --migrate', 'kit-commit.js', '/kit:step-done', 'core.autocrlf', 'core.quotepath',
+    'webServers.xml', '0.1: Исходники с прода (копия прода)', 'journal/decisions.md`, `journal/bugs.md`, `journal/reference.md` (журнал по частям', 'journal-split.js" --migrate', 'kit-commit.js', '/kit:step-done', 'core.autocrlf', 'core.quotepath',
     'Варианта «это не секрет» нет', '4.0', 'сам не коммить', 'не больше 4 вопросов', 'Grep с `-o` по `rootFolder=',
     '${CLAUDE_PLUGIN_ROOT}/scripts/phpstorm-exclude.js" --also', '${CLAUDE_PLUGIN_ROOT}/scripts/phpstorm-exclude.js" --check --also', 'Код 2 — `deployment.xml` не разобран',
     'File → Reload All from Disk', '`.idea`, `.git` и `.claude` исключаются всегда', '«Больше ничего»', 'сервера автозаливки',
     'это сервер окружения', 'норма — 404 «нет на сервере»',
     '4.5 Проверки выкладки — любой режим, если известен адрес сервера (прод, дев или адрес из п. 4.0)', 'Проверяй адрес сервера окружения',
-    '### 4.7 Переезд со старой раскладки', '### 4.8 Закрыть шаг', 'git check-ignore -q .claude/docs/progress.md', '`!/.claude/docs/`, `!/.claude/docs/**`',
+    '### 4.7 Переезд на формат kit 3.0', '### 4.8 Закрыть шаг', 'git check-ignore -q .claude/docs/progress.md', '`!/.claude/docs/`, `!/.claude/docs/**`',
     'git remote -v', '### 4.1а Удалённый репозиторий', 'git remote add origin <адрес>', 'Удалённый репозиторий: origin',
     'закрытым и **пустым**', 'с логином, паролем или токеном', 'Git Credential Manager', 'git remote set-url origin <адрес>',
     'git ls-remote --heads origin', 'он создан не пустым',
@@ -283,7 +281,8 @@ test('project-init: только командой, все шаги и шабло
   }
   const q3 = /3\. Исключения деплоя[^\n]*/.exec(body)[0];
   assert.deepEqual(q3.split('. В тексте вопроса')[0].match(/«[^»]*»/g),['«`.gitignore`»', '«`local/modules`»', '«Больше ничего»'], 'варианты вопроса про исключения: ' + q3);
-  const i47 = body.indexOf('### 4.7 Переезд');
+  const i47 = body.indexOf('#### Перенос `docs/` в `.claude/docs`');
+  assert.ok(i47 > 0, 'подраздел «Перенос docs/ в .claude/docs» в п. 4.7');
   const steps = ['1. **Исключения.**', '2. **`.gitignore`.**', '3. **Старые копии на сервере.**', '4. **Таблица «файл → куда»**', '5. **Перенос**', '6. **Закрытие**'].map((t) => body.indexOf(t, i47));
   assert.ok(steps.every((v, i) => v > i47 && (i === 0 || v > steps[i - 1])), 'переезд: исключения → .gitignore → старые копии → таблица → перенос → закрытие');
   assert.ok(!body.includes('docs/.htaccess` и `.claude/.htaccess`'), 'docs/.htaccess — только при старой раскладке');
@@ -343,6 +342,28 @@ test('project-init: выкладка — после SSH, варианты по �
   // Этап 0 — только инициализация: шаг 0.2 закрывает его, следующий — этап 1.
   for (const s of ['STAGE `1 — ', '«1.1 — изучение задачи»']) assert.ok(body.slice(s48).includes(s), 'п. 4.8: ' + s);
   assert.ok(!body.includes('0.3 — изучение задачи'), 'рабочие шаги — не в этапе 0');
+});
+
+test('project-init: переезд на формат kit 3.0 — пункт плана на каждый признак, вопрос о скиллах Битрикса, без «Код пишет» и «Коммит» (этап 36)', () => {
+  const { body } = skill('project-init');
+  // Скиллы Битрикса — отдельный вопрос при каждом запуске (раздел 2), а не строка плана на согласие.
+  const q = body.indexOf('«Ставить скиллы Битрикса?»');
+  assert.ok(q > 0 && q < body.indexOf('## 3. План на согласие'), 'вопрос о скиллах — в разделе 2');
+  for (const s of ['«Да (Рекомендую)»', '«Нет» — не ставить, уже поставленные не трогать', 'уже поставленные обновляются до последних']) {
+    assert.ok(body.includes(s), s);
+  }
+  // Переезд: признаки — из правила хука; строка плана на признак; отказ — kit 3.0 шаги не закрывает.
+  for (const s of ['переезд на формат kit 3.0', 'в старом формате (', 'kit 3.0 в проекте шаги не закрывает', 'journal-split.js" --migrate',
+    'вставь столбец «Как проверено»', '`С kit 2.8 — с обоснованием:`', '**Окружение: дев+прод**', '**Выкладка: вручную; дев — PhpStorm Always**',
+    'Строки параметров «Код пишет» и «Коммит» (с 3.0.0 их нет) — предложи убрать']) {
+    assert.ok(body.includes(s), s);
+  }
+  assert.ok(!body.includes('«Перевести на части (Рекомендую)»'), 'журнал на части — пункт переезда, без отдельного вопроса');
+  const s48 = body.slice(body.indexOf('### 4.8 Закрыть шаг'));
+  assert.ok(s48.includes('переезд на kit 3.0'), 'п. 4.8: шаг переезда — в текущем этапе или новый этап «переезд на kit 3.0»');
+  // Удалённые режимы: вопроса «кто пишет код» и параметра «Коммит» нет.
+  assert.ok(!/Кто пишет код/.test(body), 'вопроса «Кто пишет код» нет');
+  assert.ok(!body.includes('Параметр «Коммит» — `после просмотра`'), 'указаний о параметре «Коммит» нет');
 });
 
 test('project-init: один сервер на проект — окружение прод/дев, адрес и SSH одного сервера, «Claude по SSH» (этап 32)', () => {
@@ -463,7 +484,7 @@ test('скиллы Битрикса: project-init ставит их bitrix-skill
   const init = read('SKILL.md');
   assert.ok(fs.existsSync(path.join(PLUGIN, 'scripts', 'bitrix-skills.js')));
   for (const s of ['node "${CLAUDE_PLUGIN_ROOT}/scripts/bitrix-skills.js"', 'git check-ignore -q .claude/skills/bitrix-framework/SKILL.md',
-    '`/.claude/skills/`', 'без `bitrix24-*`', 'обновить скиллы Битрикса']) {
+    '`/.claude/skills/`', 'без `bitrix24-*`', '«Ставить скиллы Битрикса?»']) {
     assert.ok(init.includes(s), 'project-init: ' + s);
   }
   const tpl = read('templates', 'CLAUDE.md');
