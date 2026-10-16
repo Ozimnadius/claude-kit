@@ -38,6 +38,8 @@ test('frontmatter навыков и агентов: значение с «: » �
 });
 
 const skill = (name) => frontmatter(path.join(PLUGIN, 'skills', name, 'SKILL.md'));
+// README без раздела «Переход на 3.0»: заметка о переходе называет удалённое (агента, команды) — это история, как журнал.
+const readmeNow = () => fs.readFileSync(path.join(PLUGIN, '..', '..', 'README.md'), 'utf8').replace(/^## Переход на 3\.0\n[\s\S]*?(?=^## )/m, '');
 
 test('коммит — скрипт kit-commit.js, агента git-keeper нет (К54, с 2.14.0)', () => {
   assert.ok(!fs.existsSync(path.join(PLUGIN, 'agents', 'git-keeper.md')), 'агент git-keeper удалён');
@@ -130,7 +132,8 @@ test('docs-keeper нет: ни агента, ни упоминаний в пла
     } else if (/\.(md|js|json|php)$/.test(e.name) && fs.readFileSync(p, 'utf8').includes('docs-keeper')) hits.push(path.relative(PLUGIN, p));
   });
   walk(PLUGIN);
-  for (const f of ['README.md', '.claude-plugin/marketplace.json']) if (fs.readFileSync(path.join(PLUGIN, '..', '..', f), 'utf8').includes('docs-keeper')) hits.push(f);
+  if (readmeNow().includes('docs-keeper')) hits.push('README.md');
+  if (fs.readFileSync(path.join(PLUGIN, '..', '..', '.claude-plugin', 'marketplace.json'), 'utf8').includes('docs-keeper')) hits.push('.claude-plugin/marketplace.json');
   assert.deepEqual(hits, []);
 });
 
@@ -178,7 +181,7 @@ test('/kit:why и /kit:deploy-list удалены: ни скиллов, ни с�
     } else if (/\.(md|js|json|php)$/.test(e.name) && /deploy-list|kit:why/.test(fs.readFileSync(p, 'utf8'))) hits.push(path.relative(PLUGIN, p));
   });
   walk(PLUGIN);
-  if (/deploy-list|kit:why/.test(fs.readFileSync(path.join(PLUGIN, '..', '..', 'README.md'), 'utf8'))) hits.push('README.md');
+  if (/deploy-list|kit:why/.test(readmeNow())) hits.push('README.md');
   assert.deepEqual(hits, []);
 });
 

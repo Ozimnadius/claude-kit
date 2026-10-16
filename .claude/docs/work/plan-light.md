@@ -19,7 +19,7 @@
 - [x] 36.5 — `kit-step.js` и `kit-commit.js --inbox`, `--push`
 - [x] 36.6 — step-done: ядро и справки, удаление docs-keeper, `/kit:report`
 - [x] 36.7 — удалить `/kit:why` и `/kit:deploy-list`
-- [ ] 36.8 — claude-kit: спек заморожен, правила выпуска; выпуск 3.0.0
+- [x] 36.8 — claude-kit: спек заморожен, правила выпуска; выпуск 3.0.0
 
 ## Общие ограничения
 

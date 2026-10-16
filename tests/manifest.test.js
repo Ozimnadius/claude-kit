@@ -18,3 +18,12 @@ test('marketplace.json и plugin.json согласованы', () => {
   assert.match(pl.version, /^\d+\.\d+\.\d+$/);
   assert.equal(mp.plugins[0].version, pl.version);
 });
+
+test('мажорный выпуск: в README раздел «Переход на N.0», обзор собран по этой мажорной версии и без удалённого (3.0.0)', () => {
+  const major = readJson('plugins/kit/.claude-plugin/plugin.json').version.split('.')[0];
+  const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
+  assert.match(readme, new RegExp('^## Переход (с \\S+ )?на ' + major + '\\.0', 'm'), 'README: раздел о переходе на ' + major + '.0');
+  const overview = fs.readFileSync(path.join(ROOT, '.claude', 'docs', 'work', 'overview', 'overview.md'), 'utf8');
+  assert.match(overview, new RegExp('`plugins/kit` версии ' + major + '\\.\\d+\\.\\d+'), 'обзор пересобран по версии ' + major + '.x');
+  for (const gone of ['docs-keeper', '/kit:why', '/kit:deploy-list', 'deploy-list.js']) assert.ok(!overview.includes(gone), 'в обзоре осталось: ' + gone);
+});
