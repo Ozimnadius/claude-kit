@@ -83,4 +83,5 @@
 - 2026-10-15 (шаг 32.7): этап 32 закрыт, выпуск 2.17.0; после коммита — с согласия пользователя: `git push origin master`, `claude plugin marketplace update claude-kit`, `claude plugin update kit@claude-kit` (установлен 2.16.0).
 - 2026-10-15 (шаг 33.1): этап 33 закрыт, выпуск 2.17.1 (К56–К60); после коммита — с согласия пользователя: `git push origin master`, `claude plugin marketplace update claude-kit`, `claude plugin update kit@claude-kit` (установлен 2.17.0).
 - 2026-10-15 (шаг 34.1): этап 34 закрыт, выпуск 2.17.2 (К61); после коммита — с согласия пользователя: `git push origin master`, `claude plugin marketplace update claude-kit`, `claude plugin update kit@claude-kit` (установлен 2.17.1).
+- 2026-10-16 (шаг 36.1): замеры «тяжести» kit — в спеке этапа 36 `work/spec-light.md`, раздел «Откуда»; считались по записям сессий Claude Code на компьютере пользователя, скрипты замера в репозиторий не входят.
 - Отчёт заказчику: 2026-10-05 (период с 2026-10-05)
