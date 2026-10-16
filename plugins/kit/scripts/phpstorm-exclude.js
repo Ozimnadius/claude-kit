@@ -5,6 +5,7 @@
 // сопоставленного с корнем проекта. Только добавляет. Внешний процесс: защита путей Claude Code его не касается.
 // «Документы на сервере: да» — из .claude на сервер уезжают docs, CLAUDE.md и .htaccess: исключение .claude
 // убирается (единственное удаление), остальное в ней исключается поимённо; нет .claude/.htaccess — создаётся.
+// При «Выкладка: Claude по SSH» — как при «нет»: PhpStorm не заливает, документы везёт ssh-deploy.js --docs.
 //   node phpstorm-exclude.js --hook                   хук SessionStart: только в kit-проекте; JSON { systemMessage,
 //                                                     hookSpecificOutput.additionalContext } — если что-то добавлено или не вышло
 //   node phpstorm-exclude.js [--also a,b]             из корня проекта (project-init): дописать; код 0 / 2
@@ -15,6 +16,7 @@ const path = require('path');
 const { readStdinJson, resolveProjectDir, kitInfo, docsInClaude, DOCS_KEEP, docsOnServer } = require('./lib/project');
 const { splitList } = require('./lib/params');
 const { DeploymentError, readDeployment, isExcluded, addExclusions, removeExclusions } = require('./lib/deployment');
+const { isSsh } = require('./lib/deploy');
 
 const MUST = ['.idea', '.git', '.claude'];
 const RELOAD = 'Если PhpStorm открыт и не подхватил — File → Reload All from Disk.';
@@ -28,6 +30,10 @@ const TOOLS = ['.superpowers', '.worktrees', 'docs/superpowers'];
 const DENY = path.join(__dirname, '..', 'skills', 'project-init', 'templates', 'htaccess-deny');
 const OPEN_NOTE = 'На сервер уезжают .claude/docs, .claude/CLAUDE.md и .claude/.htaccess (параметр «Документы на сервере: да») — '
   + 'после заливки проверьте снаружи, что /.claude/ закрыта (check-closed).';
+
+// Документы открыты для PhpStorm: «Документы на сервере: да» и не «Claude по SSH» — в этом режиме PhpStorm не заливает,
+// .claude для него закрыта при любом значении параметра, документы везёт ssh-deploy.js --docs (с 2.18.0).
+const docsOpen = (info) => docsOnServer(info.params) && !isSsh(info);
 
 // Простой путь от корня проекта: без масок, без «(кроме …)», не абсолютный и не наружу — иначе null.
 function plainPath(item) {
@@ -56,7 +62,7 @@ function claudeRest(dir) {
 }
 
 function required(info, also) {
-  const open = docsOnServer(info.params);
+  const open = docsOpen(info);
   const list = open ? ['.idea', '.git', ...claudeRest(info.dir), ...EARLY, info.visualRel] : [...MUST];
   if (!docsInClaude(info.docsRel)) list.push(info.docsRel);
   for (const item of [...info.params.list('Не выкладывать'), ...also, ...TOOLS]) list.push(item);
@@ -104,7 +110,7 @@ function run(start, { hook = false, check = false, also = [] } = {}) {
   if (!/<component\s+name="PublishConfigData"/.test(xml)) {
     return { code: 0, lines: hook ? [] : ['Настроек выкладки PhpStorm нет (.idea/deployment.xml) — исключать нечего.'] };
   }
-  const open = docsOnServer(info.params);
+  const open = docsOpen(info);
   const deployment = readDeployment(xml);
   const live = open && deployment.servers.some((s) => s.root);
   const notes = live ? [blockedByName(deployment.names)].filter(Boolean) : [];

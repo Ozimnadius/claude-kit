@@ -209,6 +209,26 @@ test('К56–К60: «не файл» — в «Не выкладывать», с�
   assert.ok(tpl.includes('при «Claude по SSH» — после заливки в `/kit:step-done`'), 'шаблон: «Код пишет пользователь» в режиме SSH');
 });
 
+test('«Документы на сервере» в режиме «Claude по SSH»: п. 3в step-done, вопрос и первая заливка в project-init, шаблоны (этап 35)', () => {
+  const sd = skill('step-done').body;
+  for (const s of ['## 3в. Заливка документов', 'scripts/ssh-deploy.js" --go --docs', '«Повторить заливку документов» (Рекомендую) / «Остановиться»',
+    'снова п. 3в', 'документы уедут на сервер (`ssh-deploy.js --docs`)', 'перед коммитом — п. 3в']) {
+    assert.ok(sd.includes(s), 'step-done: ' + s);
+  }
+  const i3b = sd.indexOf('## 3б. Заливка по SSH');
+  const i3v = sd.indexOf('## 3в. Заливка документов');
+  assert.ok(i3v > i3b && i3v < sd.indexOf('## 4. Коммит'), '3в — между 3б и коммитом');
+  const pi = skill('project-init').body;
+  for (const s of ['при «PhpStorm Always» и «Claude по SSH» — вопрос «Документы на сервере»', 'scripts/ssh-deploy.js" --go --docs --all', '**Документы на сервер**']) {
+    assert.ok(pi.includes(s), 'project-init: ' + s);
+  }
+  const tpl = fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', 'templates', 'CLAUDE.md'), 'utf8');
+  assert.ok(tpl.includes('| из `.claude/` на сервер уезжают только документы: их заливает `/kit:step-done`'), 'шаблон CLAUDE.md: вариант для SSH');
+  const dp = fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', 'templates', 'deploy-prod.md'), 'utf8');
+  assert.ok(dp.includes('`ssh-deploy.js --docs`'), 'шаблон deploy-prod.md: вариант для SSH');
+  assert.ok(dp.includes('| из `.claude/` автозаливка PhpStorm везёт на сервер только документы'), 'шаблон deploy-prod.md: вариант для PhpStorm');
+});
+
 test('deploy-list и report: таблица по окружению, режим «Claude по SSH» (этап 32)', () => {
   const dl = skill('deploy-list');
   assert.ok(dl.fm.description.includes('Claude по SSH'));
@@ -284,9 +304,9 @@ test('project-init: только командой, все шаги и шабло
   }
 });
 
-test('project-init: вопрос «Документы на сервере» — только при автозаливке, шаблон пишет ответ (К55)', () => {
+test('project-init: вопрос «Документы на сервере» — при автозаливке и «Claude по SSH», шаблон пишет ответ (К55, этап 35)', () => {
   const { body } = skill('project-init');
-  for (const s of ['вопрос «Документы на сервере»', 'Без автозаливки вопрос не задавай', 'Параметр «Документы на сервере» — ответ на вопрос «Документы на сервере»',
+  for (const s of ['вопрос «Документы на сервере»', 'При «вручную» вопрос не задавай', 'Параметр «Документы на сервере» — ответ на вопрос «Документы на сервере»',
     'исключение `.claude` сменится поимённым', '[kit] Документы на сервер не уедут', 'при «Документы на сервере: да» — 403']) {
     assert.ok(body.includes(s), s);
   }

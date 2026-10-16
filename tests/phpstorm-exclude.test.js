@@ -181,6 +181,17 @@ test('«Документы на сервере: да»: «Exclude items by name�
   assert.doesNotMatch(msg(hook(off)), /не уедут/, 'параметр выключен — документы и не должны уезжать');
 });
 
+test('«Claude по SSH» и «Документы на сервере: да»: PhpStorm не заливает — .claude остаётся в Excluded Paths, .htaccess не создаётся, предупреждения про имена нет (этап 35)', () => {
+  const xml = GAMMA.replace('autoUpload="Always"', 'exclude=".svn;.idea;.git;*.md;docs;node_modules" autoUpload="Always"');
+  const files = docsProject({ 'Выкладка': 'Claude по SSH' });
+  delete files['.claude/.htaccess'];
+  const dir = makeProject({ ...files, [XML]: xml });
+  const m = msg(hook(dir));
+  assert.doesNotMatch(m, /не уедут|убрано|создан/);
+  assert.ok(excluded(dir).includes('.claude'));
+  assert.equal(fs.existsSync(path.join(dir, '.claude/.htaccess')), false);
+});
+
 test('--check: 1 — не хватает (файл не меняется), 0 — после записи; 2 — не разобран; --also без значения', () => {
   const dir = makeProject({ [XML]: NO_BLOCK });
   const miss = cli(dir, '--check', '--also', '.gitignore, local/modules');
