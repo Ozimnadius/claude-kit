@@ -16,7 +16,7 @@
 - [x] 36.2 — один формат в хуке и библиотеках: `oldFormat`, правила хука, без удалённых режимов и старых значений
 - [x] 36.3 — `/kit:project-init` и шаблоны: переезд, вопрос о скиллах Битрикса, без «Коммит» и удалённых параметров
 - [x] 36.4 — `kit-journal.js` и `lib/journal.js`
-- [ ] 36.5 — `kit-step.js` и `kit-commit.js --inbox`, `--push`
+- [x] 36.5 — `kit-step.js` и `kit-commit.js --inbox`, `--push`
 - [ ] 36.6 — step-done: ядро и справки, удаление docs-keeper, `/kit:report`
 - [ ] 36.7 — удалить `/kit:why` и `/kit:deploy-list`
 - [ ] 36.8 — claude-kit: спек заморожен, правила выпуска; выпуск 3.0.0

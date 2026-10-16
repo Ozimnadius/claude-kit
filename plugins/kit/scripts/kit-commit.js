@@ -2,23 +2,30 @@
 'use strict';
 // Один коммит проверенного шага (с 2.14.0, вместо агента-модели; К54 — модель искажала слова в сообщении).
 // Запуск в корне проекта, из Bash; сообщение — heredoc с кавычками, он ничего не подставляет:
-//   node kit-commit.js -- <путь1> <путь2> … <<'KIT_MSG'
+//   node kit-commit.js [--inbox N] [--push <имя>] -- <путь1> <путь2> … <<'KIT_MSG'
 //   28.1: заголовок
 //
 //   тело
 //
 //   Co-Authored-By: …
 //   KIT_MSG
-// Порядок: secret-scan --paths → git add → secret-scan --cached → git commit -F - -- <пути> → самопроверка.
-// Код 0 — коммит сделан и проверен; 1 — остановила проверка путей или секретов, коммита нет;
-// 2 — ошибка запуска, git или хука, коммита нет; 3 — коммит есть, самопроверка нашла расхождение.
-// Индекс при остановке не трогается (К53): reset, restore, rm --cached, amend, push — не выполняются.
+// Порядок: secret-scan --paths → git add → secret-scan --cached → git commit -F - -- <пути> → самопроверка
+// (один новый коммит, сообщение побайтно, только переданные пути, переданных путей нет в git status).
+// После проверенного коммита (с 3.0.0): --inbox N — убрать первые N входящих (decision-inbox.js); --push <имя> — отправить:
+// ветки на удалённом ещё нет — сначала secret-scan --history, затем git push -u <имя> HEAD (до 120 с, без запросов в терминале;
+// окно входа Git Credential Manager — для пользователя). Без --force, pull и rebase.
+// Код 0 — коммит сделан и проверен (и отправлен, если просили); 1 — остановила проверка путей или секретов, коммита нет;
+// 2 — ошибка запуска, git или хука, коммита нет; 3 — коммит есть, самопроверка нашла расхождение;
+// 4 — коммит сделан и проверен, но не отправлен (причина — строкой «kit-commit: не отправлено — …»).
+// Индекс при остановке не трогается (К53): reset, restore, rm --cached, amend — не выполняются.
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { norm } = require('./lib/paths');
+const { INBOX, clearFirst } = require('./decision-inbox');
 
 const SCAN = path.join(__dirname, 'secret-scan.js');
+const PUSH_TIMEOUT = 120000;
 
 function run(cmd, args, input) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', input: input || '', maxBuffer: 64 * 1024 * 1024 });
@@ -31,12 +38,53 @@ const lines = (s) => s.split('\n').map((l) => norm(l.trim())).filter(Boolean);
 
 function parseArgs(argv) {
   const sep = argv.indexOf('--');
-  if (sep < 0) return { error: 'нет путей: node kit-commit.js -- <пути…> <<\'KIT_MSG\'' };
-  if (sep > 0) return { error: 'неизвестные аргументы: ' + argv.slice(0, sep).join(' ') };
+  if (sep < 0) return { error: 'нет путей: node kit-commit.js [--inbox N] [--push <имя>] -- <пути…> <<\'KIT_MSG\'' };
+  let inbox = null;
+  let push = null;
+  const opts = argv.slice(0, sep);
+  for (let i = 0; i < opts.length; i++) {
+    const v = opts[i + 1] || '';
+    if (opts[i] === '--inbox') {
+      if (!/^\d+$/.test(v)) return { error: '--inbox: нужно число входящих, например --inbox 3' };
+      inbox = Number(v);
+      i++;
+    } else if (opts[i] === '--push') {
+      if (!v || v.startsWith('-')) return { error: '--push: нужно имя удалённого репозитория, например --push origin' };
+      push = v;
+      i++;
+    } else {
+      return { error: 'неизвестные аргументы: ' + opts.slice(i).join(' ') };
+    }
+  }
   const paths = argv.slice(sep + 1).map((p) => norm(p).replace(/\/+$/, '')).filter(Boolean);
   if (!paths.length) return { error: 'список файлов пуст — коммитить нечего' };
   if (paths.includes('.')) return { error: 'путь «.» не принимается — перечисли файлы шага' };
-  return { paths };
+  return { paths, inbox, push };
+}
+
+// Отправка проверенного коммита: первая (ветки на удалённом нет) — после проверки всей истории. → { code: 0 | 4, lines }.
+function pushTo(name) {
+  const branch = git(['symbolic-ref', '--short', 'HEAD']).stdout.trim();
+  if (!branch) return { code: 4, lines: ['kit-commit: не отправлено — HEAD не на ветке'] };
+  const lines = [];
+  if (git(['rev-parse', '--verify', '--quiet', `refs/remotes/${name}/${branch}`]).code !== 0) {
+    const r = scan(['--history']);
+    lines.push(r.out);
+    if (r.code === 2) return { code: 4, lines: [...lines, 'kit-commit: не отправлено — проверка истории (secret-scan.js --history) не отработала'] };
+    if (r.code !== 0) {
+      const hits = r.out.split('\n').filter((l) => /^\s{2}\S/.test(l)).map((l) => l.trim());
+      const paths = hits.filter((h) => /: запрещённый путь \(/.test(h));
+      const why = paths.length === hits.length
+        ? 'в истории запрещённые пути: ' + paths.map((h) => h.replace(/: запрещённый путь \(.*$/, '')).join(', ')
+        : `в истории секреты: ${hits.length - paths.length} (список выше)`;
+      return { code: 4, lines: [...lines, 'kit-commit: не отправлено — ' + why] };
+    }
+  }
+  const p = spawnSync('git', ['push', '-u', name, 'HEAD'], { encoding: 'utf8', timeout: PUSH_TIMEOUT, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+  if (p.status === 0) return { code: 0, lines: [...lines, `kit-commit: отправлено в ${name}/${branch}`] };
+  const err = ((p.stderr || '') + (p.stdout || '')).trim();
+  const why = /rejected|fetch first|non-fast-forward/i.test(err) ? 'на удалённом есть коммиты, которых здесь нет' : 'нет сети, входа или вышло время';
+  return { code: 4, lines: [...lines, err.split('\n').pop() || String(p.error || ''), 'kit-commit: не отправлено — ' + why] };
 }
 
 // Как git --cleanup=whitespace: без \r и пробелов в концах строк, повторные пустые строки — одной,
@@ -108,13 +156,19 @@ function main(argv, input) {
   const files = lines(git(['diff-tree', '--no-commit-id', '--name-only', '-r', '--root', 'HEAD']).stdout);
   const extra = files.filter((f) => !a.paths.some((p) => f === p || f.startsWith(p + '/')));
   if (extra.length) problems.push('в коммите файлы сверх переданных: ' + extra.join(', '));
+  const left = git(['status', '--porcelain=v1', '-z', '-uall', '--', ...a.paths]).stdout.split('\0').filter((x) => x.length > 3).map((x) => x.slice(3));
+  if (left.length) problems.push('после коммита в git status остались: ' + left.join(', '));
 
   const stat = git(['show', '--stat', '--format=%h %s', 'HEAD']).out.split('\n');
   const report = [stat[0], ...(stat.length <= 22 ? stat.slice(1) : [stat[stat.length - 1]])];
   const status = git(['status', '--short']).out;
   console.log([...report, 'git status --short:', status || '(чисто)'].join('\n'));
   if (problems.length) return stop(3, 'kit-commit: коммит создан, но самопроверка нашла расхождение:', ...problems);
-  return stop(0, 'kit-commit: сообщение совпало с поданным, в коммите только переданные пути');
+  const done = ['kit-commit: сообщение совпало с поданным, в коммите только переданные пути'];
+  if (a.inbox) done.push(`kit-commit: входящих убрано: ${clearFirst(path.join(process.cwd(), INBOX), a.inbox)}`);
+  if (!a.push) return stop(0, ...done);
+  const sent = pushTo(a.push);
+  return stop(sent.code, ...done, ...sent.lines);
 }
 
 if (require.main === module) {

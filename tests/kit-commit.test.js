@@ -147,9 +147,86 @@ test('не из корня репозитория — код 2', () => {
 test('cleanMessage и parseArgs', () => {
   assert.equal(cleanMessage('\n\nA  \r\n\n\n\nB\t\n\n'), 'A\n\nB\n');
   assert.equal(cleanMessage(' \n\r\n'), '');
-  assert.deepEqual(parseArgs(['--', './a.txt', 'Документы/', 'b\\c.txt']), { paths: ['a.txt', 'Документы', 'b/c.txt'] });
+  assert.deepEqual(parseArgs(['--', './a.txt', 'Документы/', 'b\\c.txt']), { paths: ['a.txt', 'Документы', 'b/c.txt'], inbox: null, push: null });
+  assert.deepEqual(parseArgs(['--inbox', '2', '--push', 'origin', '--', 'a.txt']), { paths: ['a.txt'], inbox: 2, push: 'origin' });
+  assert.match(parseArgs(['--inbox', 'x', '--', 'a']).error, /--inbox/);
+  assert.match(parseArgs(['--push', '--', 'a']).error, /--push/);
   assert.match(parseArgs([]).error, /нет путей/);
   assert.match(parseArgs(['--x', '--', 'a']).error, /неизвестные аргументы/);
   assert.match(parseArgs(['--']).error, /пуст/);
   assert.match(parseArgs(['--', '.']).error, /«\.»/);
+});
+
+const INBOX = '.claude/kit-inbox.jsonl';
+const inboxLines = (dir) => (fs.existsSync(path.join(dir, INBOX)) ? fs.readFileSync(path.join(dir, INBOX), 'utf8').split('\n').filter(Boolean) : []);
+const commitWith = (dir, opts, paths, msg) => runScript('kit-commit.js', { args: [...opts, '--', ...paths], input: msg, cwd: dir, env: ENV });
+const bareRepo = () => {
+  const b = makeProject();
+  git(b, 'init', '-q', '--bare');
+  return b;
+};
+const branchOf = (dir) => git(dir, 'symbolic-ref', '--short', 'HEAD').trim();
+
+test('--inbox 2 при трёх записях — после проверенного коммита остаётся одна, поздняя (3.0.0)', () => {
+  const dir = gitRepo({ 'a.txt': '1\n' });
+  writeFiles(dir, { 'a.txt': '2\n', [INBOX]: '{"n":1}\n{"n":2}\n{"n":3}\n' });
+  const r = commitWith(dir, ['--inbox', '2'], ['a.txt'], '36.5: a\n');
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(inboxLines(dir), ['{"n":3}']);
+});
+
+test('--inbox: стоп по секрету (код 1) — входящие не тронуты', () => {
+  const dir = gitRepo({ 'x.txt': '' });
+  writeFiles(dir, { 'cfg.php': `<?php\nreturn ['password' => '${SECRET}'];\n`, [INBOX]: '{"n":1}\n{"n":2}\n' });
+  const r = commitWith(dir, ['--inbox', '2'], ['cfg.php'], '36.5: cfg\n');
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.equal(inboxLines(dir).length, 2);
+});
+
+test('самопроверка: переданный путь после коммита остался в git status (хук post-commit) — код 3, входящие не тронуты', () => {
+  const dir = gitRepo({ 'a.txt': '1\n' });
+  writeFiles(dir, { 'a.txt': '2\n', [INBOX]: '{"n":1}\n', '.git/hooks/post-commit': '#!/bin/sh\necho 3 >> a.txt\n' });
+  fs.chmodSync(path.join(dir, '.git/hooks/post-commit'), 0o755);
+  const r = commitWith(dir, ['--inbox', '1'], ['a.txt'], '36.5: a\n');
+  assert.equal(r.code, 3, r.stdout + r.stderr);
+  assert.match(r.stdout, /после коммита в git status остались: a\.txt/);
+  assert.equal(inboxLines(dir).length, 1);
+});
+
+test('--push origin в пустой репозиторий — первая отправка: история проверена, коммит на удалённом', () => {
+  const bare = bareRepo();
+  const dir = gitRepo({ 'a.txt': '1\n' });
+  git(dir, 'remote', 'add', 'origin', bare);
+  writeFiles(dir, { 'a.txt': '2\n' });
+  const r = commitWith(dir, ['--push', 'origin'], ['a.txt'], '36.5: a\n');
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /secret-scan: чисто \(коммитов: 2/);
+  assert.match(r.stdout, /kit-commit: отправлено в origin\//);
+  assert.equal(git(bare, 'rev-parse', branchOf(dir)).trim(), git(dir, 'rev-parse', 'HEAD').trim());
+});
+
+test('--push: секрет в истории — код 4 «в истории секреты», коммит на месте, удалённый пуст', () => {
+  const bare = bareRepo();
+  const dir = gitRepo({ 'cfg.php': `<?php\nreturn ['password' => '${SECRET}'];\n` });
+  git(dir, 'remote', 'add', 'origin', bare);
+  writeFiles(dir, { 'a.txt': '1\n' });
+  const r = commitWith(dir, ['--push', 'origin'], ['a.txt'], '36.5: a\n');
+  assert.equal(r.code, 4, r.stdout + r.stderr);
+  assert.match(r.stdout, /kit-commit: не отправлено — в истории секреты/);
+  assert.doesNotMatch(r.stdout, new RegExp(SECRET));
+  assert.equal(count(dir), 2);
+  assert.equal(git(bare, 'for-each-ref').trim(), '');
+});
+
+test('--push: на удалённом есть коммит, которого здесь нет — код 4, коммит на месте', () => {
+  const bare = bareRepo();
+  const other = gitRepo({ 'b.txt': 'чужой\n' });
+  git(other, 'push', '-q', bare, 'HEAD:' + branchOf(other));
+  const dir = gitRepo({ 'a.txt': '1\n' });
+  git(dir, 'remote', 'add', 'origin', bare);
+  writeFiles(dir, { 'a.txt': '2\n' });
+  const r = commitWith(dir, ['--push', 'origin'], ['a.txt'], '36.5: a\n');
+  assert.equal(r.code, 4, r.stdout + r.stderr);
+  assert.match(r.stdout, /kit-commit: не отправлено — на удалённом есть коммиты, которых здесь нет/);
+  assert.equal(count(dir), 2);
 });
