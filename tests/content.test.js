@@ -24,7 +24,7 @@ test('frontmatter навыков и агентов: значение с «: » �
     if (fs.existsSync(f)) files.push(f);
   }
   if (fs.existsSync(path.join(PLUGIN, 'agents'))) for (const a of fs.readdirSync(path.join(PLUGIN, 'agents'))) files.push(path.join(PLUGIN, 'agents', a));
-  assert.ok(files.length >= 7, 'нашлось файлов: ' + files.length);
+  assert.ok(files.length >= 5, 'нашлось файлов: ' + files.length);
   for (const file of files) {
     const src = fs.readFileSync(file, 'utf8').replace(/\r\n/g, '\n');
     const head = /^---\n([\s\S]*?)\n---\n/.exec(src);
@@ -134,19 +134,6 @@ test('docs-keeper нет: ни агента, ни упоминаний в пла
   assert.deepEqual(hits, []);
 });
 
-test('why: только чтение, цепочка git → журнал → документы, ответ со ссылками', () => {
-  const { fm, body } = skill('why');
-  assert.equal(fm.name, 'why');
-  assert.ok(fm.description.length > 40);
-  assert.notEqual(fm['disable-model-invocation'], 'true', 'Claude вызывает сам, когда спрашивают «почему»');
-  for (const s of ['Только чтение', 'без `cd`', 'git log --follow --format="%h %ad %s" --date=short -- <путь>', 'git log -L :<имя>:<путь>', 'git log -L <от>,<до>:<путь>',
-    'часть заголовка до первого `: `', '«без шага»', '| № | Дата | Шаг |', '| Дата | Решение |', '«Сверка …»', 'раздел «Документы» журнала',
-    '-i --grep=<слово>', 'git cat-file -e <хеш>', '**Журнал по частям**', 'Grep по папке документов, а не только по журналу', 'Grep по журналу и его частям', 'не додумывай', '«вероятно»', '**Источники**', '**Не нашёл**', 'только если пользователь попросит подробнее']) {
-    assert.ok(body.includes(s), s);
-  }
-  assert.doesNotMatch(body, /docs-keeper|git-keeper|git commit|git add/, 'скилл ничего не пишет и не коммитит');
-});
-
 test('report: отчёт заказчику простыми словами, период, без внутренних подробностей, дата — заметкой во входящие', () => {
   const { fm, body } = skill('report');
   assert.equal(fm.name, 'report');
@@ -177,19 +164,22 @@ test('«Документы на сервере» в режиме «Claude по S
   assert.ok(dp.includes('| из `.claude/` автозаливка PhpStorm везёт на сервер только документы'), 'шаблон deploy-prod.md: вариант для PhpStorm');
 });
 
-test('deploy-list и report: таблица по окружению, режим «Claude по SSH» (этап 32)', () => {
-  const dl = skill('deploy-list');
-  assert.ok(dl.fm.description.includes('Claude по SSH'));
-  for (const s of ['«Залито на дев»', '`--env прод|дев`', 'ssh-deploy.js']) assert.ok(dl.body.includes(s), s);
+test('report: таблица «Залито» по окружению (этап 32)', () => {
   assert.ok(skill('report').body.includes('«Залито на дев»'));
 });
 
-test('deploy-list: вызывает скрипт и записывает выкладку через step-done', () => {
-  const { fm, body } = skill('deploy-list');
-  assert.equal(fm.name, 'deploy-list');
-  assert.ok(body.includes('${CLAUDE_PLUGIN_ROOT}/scripts/deploy-list.js'));
-  assert.ok(body.includes('/kit:step-done'));
-  assert.ok(body.includes('DEPLOY'));
+test('/kit:why и /kit:deploy-list удалены: ни скиллов, ни скрипта, ни упоминаний в плагине и README (3.0.0)', () => {
+  for (const p of ['skills/why', 'skills/deploy-list', 'scripts/deploy-list.js']) assert.ok(!fs.existsSync(path.join(PLUGIN, p)), 'осталось: ' + p);
+  const hits = [];
+  const walk = (d) => fs.readdirSync(d, { withFileTypes: true }).forEach((e) => {
+    const p = path.join(d, e.name);
+    if (e.isDirectory()) {
+      if (e.name !== 'node_modules') walk(p);
+    } else if (/\.(md|js|json|php)$/.test(e.name) && /deploy-list|kit:why/.test(fs.readFileSync(p, 'utf8'))) hits.push(path.relative(PLUGIN, p));
+  });
+  walk(PLUGIN);
+  if (/deploy-list|kit:why/.test(fs.readFileSync(path.join(PLUGIN, '..', '..', 'README.md'), 'utf8'))) hits.push('README.md');
+  assert.deepEqual(hits, []);
 });
 
 test('project-init: только командой, все шаги и шаблоны на месте', () => {

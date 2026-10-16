@@ -11,8 +11,8 @@
 //                                                                                 .claude/.htaccess (первым), .claude/CLAUDE.md,
 //                                                                                 .claude/docs без visual — изменённые с базы;
 //                                                                                 --all — все, без удалений (первая заливка)
-// Сервер — --env, иначе «Окружение»; куда — «SSH прод» / «SSH дев» (хост:/папка). База — как у deploy-list.js
-// (lib/deploy.js), но изменения — до папки проекта: и незакоммиченное, и новые файлы. Удаляется на сервере только то,
+// Сервер — --env, иначе «Окружение»; куда — «SSH прод» / «SSH дев» (хост:/папка). База — из плана выкладки
+// (lib/deploy.js), изменения — до папки проекта: и незакоммиченное, и новые файлы. Удаляется на сервере только то,
 // чего нет на диске (файл, убранный из git через git rm --cached, остаётся). Повтор безопасен.
 // Коды: 0 — залито и сверено (или нечего); 1 — часть не вышла; 2 — SSH не задан или параметр неверный; с --docs —
 // «Документы на сервере» не «да» или нет .claude/.htaccess;
@@ -176,7 +176,7 @@ async function main(argv) {
       console.error('ssh-deploy: ' + b.error);
       return 4;
     }
-    ({ upload, del } = o.docs ? docsChanges(cwd, info, { base: b.base }) : changes(cwd, b.base, rules, { worktree: true }));
+    ({ upload, del } = o.docs ? docsChanges(cwd, info, { base: b.base }) : changes(cwd, b.base, rules));
   }
   const bad = [...upload, ...del].filter((it) => !safePath(it.path));
   if (bad.length) {

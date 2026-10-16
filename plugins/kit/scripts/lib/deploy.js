@@ -1,5 +1,5 @@
 'use strict';
-// Выкладка: что не выкладывать, база («что уже на сервере») и список изменений — для deploy-list.js и ssh-deploy.js.
+// Выкладка: что не выкладывать, база («что уже на сервере») и список изменений — для ssh-deploy.js.
 const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
@@ -81,14 +81,11 @@ function parseNameStatusZ(out) {
   return items;
 }
 
-// Изменения от базы: без worktree — до HEAD (закоммиченное, как deploy-list); с worktree — до папки проекта:
-// и незакоммиченное, и новые неигнорируемые файлы (ssh-deploy.js). Пути под правилами исключений убираются.
-function changes(cwd, base, rules, { worktree = false } = {}) {
-  let items = parseNameStatusZ(git(cwd, ['diff', '--name-status', '--no-renames', '-z', worktree ? base : base + '..HEAD']).out);
-  if (worktree) {
-    const extra = git(cwd, ['ls-files', '--others', '--exclude-standard', '-z']).out.split('\0').filter(Boolean);
-    items = items.concat(extra.map((p) => ({ status: 'A', path: p })));
-  }
+// Изменения от базы до папки проекта: и незакоммиченное, и новые неигнорируемые файлы. Пути под правилами исключений убираются.
+function changes(cwd, base, rules) {
+  let items = parseNameStatusZ(git(cwd, ['diff', '--name-status', '--no-renames', '-z', base]).out);
+  const extra = git(cwd, ['ls-files', '--others', '--exclude-standard', '-z']).out.split('\0').filter(Boolean);
+  items = items.concat(extra.map((p) => ({ status: 'A', path: p })));
   items = items.filter((it) => !matchRules(it.path, rules));
   return { upload: items.filter((it) => it.status !== 'D'), del: items.filter((it) => it.status === 'D') };
 }
@@ -115,7 +112,7 @@ function docsChanges(cwd, info, { base = null, all = false } = {}) {
       .filter((p) => keep(p) && fs.existsSync(path.join(cwd, p)))
       .map((p) => ({ status: 'M', path: p }));
   } else {
-    const ch = changes(cwd, base, rules, { worktree: true });
+    const ch = changes(cwd, base, rules);
     upload = ch.upload.filter((it) => keep(it.path));
     del = ch.del.filter((it) => keep(it.path));
   }
