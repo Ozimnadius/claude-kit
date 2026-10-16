@@ -130,7 +130,7 @@ html{scroll-behavior:smooth}
 <body>
 <div class="page">
 <header class="hero">
-  <div class="eyebrow">claude-kit · плагин kit 2.17.1</div>
+  <div class="eyebrow">claude-kit · плагин kit 2.18.0</div>
   <h1>Как устроен kit</h1>
   <p class="lede">Плагин Claude Code, который ведёт проект по шагам: журнал с решениями и проверками, один коммит на проверенный шаг, выкладка, работа на сервере, снимки «до/после», ответ «почему так сделано» и отчёт заказчику. Внутри — общий каркас для любых проектов и модуль для сайтов на 1С-Битрикс.</p>
   <dl class="inv">
@@ -222,7 +222,7 @@ html{scroll-behavior:smooth}
       <tr><td>автозаливка (с 2.8.0)</td><td>superpowers — без отдельных веток и worktree</td></tr>
     </tbody>
   </table></div>
-  <p>Второй скрипт SessionStart, <code>phpstorm-exclude.js</code>, дописывает в <code>.idea/deployment.xml</code> исключения <code>.idea</code>, <code>.git</code>, <code>.claude</code>, простые пути из «Не выкладывать» и служебные папки superpowers (<code>.superpowers</code>, <code>.worktrees</code>, <code>docs/superpowers</code>, с 2.8.0) — каждому серверу, сопоставленному с корнем проекта. Он только добавляет и ничего не удаляет; из worktree работает с основной папкой проекта. Исключение — параметр «Документы на сервере: да» (с 2.6.0): тогда хук убирает исключение <code>.claude</code> целиком и исключает всё в ней поимённо, кроме <code>docs</code>, <code>CLAUDE.md</code> и <code>.htaccess</code> (нет <code>.htaccess</code> — создаёт), — документы уезжают на сервер автозаливкой, папка закрыта из веба.</p>
+  <p>Второй скрипт SessionStart, <code>phpstorm-exclude.js</code>, дописывает в <code>.idea/deployment.xml</code> исключения <code>.idea</code>, <code>.git</code>, <code>.claude</code>, простые пути из «Не выкладывать» и служебные папки superpowers (<code>.superpowers</code>, <code>.worktrees</code>, <code>docs/superpowers</code>, с 2.8.0) — каждому серверу, сопоставленному с корнем проекта. Он только добавляет и ничего не удаляет; из worktree работает с основной папкой проекта. Исключение — параметр «Документы на сервере: да» (с 2.6.0): тогда хук убирает исключение <code>.claude</code> целиком и исключает всё в ней поимённо, кроме <code>docs</code>, <code>CLAUDE.md</code> и <code>.htaccess</code> (нет <code>.htaccess</code> — создаёт), — документы уезжают на сервер автозаливкой, папка закрыта из веба. В режиме «Claude по SSH» (с 2.18.0) хук держит <code>.claude</code> исключённой: документы туда же заливает <code>/kit:step-done</code> скриптом <code>ssh-deploy.js --docs</code>.</p>
   <p>Третий скрипт SessionStart, <code>remote-check.js</code> (с 2.5.0), работает, только если задан параметр «Удалённый репозиторий». Он делает <code>git fetch</code> не дольше 8 секунд и без окон входа и сравнивает ветку с удалённой: новые коммиты там — Claude до любой правки выполняет <code>git pull --ff-only</code>; неотправленные здесь — отправляет; разошлись — останавливается и спрашивает. Нет сети или входа — строка «не удалось проверить», работа идёт дальше.</p>
   <h3>Страж команд и php -l</h3>
   <ul>
@@ -386,7 +386,7 @@ html{scroll-behavior:smooth}
     <tbody>
       <tr><td>вручную</td><td>«Залить» и «Удалить с сервера» целиком</td></tr>
       <tr><td>PhpStorm Always</td><td>только «Удалить»: заливает PhpStorm сам, а удаление локально сервер не трогает</td></tr>
-      <tr><td>Claude по SSH</td><td>чего ещё нет на сервере; заливает <code>/kit:step-done</code> скриптом <code>ssh-deploy.js</code> — одно подключение SSH, удаления, сверка md5</td></tr>
+      <tr><td>Claude по SSH</td><td>чего ещё нет на сервере; заливает <code>/kit:step-done</code> скриптом <code>ssh-deploy.js</code> — одно подключение SSH, удаления, сверка md5; документы при «Документы на сервере: да» — <code>ssh-deploy.js --docs</code> перед коммитом (с 2.18.0)</td></tr>
       <tr><td>вручную; дев — PhpStorm Always</td><td>до 2.17.0: полный список для прода</td></tr>
     </tbody>
   </table></div>
@@ -440,7 +440,7 @@ html{scroll-behavior:smooth}
     <li><b>Вопросы</b> — не больше четырёх за раз, найденное разведкой — первым с пометкой «(Рекомендую)»: режим, окружение, кто пишет код; затем адрес прода, задача, исключения, вотчеры; адрес дева и удалённый репозиторий.</li>
     <li><b>Версия PHP.</b> <code>site-probe.js</code> читает <code>X-Powered-By</code> прода и находит такой же <code>php.exe</code> в OSPanel — для хука <code>php -l</code>.</li>
     <li><b>SSH.</b> Псевдонимы из <code>~/.ssh/config</code> (с <code>Include</code>, только строки <code>Host</code>/<code>HostName</code>/<code>User</code>, ключи не открываются), затем <code>ssh-probe.js</code> — одно подключение: папка сайта и PHP CLI нужной версии. <span class="tag u">ветка</span>Новый хост — пользователь один раз входит сам; сменился отпечаток — стоп.</li>
-    <li><b>Выкладка</b> (с 2.17.0) — когда окружение и SSH уже известны: окружение — один сервер, прод или дев; варианты «PhpStorm Always» / «Claude по SSH» (если SSH есть) / «вручную»; при автозаливке — вопрос «Документы на сервере».</li>
+    <li><b>Выкладка</b> (с 2.17.0) — когда окружение и SSH уже известны: окружение — один сервер, прод или дев; варианты «PhpStorm Always» / «Claude по SSH» (если SSH есть) / «вручную»; при автозаливке и «Claude по SSH» — вопрос «Документы на сервере» (при SSH — с 2.18.0).</li>
     <li><b>План на согласие</b> — таблица «что есть / что сделаю / что пропущу». Без согласия ничего не пишется.</li>
     <li><b>Автозаливка выключена, исключения PhpStorm — до любой записи.</b> На время настройки пользователь выключает автозаливку (Tools → Deployment → Automatic Upload, с 2.16.0) — записанное не уезжает на сервер. Исключения всё равно до любой записи: не выключили — <code>git init</code> и <code>settings.local.json</code> уехали бы автозаливкой. Затем сверка <code>--check</code>; при автозаливке — <code>.htaccess</code> и проверка снаружи.</li>
     <li><b>Git, если его нет.</b> <code>autocrlf=input</code>, <code>quotepath=false</code>, <code>.gitignore</code> по шаблону режима, <code>secret-scan --all</code> по всему, что попадёт в коммит, первый коммит <code>0.1</code> скриптом <code>kit-commit.js</code>. <span class="tag u">ветка</span>Нашёлся секрет — исключить путь или убрать секрет; варианта «это не секрет» нет.</li>
@@ -518,7 +518,7 @@ html{scroll-behavior:smooth}
 
 </main>
 </div>
-<footer>Собрано по исходникам <code>plugins/kit</code> версии 2.17.1 (скиллы, агент, хуки и скрипты), 15 октября 2026. Пересборка страницы, схем и Markdown: <code>node .claude/docs/work/overview/build/build.js</code> из корня репозитория.</footer>
+<footer>Собрано по исходникам <code>plugins/kit</code> версии 2.18.0 (скиллы, агент, хуки и скрипты), 16 октября 2026. Пересборка страницы, схем и Markdown: <code>node .claude/docs/work/overview/build/build.js</code> из корня репозитория.</footer>
 </div>
 </body>
 </html>

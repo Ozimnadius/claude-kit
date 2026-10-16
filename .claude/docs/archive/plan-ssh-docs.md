@@ -4,7 +4,7 @@
 
 - [x] 35.1 — общий набор документов (`lib/project.js`), `docsChanges` (`lib/deploy.js`), флаги `--docs` и `--all` в `ssh-deploy.js`; спек и план этапа
 - [x] 35.2 — хук PhpStorm при «Claude по SSH», п. 3в `/kit:step-done`, вопрос и первая заливка в `/kit:project-init`, шаблоны `CLAUDE.md` и `deploy-prod.md`
-- [ ] 35.3 — выпуск 2.18.0: версии, спек плагина, README, обзор
+- [x] 35.3 — выпуск 2.18.0: версии, спек плагина, README, обзор
 
 > Каждая задача — шаг kit, закрывается `/kit:step-done`; остановка на проверку пользователя — после каждой. Строки чек-листа отмечает docs-keeper. Исполнение — superpowers:executing-plans или subagent-driven-development; сам superpowers не коммитит.
 
