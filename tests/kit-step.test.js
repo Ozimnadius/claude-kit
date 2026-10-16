@@ -92,3 +92,11 @@ test('старый формат — код 2 и сообщение о перее
   assert.equal(step(gitRepo({ 'a.txt': '1' })).code, 2);
   assert.equal(step(repo(), ['36.5', 'лишний']).code, 4);
 });
+
+test('«Claude по SSH» без параметра «SSH прод» — код 2: сухой прогон ssh-deploy.js не прошёл, шаг не закрыть (финальная проверка, I3)', () => {
+  const dir = repo({ 'Выкладка': 'Claude по SSH' });
+  writeFiles(dir, { 'a.php': '2' });
+  const r = step(dir);
+  assert.equal(r.code, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /сухой прогон ssh-deploy\.js не прошёл \(код 2\).*SSH прод/);
+});

@@ -335,7 +335,8 @@ function stageTable(ctx, n) {
   const sec = findSection(ctx.J.lines, stageTest(n));
   if (!sec) {
     const moved = fs.existsSync(path.join(ctx.info.dir, ctx.docs, 'journal', 'stages', `stage-${String(n).padStart(2, '0')}.md`));
-    throw new JournalError(moved ? `этап ${n} уже перенесён — шаг пишется в текущий этап` : `в журнале нет раздела «Этап ${n}»`);
+    throw new JournalError(moved ? `этап ${n} уже перенесён — шаг пишется в текущий этап`
+      : `в журнале нет раздела «Этап ${n}» — для нового этапа передайте STAGE: ${n} — название`);
   }
   const t = tablesIn(ctx.J.lines, sec.start, sec.end)[0];
   if (!t) throw new JournalError(`в разделе «Этап ${n}» нет таблицы шагов`);
@@ -417,7 +418,11 @@ function setNowItem(lines, label, text) {
   else insertAtTail(lines, nowSection(lines), [line]);
 }
 
+// Напоминания сверки «на следующий этап (сверка этапа N): …» — сверка дописывает их в конец «Блокеров».
+const REMINDERS = /(^|;\s*)на следующий этап \(сверка этапа \d+\):.*$/;
+
 // «Сейчас» — снимок: «Этап» и «Следующий шаг» переписываются при ✅, «Блокеры» — текстом BLOCKERS, сверка дописывает пункт.
+// Начат новый этап (STAGE создал раздел) — прежние напоминания сверки из «Блокеров» убираются: их этап начался.
 function updateNow(ctx, n, stage, created) {
   const { J, b, today } = ctx;
   if (!nowSection(J.lines)) throw new JournalError('в журнале нет раздела «Сейчас»');
@@ -434,6 +439,10 @@ function updateNow(ctx, n, stage, created) {
     setNowItem(J.lines, 'Следующий шаг', b.NEXT === '—' ? 'нет — этап закрыт' : b.NEXT);
   }
   if (b.BLOCKERS) setNowItem(J.lines, BLOCKERS, b.BLOCKERS);
+  else if (created) {
+    const it = nowItem(J.lines, BLOCKERS);
+    if (it && REMINDERS.test(it.text)) setNowItem(J.lines, BLOCKERS, it.text.replace(REMINDERS, '').trim() || '—');
+  }
   if (!b.RECONCILE) return;
   const f = fields(b.RECONCILE);
   const next = after(f[5], 'на следующий этап');
@@ -500,31 +509,39 @@ function docsRegistry(ctx) {
   }
 }
 
-// Галочка в чек-листе плана этапа (документы реестра «в работе, этап N» и план, который этот же вызов перенёс в архив).
+// Документы реестра `work/…` со статусом «в работе, этап N».
+function stagePlans(lines, n) {
+  const sec = findSection(lines, REGISTRY);
+  const t = sec ? tablesIn(lines, sec.start, sec.end)[0] : null;
+  if (!t) return [];
+  const file = t.cols.indexOf('Файл');
+  const status = t.cols.indexOf('Статус');
+  const out = [];
+  for (let i = t.first; i < t.end; i++) {
+    const c = cellsOf(lines[i]);
+    if ((c[file] || '').startsWith('work/') && new RegExp(`^в работе, этап ${n}(?!\\d)`).test(c[status] || '')) out.push(c[file]);
+  }
+  return out;
+}
+
+// Галочка в чек-листе плана этапа: документы «в работе, этап N» — до и после DOCS этого вызова (план, оставленный в work/
+// при закрытии этапа, DOCS переводит на следующий этап) — и план, который этот же вызов перенёс в архив. Предупреждение —
+// только если в плане есть строки этого этапа: у плана прошлого этапа строк нового нет, и это не ошибка.
 function checklist(ctx, n) {
   const { J, b, warnings } = ctx;
-  const paths = [];
-  const sec = findSection(J.lines, REGISTRY);
-  const t = sec ? tablesIn(J.lines, sec.start, sec.end)[0] : null;
-  if (t) {
-    const file = t.cols.indexOf('Файл');
-    const status = t.cols.indexOf('Статус');
-    for (let i = t.first; i < t.end; i++) {
-      const c = cellsOf(J.lines[i]);
-      if ((c[file] || '').startsWith('work/') && new RegExp(`^в работе, этап ${n}(?!\\d)`).test(c[status] || '')) paths.push(c[file]);
-    }
-  }
+  const paths = [...(ctx.plansBefore || []), ...stagePlans(J.lines, n)];
   for (const line of b.DOCS || []) {
     const d = parseDoc(line);
     if (d.old && d.path.startsWith('archive/')) paths.push(d.path);
   }
   const box = new RegExp('^(\\s*- \\[)([ xX])(\\] ' + escRe(b.STEP) + ' —)');
+  const ofStage = new RegExp('^\\s*- \\[[ xX]\\] ' + n + '\\.');
   for (const p of new Set(paths)) {
     const doc = ctx.load(ctx.docs + '/' + p, false);
     if (!doc) continue;
     const i = doc.lines.findIndex((l) => box.test(l));
     if (i >= 0) doc.lines[i] = doc.lines[i].replace(box, '$1x$3');
-    else if (doc.lines.some((l) => /^\s*- \[[ xX]\] /.test(l))) warnings.push(`в плане ${p} нет строки ${b.STEP}`);
+    else if (doc.lines.some((l) => ofStage.test(l))) warnings.push(`в плане ${p} нет строки ${b.STEP}`);
   }
 }
 
@@ -673,6 +690,7 @@ function applyBlocks(info, b, { today }) {
   if (b.RECONCILE) reconcile(ctx);
   updateNow(ctx, n, stage, created);
   if (b.DECISIONS) decisions(ctx);
+  ctx.plansBefore = stagePlans(ctx.J.lines, n);
   if (b.DOCS) docsRegistry(ctx);
   if (b.STATUS === '✅') checklist(ctx, n);
   if (b.BUGS) bugs(ctx);

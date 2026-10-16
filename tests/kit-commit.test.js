@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
 const { gitRepo, git, writeFiles, runScript, makeProject } = require('./helpers');
-const { cleanMessage, parseArgs } = require('../plugins/kit/scripts/kit-commit');
+const { cleanMessage, parseArgs, PUSH_TIMEOUT_MS } = require('../plugins/kit/scripts/kit-commit');
 
 const ENV = {
   GIT_AUTHOR_NAME: 'kit', GIT_AUTHOR_EMAIL: 'kit@test.local',
@@ -229,4 +229,21 @@ test('--push: на удалённом есть коммит, которого з
   assert.equal(r.code, 4, r.stdout + r.stderr);
   assert.match(r.stdout, /kit-commit: не отправлено — на удалённом есть коммиты, которых здесь нет/);
   assert.equal(count(dir), 2);
+});
+
+test('предел отправки меньше предела команды Bash (120 с): при зависшем входе скрипт сам выходит с кодом 4 (финальная проверка, I4)', () => {
+  assert.ok(PUSH_TIMEOUT_MS > 0 && PUSH_TIMEOUT_MS < 120000, String(PUSH_TIMEOUT_MS));
+});
+
+test('--push: удалённый отклонил хуком pre-receive — код 4 «удалённый репозиторий отклонил отправку», а не «есть коммиты» (финальная проверка, M1)', () => {
+  const bare = bareRepo();
+  writeFiles(bare, { 'hooks/pre-receive': '#!/bin/sh\necho "ветка защищена" >&2\nexit 1\n' });
+  fs.chmodSync(path.join(bare, 'hooks/pre-receive'), 0o755);
+  const dir = gitRepo({ 'a.txt': '1\n' });
+  git(dir, 'remote', 'add', 'origin', bare);
+  writeFiles(dir, { 'a.txt': '2\n' });
+  const r = commitWith(dir, ['--push', 'origin'], ['a.txt'], '36.8: a\n');
+  assert.equal(r.code, 4, r.stdout + r.stderr);
+  assert.match(r.stdout, /kit-commit: не отправлено — удалённый репозиторий отклонил отправку/);
+  assert.doesNotMatch(r.stdout, /есть коммиты, которых здесь нет/);
 });

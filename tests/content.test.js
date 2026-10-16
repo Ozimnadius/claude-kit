@@ -54,10 +54,10 @@ test('коммит — скрипт kit-commit.js, агента git-keeper не�
     const src = fs.readFileSync(f, 'utf8');
     const rel = path.relative(PLUGIN, f).replace(/\\/g, '/');
     assert.ok(!src.includes('kit:git-keeper'), rel + ': агента kit:git-keeper больше нет');
-    assert.ok(!src.includes('git-keeper'), rel + ': упоминание git-keeper');
+    assert.ok(!src.split('.claude/agents/git-keeper.md').join('').includes('git-keeper'), rel + ': упоминание git-keeper (кроме пути старой копии для уборки)');
   }
   const { body } = skill('project-init');
-  for (const s of ['kit-commit.js', 'Проектные копии старых агентов kit']) assert.ok(body.includes(s), s);
+  for (const s of ['kit-commit.js', 'Проектные копии старых агентов kit', '`.claude/agents/docs-keeper.md`', '`.claude/agents/git-keeper.md`']) assert.ok(body.includes(s), s);
 });
 
 test('ссылки ${CLAUDE_PLUGIN_ROOT}/… в агентах и скиллах ведут на существующие файлы', () => {
@@ -129,7 +129,7 @@ test('docs-keeper нет: ни агента, ни упоминаний в пла
     const p = path.join(d, e.name);
     if (e.isDirectory()) {
       if (e.name !== 'node_modules') walk(p);
-    } else if (/\.(md|js|json|php)$/.test(e.name) && fs.readFileSync(p, 'utf8').includes('docs-keeper')) hits.push(path.relative(PLUGIN, p));
+    } else if (/\.(md|js|json|php)$/.test(e.name) && fs.readFileSync(p, 'utf8').split('.claude/agents/docs-keeper.md').join('').includes('docs-keeper')) hits.push(path.relative(PLUGIN, p));
   });
   walk(PLUGIN);
   if (readmeNow().includes('docs-keeper')) hits.push('README.md');
@@ -298,7 +298,7 @@ test('project-init: переезд на формат kit 3.0 — пункт пл
   // Переезд: признаки — из правила хука; строка плана на признак; отказ — kit 3.0 шаги не закрывает.
   for (const s of ['переезд на формат kit 3.0', 'в старом формате (', 'kit 3.0 в проекте шаги не закрывает', 'journal-split.js" --migrate',
     'вставь столбец «Как проверено»', '`С kit 2.8 — с обоснованием:`', '**Окружение: дев+прод**', '**Выкладка: вручную; дев — PhpStorm Always**',
-    'Строки параметров «Код пишет» и «Коммит» (с 3.0.0 их нет) — предложи убрать']) {
+    'Строки «Код пишет» и «Коммит» — убрать по п. 4.3']) {
     assert.ok(body.includes(s), s);
   }
   assert.ok(!body.includes('«Перевести на части (Рекомендую)»'), 'журнал на части — пункт переезда, без отдельного вопроса');
@@ -433,4 +433,35 @@ test('скиллы Битрикса: project-init ставит их bitrix-skill
   const tpl = read('templates', 'CLAUDE.md');
   assert.match(tpl, /Код на Битриксе — по скиллам в `\.claude\/skills\/`: начинай с `bitrix-framework`/);
   assert.match(tpl, /нет `\.claude\/skills\/bitrix-framework\/` \(например, после `git clone` на другом компьютере\) — поставь их через `\/kit:project-init`\. \| \(режим «общий» — строки нет\)\}\}/);
+});
+
+test('финальная проверка этапа 36: повторный project-init, перенос этапа после просмотра, отправка, ссылки и подсказки (36.8а)', () => {
+  const sd = skill('step-done');
+  const pi = skill('project-init').body;
+  const ref = (name) => fs.readFileSync(path.join(PLUGIN, 'skills', 'step-done', 'reference', name), 'utf8');
+  // I1: повторный запуск — шаг текущего этапа, этап 0 уже в journal/stages/.
+  assert.ok(!pi.includes('следующий свободный ID этапа 0'), 'project-init: шаг повторного запуска — не в этапе 0');
+  assert.ok(pi.includes('шаг запуска — очередной шаг текущего этапа'), 'project-init: шаг запуска — в текущем этапе');
+  // I2: перенос этапа — после ответа «Коммитить», перед заливкой документов и коммитом.
+  const sc = ref('stage-close.md');
+  assert.match(sc, /## 3\. Перенос этапа\n\nПосле ответа «Коммитить»/);
+  assert.ok(sd.body.includes('перенос этапа — `reference/stage-close.md`, п. 3'), 'ядро: перенос этапа перед коммитом');
+  assert.ok(ref('ssh.md').includes('после переноса этапа'), 'ssh.md: документы — после переноса этапа');
+  // I4: с --push — увеличенный таймаут команды Bash.
+  assert.ok(sd.body.includes('`timeout` 600000'), 'ядро: с --push — timeout Bash 600000');
+  // M2: ссылок на прежние пункты step-done и слова FILES нет; строки «Код пишет» и «Коммит» убираются и в проекте 3.0.
+  for (const s of ['(п. 3в)', '(его п. 5а)', 'FILES']) assert.ok(!pi.includes(s), 'project-init: ' + s);
+  assert.ok(!skill('visual').body.includes('FILES'), 'visual: FILES');
+  assert.ok(pi.includes('Строки «Код пишет» и «Коммит» (с 3.0.0 параметров нет) — покажи и предложи убрать'), 'project-init п. 4.3: убрать строки и без старого формата');
+  // M3: закрытие этапа — по NEXT; STAGE — только для ID не вида N.M.
+  assert.ok(!sd.body.includes('передан `STAGE`, номер этапа'), 'ядро: STAGE сам по себе этап не закрывает');
+  assert.ok(sd.body.includes('для ID не вида `N.M`') && sc.includes('для ID не вида `N.M`'), 'условие закрытия этапа уточнено');
+  // M4: пути — из всех вызовов kit-journal.js.
+  assert.ok(sd.body.includes('из всех вызовов `kit-journal.js`'), 'ядро: файлы из всех вызовов');
+  // M7: подсказка аргумента команды.
+  assert.equal(sd.fm['argument-hint'], '[ID шага]');
+  assert.ok(fs.statSync(path.join(PLUGIN, 'skills', 'step-done', 'SKILL.md')).size <= 14336, 'ядро ≤ 14 КБ');
+  // Порядок в README: архив этапа — до журнала.
+  const row = fs.readFileSync(path.join(PLUGIN, '..', '..', 'README.md'), 'utf8').split('\n').find((l) => l.startsWith('| `/kit:step-done`'));
+  assert.ok(row.indexOf('archive/') > 0 && row.indexOf('archive/') < row.indexOf('kit-journal.js'), 'README: архив этапа — до журнала: ' + row);
 });

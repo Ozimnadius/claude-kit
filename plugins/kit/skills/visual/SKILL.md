@@ -106,6 +106,6 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/visual.js" check before
 
 ## 7. Закрытие шага
 
-В `/kit:step-done` — NOTES: метки и сравнение (`compare before after-1.1`), итог (совпадает / в пределах шума / что отличается, статусы и ошибки), путь к `report.html`. Снимки в FILES не входят; изменённый `.claude/scripts/visual/pages.json` — входит.
+В `/kit:step-done` — NOTES: метки и сравнение (`compare before after-1.1`), итог (совпадает / в пределах шума / что отличается, статусы и ошибки), путь к `report.html`. Снимки в коммит шага не входят; изменённый `.claude/scripts/visual/pages.json` — входит.
 
 Прочее: `visual.js list` — метки (дата, число снимков, полный или частичный прогон, измерен ли шум) и сравнения.

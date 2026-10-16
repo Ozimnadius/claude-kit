@@ -4,7 +4,8 @@
 // Печатает: файлы шага — готовые аргументы для kit-commit.js (в кавычках, при переименовании оба пути) и пути, которые
 // скрипт коммита не пропустит; входящие ответы — готовыми строками DECISIONS и NOTES; режим — выкладка (при «Claude по SSH»
 // итог сухого прогона ssh-deploy.js), «Документы на сервере», удалённый репозиторий; напоминание о закрытии этапа.
-// Коды: 0 — готово; 2 — не kit-проект, нет журнала или старый формат; 4 — неверные аргументы.
+// Коды: 0 — готово; 2 — не kit-проект, нет журнала, старый формат или при «Claude по SSH» не прошёл сухой прогон
+// (SSH не задан — заливать некуда); 4 — неверные аргументы.
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { resolveProjectDir, kitInfo, docsOnServer } = require('./lib/project');
@@ -57,19 +58,20 @@ function inboxAsDecisions(entries) {
   return { decisions, notes };
 }
 
-// Выкладка: при «Claude по SSH» — итог сухого прогона ssh-deploy.js (к серверу он не подключается).
+// Выкладка: при «Claude по SSH» — итог сухого прогона ssh-deploy.js (к серверу он не подключается). Прогон не прошёл —
+// { error }: без заливки шаг закрылся бы без проверки на сервере.
 function deployLines(info, cwd) {
-  if (!isSsh(info)) return ['выкладка: ' + (info.params.get('Выкладка', '').trim() || '—')];
+  if (!isSsh(info)) return { lines: ['выкладка: ' + (info.params.get('Выкладка', '').trim() || '—')] };
   const r = run(process.execPath, [DEPLOY], cwd);
   if (r.code !== 0 && r.code !== 1) {
-    return [`выкладка: Claude по SSH — сухой прогон ssh-deploy.js не прошёл (код ${r.code}): ${(r.stderr || r.stdout).split('\n')[0]}`];
+    return { error: `сухой прогон ssh-deploy.js не прошёл (код ${r.code}): ${(r.stderr || r.stdout).split('\n')[0]} — шаг не закрыть без заливки` };
   }
   const count = (title) => (new RegExp('^' + title + ' \\((\\d+)\\):', 'm').exec(r.stdout) || [0, 0])[1];
   const out = ['выкладка: Claude по SSH — ' + (/Нечего заливать/.test(r.stdout) ? 'Нечего заливать'
     : `Залить ${count('Залить')}, Удалить ${count('Удалить')}; порядок SSH — прочитай reference/ssh.md`)];
   const skipped = r.stdout.indexOf('Пропущено — не файл');
   if (skipped >= 0) out.push(r.stdout.slice(skipped).split('\n\n')[0].trimEnd());
-  return out;
+  return { lines: out };
 }
 
 function remoteLine(info, cwd) {
@@ -101,6 +103,11 @@ function main(argv) {
     console.error('kit-step: ' + oldFormatText(signs));
     return 2;
   }
+  const deploy = deployLines(info, cwd);
+  if (deploy.error) {
+    console.error('kit-step: ' + deploy.error);
+    return 2;
+  }
   const files = stepFiles(cwd);
   const blocked = new Map();
   if (files.length) {
@@ -120,7 +127,7 @@ function main(argv) {
   if (decisions.length) out.push('DECISIONS:', ...decisions.map((d) => '- ' + d));
   if (notes.length) out.push('NOTES:', ...notes.map((n) => '- ' + n));
   out.push(`входящих: ${inbox.length}`);
-  out.push('', 'Режим:', ...deployLines(info, cwd),
+  out.push('', 'Режим:', ...deploy.lines,
     'документы на сервере: ' + (!docsOnServer(info.params) ? 'нет' : isSsh(info) ? 'да — перед коммитом заливка --docs, прочитай reference/ssh.md' : 'да'),
     remoteLine(info, cwd));
   out.push('', 'Шаг закрывает этап (NEXT другого этапа или —) — прочитай reference/stage-close.md.');

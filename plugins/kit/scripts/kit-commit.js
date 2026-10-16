@@ -12,7 +12,7 @@
 // Порядок: secret-scan --paths → git add → secret-scan --cached → git commit -F - -- <пути> → самопроверка
 // (один новый коммит, сообщение побайтно, только переданные пути, переданных путей нет в git status).
 // После проверенного коммита (с 3.0.0): --inbox N — убрать первые N входящих (decision-inbox.js); --push <имя> — отправить:
-// ветки на удалённом ещё нет — сначала secret-scan --history, затем git push -u <имя> HEAD (до 120 с, без запросов в терминале;
+// ветки на удалённом ещё нет — сначала secret-scan --history, затем git push -u <имя> HEAD (до 90 с, без запросов в терминале;
 // окно входа Git Credential Manager — для пользователя). Без --force, pull и rebase.
 // Код 0 — коммит сделан и проверен (и отправлен, если просили); 1 — остановила проверка путей или секретов, коммита нет;
 // 2 — ошибка запуска, git или хука, коммита нет; 3 — коммит есть, самопроверка нашла расхождение;
@@ -25,7 +25,9 @@ const { norm } = require('./lib/paths');
 const { INBOX, clearFirst } = require('./decision-inbox');
 
 const SCAN = path.join(__dirname, 'secret-scan.js');
-const PUSH_TIMEOUT = 120000;
+// Меньше предела команды Bash (120 с): зависший вход — код 4 «вышло время» от самого скрипта, а не оборванный вызов
+// (коммит к тому времени уже есть). Долгую первую отправку step-done запускает с увеличенным таймаутом Bash.
+const PUSH_TIMEOUT_MS = 90000;
 
 function run(cmd, args, input) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', input: input || '', maxBuffer: 64 * 1024 * 1024 });
@@ -80,10 +82,13 @@ function pushTo(name) {
       return { code: 4, lines: [...lines, 'kit-commit: не отправлено — ' + why] };
     }
   }
-  const p = spawnSync('git', ['push', '-u', name, 'HEAD'], { encoding: 'utf8', timeout: PUSH_TIMEOUT, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
+  const p = spawnSync('git', ['push', '-u', name, 'HEAD'], { encoding: 'utf8', timeout: PUSH_TIMEOUT_MS, env: { ...process.env, GIT_TERMINAL_PROMPT: '0' } });
   if (p.status === 0) return { code: 0, lines: [...lines, `kit-commit: отправлено в ${name}/${branch}`] };
   const err = ((p.stderr || '') + (p.stdout || '')).trim();
-  const why = /rejected|fetch first|non-fast-forward/i.test(err) ? 'на удалённом есть коммиты, которых здесь нет' : 'нет сети, входа или вышло время';
+  // «! [rejected] … (fetch first)» — там чужие коммиты; «! [remote rejected] … (… declined)» — отказал сам сервер (хук, защита ветки).
+  const why = /\[rejected\]|fetch first|non-fast-forward/i.test(err) ? 'на удалённом есть коммиты, которых здесь нет'
+    : /\[remote rejected\]|declined/i.test(err) ? 'удалённый репозиторий отклонил отправку (хук или защита ветки)'
+      : 'нет сети, входа или вышло время';
   return { code: 4, lines: [...lines, err.split('\n').pop() || String(p.error || ''), 'kit-commit: не отправлено — ' + why] };
 }
 
@@ -182,4 +187,4 @@ if (require.main === module) {
   }
 }
 
-module.exports = { main, parseArgs, cleanMessage };
+module.exports = { main, parseArgs, cleanMessage, PUSH_TIMEOUT_MS };

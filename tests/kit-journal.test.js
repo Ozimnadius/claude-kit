@@ -300,3 +300,39 @@ test('текущий этап начат при kit 2.x — столбец «К�
   const md = read(dir, J);
   assert.ok(md.includes('| 36.1 | ✅ | спек и план | согласовано | `abc1234` |\n| 36.2 | ✅ | второй сделан | тесты | |\n'), md);
 });
+
+test('шаг нового этапа без STAGE — код 2 с подсказкой передать STAGE, файлы не изменились (финальная проверка, M5)', () => {
+  const dir = project();
+  const before = snapshot(dir);
+  const r = run(dir, blocks({ ...BASE, STEP: '37.1', NEXT: '37.2 — дальше' }));
+  assert.equal(r.code, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /нет раздела «Этап 37» — для нового этапа передайте STAGE: 37 — название/);
+  assert.deepEqual(snapshot(dir), before);
+});
+
+test('новый STAGE убирает из «Блокеров» прежние пункты «на следующий этап (сверка этапа N)», сверка того же вызова дописывает свой (финальная проверка, M6)', () => {
+  const dir = project({}, { [J]: PROGRESS.replace('- **Блокеры и открытые вопросы:** старые блокеры',
+    '- **Блокеры и открытые вопросы:** старые блокеры; на следующий этап (сверка этапа 35): Т-9') });
+  const r = run(dir, blocks({ ...BASE, STEP: '36.4', SUMMARY: 'последний', NEXT: '37.1 — начало', STAGE: '37 — новый этап',
+    RECONCILE: '2026-10-20 | этап 36 | сверено с: таблица этапа | пунктов 4, сделано 3 | расхождения: Т-5 — на следующий этап | на следующий этап: Т-5' }));
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  const now = getSection(read(dir, J), 'Сейчас');
+  assert.ok(now.includes('- **Блокеры и открытые вопросы:** старые блокеры; на следующий этап (сверка этапа 36): Т-5'), now);
+  assert.doesNotMatch(now, /сверка этапа 35/);
+});
+
+test('план, оставленный в work/ при закрытии этапа (DOCS — «в работе, этап 37»), получает галочку последнего шага (финальная проверка, M9)', () => {
+  const dir = project();
+  const r = run(dir, blocks({ ...BASE, STEP: '36.4', SUMMARY: 'последний', NEXT: '—', DOCS: ['work/plan-x.md — план этапа 36 — в работе, этап 37'] }));
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.ok(read(dir, PLAN).includes('- [x] 36.4 — четвёртый'), read(dir, PLAN));
+});
+
+test('план прошлого этапа без строк нового этапа — шаг нового этапа без предупреждения (финальная проверка, M9)', () => {
+  const progress = PROGRESS.replace('| work/plan-x.md | план этапа 36 | в работе, этап 36 |', '| work/plan-x.md | план этапа 36 | в работе, этап 37 |')
+    + '\n## Этап 37 — новый\n\n| Шаг | Статус | Что сделано | Как проверено |\n|---|---|---|---|\n| 37.1 | ⏳ | начало | |\n';
+  const dir = project({}, { [J]: progress });
+  const r = run(dir, blocks({ ...BASE, STEP: '37.1', SUMMARY: 'начало', NEXT: '37.2 — дальше' }));
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /нет строки/);
+});
