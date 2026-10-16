@@ -53,4 +53,4 @@ function parseTable(text) {
   return [];
 }
 
-module.exports = { getSection, parseTable, normalize, splitRow };
+module.exports = { getSection, parseTable, normalize };
