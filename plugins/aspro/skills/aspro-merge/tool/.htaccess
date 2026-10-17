@@ -1,0 +1,9 @@
+# Сверка Аспро — консольный инструмент: через веб ничего не отдавать и не исполнять.
+# Для nginx нужно своё правило (см. README.md, раздел «Внедрение»): location ^~ /local/tools/ { deny all; }
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

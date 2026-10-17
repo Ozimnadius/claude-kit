@@ -11,12 +11,12 @@ test('marketplace.json и plugin.json согласованы', () => {
   const mp = readJson('.claude-plugin/marketplace.json');
   const pl = readJson('plugins/kit/.claude-plugin/plugin.json');
   assert.equal(mp.name, 'claude-kit');
-  assert.equal(mp.plugins.length, 1);
-  assert.equal(mp.plugins[0].name, 'kit');
-  assert.equal(mp.plugins[0].source, './plugins/kit');
+  assert.deepEqual(mp.plugins.map((p) => p.name), ['kit', 'aspro']);
+  const kit = mp.plugins.find((p) => p.name === 'kit');
+  assert.equal(kit.source, './plugins/kit');
   assert.equal(pl.name, 'kit');
   assert.match(pl.version, /^\d+\.\d+\.\d+$/);
-  assert.equal(mp.plugins[0].version, pl.version);
+  assert.equal(kit.version, pl.version);
 });
 
 test('мажорный выпуск: в README раздел «Переход на N.0», обзор собран по этой мажорной версии и без удалённого (3.0.0)', () => {

@@ -1,0 +1,229 @@
+{
+    "source": "git version 2.54.0.windows.1",
+    "cases": [
+        {
+            "name": "чистое: правки в разных местах",
+            "base": "<?php\n$a = 1;\n$b = 2;\n$c = 3;\n$d = 4;\n$e = 5;\n$f = 6;\n",
+            "ours": "<?php\n$a = 10; // SITE\n$b = 2;\n$c = 3;\n$d = 4;\n$e = 5;\n$f = 6;\n",
+            "theirs": "<?php\n$a = 1;\n$b = 2;\n$c = 3;\n$d = 4;\n$e = 5;\n$f = htmlspecialcharsbx(6);\n",
+            "expect": {
+                "diff3": {
+                    "text": "<?php\n$a = 10; // SITE\n$b = 2;\n$c = 3;\n$d = 4;\n$e = 5;\n$f = htmlspecialcharsbx(6);\n",
+                    "conflicts": 0
+                },
+                "merge": {
+                    "text": "<?php\n$a = 10; // SITE\n$b = 2;\n$c = 3;\n$d = 4;\n$e = 5;\n$f = htmlspecialcharsbx(6);\n",
+                    "conflicts": 0
+                }
+            }
+        },
+        {
+            "name": "конфликт: одна строка с обеих сторон",
+            "base": "<div>\n<?=$arResult[\"NAME\"]?>\n</div>\n",
+            "ours": "<div class=\"site\">\n<?=$arResult[\"NAME\"]?> <b>SITE</b>\n</div>\n",
+            "theirs": "<div>\n<?=htmlspecialcharsbx($arResult[\"NAME\"])?>\n</div>\n",
+            "expect": {
+                "diff3": {
+                    "text": "<<<<<<< ours\n<div class=\"site\">\n<?=$arResult[\"NAME\"]?> <b>SITE</b>\n||||||| base\n<div>\n<?=$arResult[\"NAME\"]?>\n=======\n<div>\n<?=htmlspecialcharsbx($arResult[\"NAME\"])?>\n>>>>>>> theirs\n</div>\n",
+                    "conflicts": 1
+                },
+                "merge": {
+                    "text": "<<<<<<< ours\n<div class=\"site\">\n<?=$arResult[\"NAME\"]?> <b>SITE</b>\n=======\n<div>\n<?=htmlspecialcharsbx($arResult[\"NAME\"])?>\n>>>>>>> theirs\n</div>\n",
+                    "conflicts": 1
+                }
+            }
+        },
+        {
+            "name": "одинаковая правка с обеих сторон",
+            "base": "a\nb\nc\nd\n",
+            "ours": "a\nB\nc\nd\n",
+            "theirs": "a\nB\nc\nd\n",
+            "expect": {
+                "diff3": {
+                    "text": "a\nB\nc\nd\n",
+                    "conflicts": 0
+                },
+                "merge": {
+                    "text": "a\nB\nc\nd\n",
+                    "conflicts": 0
+                }
+            }
+        },
+        {
+            "name": "наша сторона без изменений",
+            "base": "x\ny\nz\n",
+            "ours": "x\ny\nz\n",
+            "theirs": "x\nY\nz\nw\n",
+            "expect": {
+                "diff3": {
+                    "text": "x\nY\nz\nw\n",
+                    "conflicts": 0
+                },
+                "merge": {
+                    "text": "x\nY\nz\nw\n",
+                    "conflicts": 0
+                }
+            }
+        },
+        {
+            "name": "их сторона без изменений",
+            "base": "x\ny\nz\n",
+            "ours": "x\ny2\nz\n",
+            "theirs": "x\ny\nz\n",
+            "expect": {
+                "diff3": {
+                    "text": "x\ny2\nz\n",
+                    "conflicts": 0
+                },
+                "merge": {
+                    "text": "x\ny2\nz\n",
+                    "conflicts": 0
+                }
+            }
+        },
+        {
+            "name": "удаление против правки",
+            "base": "1\n2\n3\n4\n5\n",
+            "ours": "1\n2\n4\n5\n",
+            "theirs": "1\n2\n3 changed\n4\n5\n",
+            "expect": {
+                "diff3": {
+                    "text": "1\n2\n<<<<<<< ours\n||||||| base\n3\n=======\n3 changed\n>>>>>>> theirs\n4\n5\n",
+                    "conflicts": 1
+                },
+                "merge": {
+                    "text": "1\n2\n<<<<<<< ours\n=======\n3 changed\n>>>>>>> theirs\n4\n5\n",
+                    "conflicts": 1
+                }
+            }
+        },
+        {
+            "name": "вставки в одно место",
+            "base": "head\ntail\n",
+            "ours": "head\nours-1\nours-2\ntail\n",
+            "theirs": "head\ntheirs-1\ntail\n",
+            "expect": {
+                "diff3": {
+                    "text": "head\n<<<<<<< ours\nours-1\nours-2\n||||||| base\n=======\ntheirs-1\n>>>>>>> theirs\ntail\n",
+                    "conflicts": 1
+                },
+                "merge": {
+                    "text": "head\n<<<<<<< ours\nours-1\nours-2\n=======\ntheirs-1\n>>>>>>> theirs\ntail\n",
+                    "conflicts": 1
+                }
+            }
+        },
+        {
+            "name": "дописали в конец обе стороны",
+            "base": "function a() {}\nfunction b() {}\n",
+            "ours": "function a() {}\nfunction b() {}\n/* SITE: своя функция */\nfunction site() {}\n",
+            "theirs": "function a() {}\nfunction b() {}\nfunction vendor() {}\n",
+            "expect": {
+                "diff3": {
+                    "text": "function a() {}\nfunction b() {}\n<<<<<<< ours\n/* SITE: своя функция */\nfunction site() {}\n||||||| base\n=======\nfunction vendor() {}\n>>>>>>> theirs\n",
+                    "conflicts": 1
+                },
+                "merge": {
+                    "text": "function a() {}\nfunction b() {}\n<<<<<<< ours\n/* SITE: своя функция */\nfunction site() {}\n=======\nfunction vendor() {}\n>>>>>>> theirs\n",
+                    "conflicts": 1
+                }
+            }
+        },
+        {
+            "name": "соседние правки",
+            "base": "1\n2\n3\n4\n",
+            "ours": "1\ntwo\n3\n4\n",
+            "theirs": "1\n2\nthree\n4\n",
+            "expect": {
+                "diff3": {
+                    "text": "1\n<<<<<<< ours\ntwo\n3\n||||||| base\n2\n3\n=======\n2\nthree\n>>>>>>> theirs\n4\n",
+                    "conflicts": 1
+                },
+                "merge": {
+                    "text": "1\n<<<<<<< ours\ntwo\n3\n=======\n2\nthree\n>>>>>>> theirs\n4\n",
+                    "conflicts": 1
+                }
+            }
+        },
+        {
+            "name": "без перевода строки в конце",
+            "base": "a\nb\nc",
+            "ours": "a\nB\nc",
+            "theirs": "a\nb\nC",
+            "expect": {
+                "diff3": {
+                    "text": "a\n<<<<<<< ours\nB\nc\n||||||| base\nb\nc\n=======\nb\nC\n>>>>>>> theirs\n",
+                    "conflicts": 1
+                },
+                "merge": {
+                    "text": "a\n<<<<<<< ours\nB\nc\n=======\nb\nC\n>>>>>>> theirs\n",
+                    "conflicts": 1
+                }
+            }
+        },
+        {
+            "name": "пустая база",
+            "base": "",
+            "ours": "ours\n",
+            "theirs": "theirs\n",
+            "expect": {
+                "diff3": {
+                    "text": "<<<<<<< ours\nours\n||||||| base\n=======\ntheirs\n>>>>>>> theirs\n",
+                    "conflicts": 1
+                },
+                "merge": {
+                    "text": "<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n",
+                    "conflicts": 1
+                }
+            }
+        },
+        {
+            "name": "уточнение конфликта (стиль merge)",
+            "base": "alpha\nbeta\ngamma\ndelta\nepsilon\n",
+            "ours": "alpha\nBETA\ngamma\nDELTA\nepsilon\n",
+            "theirs": "alpha\nBeta\ngamma\nDelta\nepsilon\n",
+            "expect": {
+                "diff3": {
+                    "text": "alpha\n<<<<<<< ours\nBETA\n||||||| base\nbeta\n=======\nBeta\n>>>>>>> theirs\ngamma\n<<<<<<< ours\nDELTA\n||||||| base\ndelta\n=======\nDelta\n>>>>>>> theirs\nepsilon\n",
+                    "conflicts": 2
+                },
+                "merge": {
+                    "text": "alpha\n<<<<<<< ours\nBETA\ngamma\nDELTA\n=======\nBeta\ngamma\nDelta\n>>>>>>> theirs\nepsilon\n",
+                    "conflicts": 1
+                }
+            }
+        },
+        {
+            "name": "повтор одинаковых строк",
+            "base": "}\n}\n}\nx\n}\n}\n",
+            "ours": "}\n}\nsite\n}\nx\n}\n}\n",
+            "theirs": "}\n}\n}\nx\nvendor\n}\n}\n",
+            "expect": {
+                "diff3": {
+                    "text": "}\n}\nsite\n}\nx\nvendor\n}\n}\n",
+                    "conflicts": 0
+                },
+                "merge": {
+                    "text": "}\n}\nsite\n}\nx\nvendor\n}\n}\n",
+                    "conflicts": 0
+                }
+            }
+        },
+        {
+            "name": "перенос блока вендором",
+            "base": "<?php\nfunction a() {\n  return 1;\n}\nfunction b() {\n  return 2;\n}\necho a();\n",
+            "ours": "<?php\nfunction a() {\n  return 1; // SITE\n}\nfunction b() {\n  return 2;\n}\necho a();\n",
+            "theirs": "<?php\nfunction b() {\n  return 2;\n}\nfunction a() {\n  return 1;\n}\necho a() + b();\n",
+            "expect": {
+                "diff3": {
+                    "text": "<?php\n<<<<<<< ours\nfunction a() {\n  return 1; // SITE\n}\n||||||| base\nfunction a() {\n  return 1;\n}\n=======\n>>>>>>> theirs\nfunction b() {\n  return 2;\n}\nfunction a() {\n  return 1;\n}\necho a() + b();\n",
+                    "conflicts": 1
+                },
+                "merge": {
+                    "text": "<?php\n<<<<<<< ours\nfunction a() {\n  return 1; // SITE\n}\n=======\n>>>>>>> theirs\nfunction b() {\n  return 2;\n}\nfunction a() {\n  return 1;\n}\necho a() + b();\n",
+                    "conflicts": 1
+                }
+            }
+        }
+    ]
+}
