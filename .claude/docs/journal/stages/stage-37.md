@@ -1,0 +1,11 @@
+# плагин kit (маркетплейс claude-kit) — этап 37
+
+## Этап 37 — плагин aspro: сверка доработок с обновлением решений Аспро
+
+| Шаг | Статус | Что сделано | Как проверено |
+|---|---|---|---|
+| 37.1 | ✅ | спек и план этапа 37 — плагин aspro (скил aspro-merge и инструмент сверки) отдельным плагином маркетплейса | npm test — 466 тестов, 0 ошибок (перед этим npm ci: не были поставлены pngjs и pixelmatch); claude plugin validate plugins/kit --strict и claude plugin validate . --strict — пройдено; node tools/kit-denylist.js tree — чисто |
+| 37.2 | ✅ | плагин aspro 1.0.0: plugin.json, запись маркетплейса, скил aspro-merge с инструментом и документами (выпуск лаборатории), полный текст LGPL 2.1, тест tests/aspro-plugin.test.js, README | npm test — 471 тест, 0 ошибок (новый tests/aspro-plugin.test.js — 5 проверок; tests/manifest.test.js ищет kit по имени: в маркетплейсе два плагина); claude plugin validate plugins/kit --strict, plugins/aspro --strict и . --strict — пройдено; скрипт выпуска лаборатории в режиме записи — проверки запретных слов, личных путей, e-mail, типов файлов, php -l (20 файлов), selftest собранной копии, версий — пройдены, 27 файлов, LGPL сохранён; node tools/kit-denylist.js tree — чисто |
+| 37.3 | ✅ | выпуск aspro 1.0.0: этап слит в master и отправлен, плагин поставлен из маркетплейса и проверен; скил выпущен повторно без упоминаний лаборатории; этап закрыт | перед отправкой — независимые проверки: утечек нет (11 855 добавленных строк, имена файлов и сообщения коммитов; node tools/kit-denylist.js tree и msg — чисто; платного кода вендора в поставке нет), работоспособность (merge.php version и selftest из папки плагина — 88 проверок, 0 ошибок; внедрение на пробный сайт по разделу A скила — version 1.0.0, status с понятной ошибкой без решения Аспро; validate --strict; тесты плагина и манифеста); git push origin master — 00c3de7..9decdd6; claude plugin marketplace update claude-kit и claude plugin install aspro@claude-kit — aspro 1.0.0, scope user, enabled; merge.php version из кэша плагина — 1.0.0; npm test и validate --strict после повторного выпуска скила — пройдено |
+
+Сверка 2026-10-18 (сверено с: archive/spec-aspro.md, archive/plan-aspro.md): пунктов 12 (Т-1…Т-9 и 3 критерия готовности), сделано 12; расхождения: нет.

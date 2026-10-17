@@ -8,7 +8,8 @@ description: Обновление решения Аспро (Оптимус, К�
 Отвечай по-русски. Рядом с этим файлом (базовая папка скила — её путь виден при вызове скила): `tool/` — инструмент, `tool/README.md`
 — команды и параметры, **источник правды** (расходится со скилом — верь README и справке `merge.php` без аргументов; на сайте он в
 `local/tools/aspro-merge/README.md`), `docs/DESIGN.md` — устройство, `docs/GUIDE.md` — инструкция для команды (её пересказывай
-людям). В лаборатории, где инструмент разрабатывают: инструмент — `local/tools/aspro-merge`, документы — `docs/aspro-merge/`.
+людям). Рядом со скилом нет `tool/` (скил лежит в самом проекте, а не в плагине) — инструмент уже в `local/tools/aspro-merge`,
+документы — в `docs/aspro-merge/` проекта, если они там есть.
 
 ## Как устроено
 
@@ -51,8 +52,8 @@ description: Обновление решения Аспро (Оптимус, К�
 ## A. Внедрение и обновление инструмента
 
 **Откуда брать.** Источник — папка `tool/` в базовой папке скила: инструмент (без `tests/` и настроек сайта) и файл подключения
-`tool/integration/aspro_merge.php`. В лаборатории — `local/tools/aspro-merge` (папку `tests/` на сайт не выкладывать) и
-`local/php_interface/include/aspro_merge.php`. На сайте: инструмент — `local/tools/aspro-merge/`, файл подключения —
+`tool/integration/aspro_merge.php`; скил лежит в проекте без `tool/` — источник `local/tools/aspro-merge` (папку `tests/` на сайт не
+выкладывать) и `local/php_interface/include/aspro_merge.php` этого проекта. На сайте: инструмент — `local/tools/aspro-merge/`, файл подключения —
 `local/php_interface/include/aspro_merge.php`. Копировать — от владельца файлов сайта; без SSH файлы заливает человек.
 
 **Уже стоит?** Есть `local/tools/aspro-merge` — сравни `php local/tools/aspro-merge/merge.php version` на сайте (версия инструмента
