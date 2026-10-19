@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 // Хук SessionStart (startup|resume|clear|compact): раздел «Сейчас» из журнала и правила процесса в контекст.
+// С 3.1.0 — JSON: контекст — в hookSpecificOutput.additionalContext, напоминание о версии kit — пользователю (systemMessage).
 // Вне kit-проекта молчит. Любая ошибка — тихий выход 0.
 const fs = require('fs');
 const path = require('path');
@@ -40,6 +41,37 @@ const RULE_NO_PARAMS = '- В .claude/CLAUDE.md нет раздела «Пара�
 const SPEC_TEMPLATE = path.join(__dirname, '..', 'skills', 'project-init', 'templates', 'spec.md');
 const RULE_SP_ALWAYS = '- Superpowers при автозаливке: без отдельных веток и worktree (.worktrees, using-git-worktrees) — правки из них не дойдут до сервера.';
 const RULE_WORKTREE ='- Сессия работает в git worktree — правки здесь не попадут на сервер автозаливкой основной папки, пока их не сольют в основную ветку; не проверяй результат на сервере сразу после записи.';
+
+// Установленная версия kit — из манифеста плагина, рядом со скриптом.
+function installedVersion() {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version || '');
+  } catch (e) {
+    return '';
+  }
+}
+
+// -1 / 0 / 1; не версия вида X.Y.Z — null.
+function cmpVersion(a, b) {
+  const parse = (v) => (/^\d+\.\d+\.\d+$/.test(v) ? v.split('.').map(Number) : null);
+  const x = parse(a);
+  const y = parse(b);
+  if (!x || !y) return null;
+  for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] < y[i] ? -1 : 1;
+  return 0;
+}
+
+// Отметка «Версия kit» (с 3.1.0, ставит /kit:project-init) против установленной: любое расхождение — напоминание.
+// Раздела параметров нет — молчит (там своё правило про /kit:project-init).
+function versionNote(params, installed) {
+  if (!params.found || !installed) return '';
+  const mark = String(params.get('Версия kit', '')).trim();
+  if (!mark) return 'Версия kit в проекте не отмечена (установлен ' + installed + ') — запустите /kit:project-init: он догонит настройку проекта и поставит отметку.';
+  const c = cmpVersion(mark, installed);
+  if (c === 0) return '';
+  if (c === 1) return 'Проект настроен на kit ' + mark + ', а установлен более старый ' + installed + ' — обновите плагин: claude plugin update kit@claude-kit.';
+  return 'Проект настроен на kit ' + mark + ', установлен ' + installed + ' — запустите /kit:project-init, чтобы догнать настройку проекта.';
+}
 
 // Где лежат документы проекта (старую раскладку docs/ ловит правило старого формата).
 function docsRule(docsRel) {
@@ -104,6 +136,8 @@ function buildContext(info) {
   const signs = oldFormat(info);
   if (signs.length) out.push('- ' + oldFormatText(signs));
   if (!p.found) out.push(RULE_NO_PARAMS);
+  const note = versionNote(p, installedVersion());
+  if (note) out.push('- ' + note + ' Пользователь видит это напоминание; запускать или нет — решает он.');
   out.push(docsRule(info.docsRel));
   // Журнал по частям (с 2.13.0): в журнале — только текущее, остальное — в journal/ рядом с ним.
   if (info.hasJournal && fs.existsSync(path.join(path.dirname(info.journalPath), 'journal'))) {
@@ -118,9 +152,14 @@ function buildContext(info) {
 
 function main() {
   try {
-    const input = readStdinJson();
-    const text = buildContext(kitInfo(resolveProjectDir(input)));
-    if (text) process.stdout.write(text);
+    const info = kitInfo(resolveProjectDir(readStdinJson()));
+    const text = buildContext(info);
+    if (text) {
+      const o = { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } };
+      const note = versionNote(info.params, installedVersion());
+      if (note) o.systemMessage = '[kit] ' + note;
+      process.stdout.write(JSON.stringify(o) + '\n');
+    }
   } catch (e) {
     // хук не должен ломать сессию
   }
@@ -128,4 +167,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { buildContext, inWorktree, docsRule };
+module.exports = { buildContext, inWorktree, docsRule, versionNote, cmpVersion };

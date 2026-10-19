@@ -5,9 +5,17 @@ const path = require('path');
 const { makeProject, writeFiles, runScript } = require('./helpers');
 const { ALPHA_CLAUDE_MD, GAMMA_CLAUDE_MD, paramsMd, progressMd, journalFiles } = require('./fixtures');
 
-const run = (dir) => runScript('session-start.js', {
-  input: { hook_event_name: 'SessionStart', source: 'startup', cwd: dir },
-});
+// Хук отдаёт JSON (с 3.1.0): stdout — контекст Claude, user — напоминание пользователю.
+const run = (dir) => {
+  const r = runScript('session-start.js', {
+    input: { hook_event_name: 'SessionStart', source: 'startup', cwd: dir },
+  });
+  if (!r.stdout) return { ...r, user: '' };
+  const o = JSON.parse(r.stdout);
+  assert.equal(o.hookSpecificOutput.hookEventName, 'SessionStart');
+  return { ...r, stdout: o.hookSpecificOutput.additionalContext, user: o.systemMessage || '' };
+};
+const VERSION = require('../plugins/kit/.claude-plugin/plugin.json').version;
 
 test('чужой проект — тишина', () => {
   const r = run(makeProject({ 'index.php': '<?php' }));
@@ -170,4 +178,19 @@ test('PhpStorm Always при «Окружение: дев» — сохранен
   assert.match(dev, /- Выкладка: PhpStorm Always — любое сохранение в проекте сразу уходит на дев-сервер\./);
   const prod = run(makeProject({ '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'PhpStorm Always', 'Окружение': 'прод' }), '.claude/docs/progress.md': progressMd() })).stdout;
   assert.match(prod, /- Выкладка: PhpStorm Always — любое сохранение в проекте сразу уходит на сервер\./);
+});
+
+test('версия kit: совпала — тихо, иначе напоминание пользователю и строка в контекст', () => {
+  const at = (v) => run(makeProject({ '.claude/CLAUDE.md': paramsMd(v === undefined ? {} : { 'Версия kit': v }), ...journalFiles() }));
+  const same = at(VERSION);
+  assert.equal(same.user, '');
+  assert.doesNotMatch(same.stdout, /Версия kit в проекте|Проект настроен на kit/);
+  const none = at();
+  assert.match(none.user, /^\[kit\] Версия kit в проекте не отмечена \(установлен .+\) — запустите \/kit:project-init/);
+  assert.match(none.stdout, /- Версия kit в проекте не отмечена .*решает он\./);
+  assert.match(at('0.0.1').user, new RegExp('Проект настроен на kit 0\.0\.1, установлен ' + VERSION.replace(/\./g, '\.') + ' — запустите /kit:project-init'));
+  assert.match(at('99.0.0').user, /Проект настроен на kit 99\.0\.0, а установлен более старый .+ — обновите плагин/);
+  assert.match(at('3.x').user, /Проект настроен на kit 3\.x, установлен/, 'не разобрана — тоже расхождение');
+  const noParams = run(makeProject({ '.claude/docs/progress.md': progressMd() }));
+  assert.equal(noParams.user, '', 'нет раздела параметров — своё правило, без напоминания');
 });
