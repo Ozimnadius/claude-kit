@@ -1,9 +1,11 @@
 <?php
 /**
  * Сверка Аспро (local/tools/aspro-merge) — интеграция с сайтом.
- * Подключение — одна строка в local/php_interface/init.php:
+ * Подключение — одна строка в действующем init.php (ядро подключает только один: local/php_interface/init.php, если он
+ * есть, иначе bitrix/php_interface/init.php; на сайте, где есть только bitrix/…, local/…/init.php не создавать — он отключит прежний):
  *
- *     require_once __DIR__ . '/include/aspro_merge.php';
+ *     require_once __DIR__ . '/include/aspro_merge.php';                                       // в local/php_interface/init.php
+ *     require_once $_SERVER['DOCUMENT_ROOT'] . '/local/php_interface/include/aspro_merge.php'; // в bitrix/php_interface/init.php
  *
  * Что делает:
  *  1) main:OnModuleUpdate для модуля решения — открыть или продолжить сеанс сверки и сразу применить очевидное
@@ -40,7 +42,7 @@ if (!class_exists('AsproMergeSite', false)) {
     final class AsproMergeSite
     {
         /** Версия файла подключения — та же, что у инструмента (AsproMerge\Tool::VERSION) */
-        public const VERSION = '1.0.0';
+        public const VERSION = '1.1.0';
         public const AGENT = 'AsproMergeSite::agent();';
         /** Кеш проверки агента: время (unix), когда агент последний раз был найден в базе */
         public const OPTION_AGENT = 'aspro_merge_agent';
@@ -151,7 +153,7 @@ if (!class_exists('AsproMergeSite', false)) {
                 }
                 $c = self::config();
                 if (in_array($c->module, $mods, true)) {
-                    @set_time_limit(300);
+                    @set_time_limit(420); // ожидание хранилища (до 180 с) и снимок
                     $guard = (new \AsproMerge\Tool($c, 'предохранитель'))->guard();
                 }
             } catch (\Throwable $e) {
@@ -231,7 +233,9 @@ if (!class_exists('AsproMergeSite', false)) {
             }
             if (!self::agentExists()) {
                 Option::delete('main', ['name' => self::OPTION_AGENT]); // кеш устарел: агента в базе нет
-                \CAgent::AddAgent(self::AGENT, 'main', 'N', 86400);
+                // первый запуск — через сутки, а не на этом же хите: снимок при внедрении уже снят, а агент, запущенный сразу,
+                // занимал хранилище как раз тогда, когда человек из той же админки ставил обновление
+                \CAgent::AddAgent(self::AGENT, 'main', 'N', 86400, '', 'Y', \ConvertTimeStamp(time() + 86400, 'FULL'));
                 if (!self::agentExists()) {
                     return; // не добавился — кеш не ставим, проверим на следующем хите
                 }

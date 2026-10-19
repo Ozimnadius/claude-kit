@@ -14,7 +14,9 @@ final class Tool
      * в поставке — integration/aspro_merge.php) знает свою версию (AsproMergeSite::VERSION): они выпускаются вместе и
      * должны совпадать — это проверяют version и status.
      */
-    public const VERSION = '1.0.0';
+    public const VERSION = '1.1.0';
+    /** Сколько секунд предохранитель ждёт хранилище, занятое агентом или консолью */
+    public const GUARD_LOCK_WAIT = 180;
 
     /** Файл подключения на сайте (от корня) */
     public const INTEGRATION = 'local/php_interface/include/aspro_merge.php';
@@ -36,7 +38,7 @@ final class Tool
 
     private function lock(int $wait = 60)
     {
-        return Util::lock($this->c->store(true) . '/.lock', $wait);
+        return Util::lock($this->c->store(true) . '/.lock', $wait, $this->via);
     }
 
     private function cmd(): string
@@ -279,6 +281,7 @@ final class Tool
             $this->backupsCheck($r, $s);
             $this->noticesCheck($r, $s);
             $this->agentsCheck($r);
+            $this->initCheck($r);
             return $r;
         }
         $last = Session::last($c);
@@ -332,6 +335,7 @@ final class Tool
         $this->backupsCheck($r, null);
         $this->noticesCheck($r, null);
         $this->agentsCheck($r);
+        $this->initCheck($r);
         return $r;
     }
 
@@ -1311,10 +1315,44 @@ final class Tool
         return $r;
     }
 
-    /** Строки init.php, которые подключают интеграцию (не закомментированные): [номер строки => текст] */
+    /**
+     * init.php, который подключает ядро (от корня сайта): ядро берёт ОДИН файл — local/php_interface/init.php, если он есть,
+     * иначе bitrix/php_interface/init.php (getLocalPath). Нет ни одного — local/… (его и создают при внедрении).
+     */
+    private function activeInit(): string
+    {
+        foreach (['local/php_interface/init.php', 'bitrix/php_interface/init.php'] as $rel) {
+            if (is_file($this->c->abs($rel))) {
+                return $rel;
+            }
+        }
+        return 'local/php_interface/init.php';
+    }
+
+    /**
+     * status: bitrix/php_interface/init.php есть, но не действует — его перекрывает local/php_interface/init.php и не
+     * подключает сам. Так бывает, если local/…/init.php создали при внедрении сверки на сайте, где был только bitrix/…
+     */
+    private function initCheck(Result $r): void
+    {
+        $local = $this->c->abs('local/php_interface/init.php');
+        $bitrix = $this->c->abs('bitrix/php_interface/init.php');
+        if (!is_file($local) || !is_file($bitrix) || trim((string)file_get_contents($bitrix)) === '') {
+            return;
+        }
+        $code = preg_replace('~^\s*(//|#).*$~m', '', (string)file_get_contents($local));
+        if (!preg_match('~bitrix/php_interface/init\.php~', (string)$code)) {
+            $r->warn('Ядро подключает только local/php_interface/init.php, а bitrix/php_interface/init.php тоже есть и из него не подключается — '
+                . 'код в bitrix/php_interface/init.php на сайте не работает. Если local/php_interface/init.php создали при внедрении сверки, '
+                . 'перенесите строку подключения сверки в bitrix/php_interface/init.php и удалите local/php_interface/init.php (или подключите '
+                . 'в нём прежний файл первой строкой: require_once $_SERVER[\'DOCUMENT_ROOT\'] . \'/bitrix/php_interface/init.php\';).');
+        }
+    }
+
+    /** Строки действующего init.php, которые подключают интеграцию (не закомментированные): [номер строки => текст] */
     private function integrationLines(): array
     {
-        $init = $this->c->abs('local/php_interface/init.php');
+        $init = $this->c->abs($this->activeInit());
         $out = [];
         foreach (is_file($init) ? (file($init) ?: []) : [] as $i => $l) {
             if (str_contains($l, 'aspro_merge.php') && !preg_match('~^\s*(//|#|\*)~', $l)) {
@@ -1352,7 +1390,7 @@ final class Tool
                 ? 'зарегистрирован (' . implode('; ', array_map(self::agentText(...), $a['own'])) . ')'
                 : 'не зарегистрирован — ' . ($connected
                     ? 'интеграция добавит его сама при заходе в админку (проверяет таблицу агентов не реже раза в час) и после обновления модуля'
-                    : 'интеграция не подключена в local/php_interface/init.php')));
+                    : 'интеграция не подключена в ' . $this->activeInit() . ' (действующий init.php)')));
         foreach ($a['foreign'] as $f) {
             $r->warn('Посторонний агент сверки «' . $f['name'] . '» (' . self::agentText($f) . '): имя похоже на агент сверки, но это не '
                 . Bitrix::AGENT . ' — вероятно, остался от прежней версии сверки или другой схемы обновления Аспро и может вызывать '
@@ -1494,7 +1532,7 @@ final class Tool
                 . "Сначала завершите сверку ({$this->cmd()} finish) или откатите записи ({$this->cmd()} rollback); удалить всё равно — uninstall --force.");
             $dry = true;
         }
-        $init = $c->abs('local/php_interface/init.php');
+        $init = $c->abs($this->activeInit());
         $initLines = $this->integrationLines();
         $connected = (bool)$initLines;
         // 1. уведомление, агент, опция-кеш, посторонние агенты — через ядро
@@ -1576,7 +1614,7 @@ final class Tool
             } else {
                 Util::rrmdir($store);
                 $parent = dirname($store);
-                $left = is_dir($parent) ? array_diff(scandir($parent) ?: [], ['.', '..', '.htaccess', 'index.php', '.lock']) : [];
+                $left = is_dir($parent) ? array_diff(scandir($parent) ?: [], ['.', '..', '.htaccess', 'index.php', '.lock', '.lock.who']) : [];
                 $r->line(is_dir($store) ? "Хранилище $store удалено не полностью — проверьте права" : "Хранилище $store удалено"
                     . (!$left && is_dir($parent) ? "; папка $parent пуста — её можно удалить вручную" : ''));
                 if (!is_dir($store) && is_file($pointer)) {
@@ -1706,7 +1744,9 @@ final class Tool
         $lock = null;
         try {
             Etalon::reset();
-            $lock = $this->lock(20);
+            // дольше, чем длится снимок у агента или в консоли (на большом шаблоне — около минуты): иначе установку
+            // остановит обычная занятость хранилища
+            $lock = $this->lock(self::GUARD_LOCK_WAIT);
             $s = Session::current($c);
             if ($s) {
                 try {

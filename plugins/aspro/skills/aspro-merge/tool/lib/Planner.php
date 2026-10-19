@@ -31,11 +31,13 @@ final class Planner
         'deleted-ours' => 'файла не было на сайте при снимке (удалили как доработку или не устанавливали), а обновлятор его положил',
         'merge' => 'доработан и изменён вендором — трёхстороннее слияние',
         'ours-ws' => 'наше отличие только в отступах и переводах строк — берём вендора',
+        'stale-copy' => 'копия — старый код вендора (совпадает с прежней версией), а не доработка — берём новую версию вендора',
         'theirs-eol' => 'вендор сменил только переводы строк — оставляем нашу',
         'same' => 'наша версия уже совпадает с новой версией вендора',
         'point-edit' => 'обновлятор изменил файл не по эталону (точечная правка) — проверить',
         'not-applied' => 'эталон изменился, но обновлятор этот файл на сайт не переносил',
-        'absent-in-copy' => 'в копии файла нет (ядро возьмёт его из установленной папки)',
+        'absent-in-copy' => 'в копии нет каталога шаблона компонента — ядро возьмёт файл из установленной папки',
+        'absent-no-fallback' => 'в копии файла нет, а из установленной папки ядро его не возьмёт — новая версия вендора кладётся в копию',
         'added-both' => 'новый файл вендора, а у нас уже есть свой с тем же именем',
         'no-base' => 'нет базы для слияния — сравнить вручную',
         'binary' => 'двоичный (или больше 4 МБ) файл доработан и изменён вендором',
@@ -110,6 +112,10 @@ final class Planner
     private array $modeChanged = [];
     /** ключ => пометка «правили на сайте во время сеанса» (запись идёт на разбор, действие не меняется) */
     private array $flag = [];
+    /** ключ => пояснение к записи (на разбор не переводит) */
+    private array $note = [];
+    /** снимки прежних версий (кроме базы) — ленивая загрузка */
+    private ?array $oldSnaps = null;
 
     public function __construct(private Config $c, private Session $s, private ?Snapshot $base, private ?float $deadline = null)
     {
@@ -263,7 +269,16 @@ final class Planner
                         $this->add($a, $rel, 'new-file', 'copy', $h, ['auto' => $s->putBlob($theirsC), 'perms' => $i1['p'] ?? null]);
                     }
                 } elseif ($i1 !== null) {
-                    $this->add($a, $rel, 'absent-in-copy', 'none', $h);
+                    if ($this->copyFallback($a, $rel)) {
+                        $this->add($a, $rel, 'absent-in-copy', 'none', $h);
+                    } elseif ($theirsC === null) {
+                        $this->add($a, $rel, 'binary', 'keep', $h, ['needs' => 'review',
+                            'note' => 'в копии файла нет, а ядро возьмёт его только из копии; файл вендора больше 4 МБ — скопируйте его в копию вручную']);
+                    } else {
+                        // файл шаблона сайта вне components/ (js/, css/, lang/…) ядро ищет только по SITE_TEMPLATE_PATH, файл шаблона
+                        // компонента — только в выбранном каталоге шаблона: без новой версии в копии её не увидит никто (1.7.21: js/app.js)
+                        $this->add($a, $rel, 'absent-no-fallback', 'copy', $h, ['auto' => $s->putBlob($theirsC), 'perms' => $i1['p'] ?? null]);
+                    }
                 }
                 continue;
             }
@@ -337,13 +352,112 @@ final class Planner
                 $this->add($a, $rel, 'theirs-eol', 'none', $h);
                 continue;
             }
+            // копия старше базы: её «доработкой» стал бы откат исправлений вендора между старой версией и базой
+            $old = $this->closestOldVendor($a, $rel, $oursC, $baseC);
+            if ($old !== null && $old['same']) {
+                $this->add($a, $rel, 'stale-copy', 'take', $h, ['auto' => $s->putBlob((string)$theirsC),
+                    'note' => "наша версия — старый код вендора ({$old['label']}), а не доработка: в копию кладётся новая версия вендора"]);
+                continue;
+            }
             if (Util::isMin($rel)) {
                 $this->add($a, $rel, 'min', 'keep', $h, ['needs' => 'review', 'auto' => $ours['h'], 'note' => $this->minNote($rel)]
                     + $this->triple($a, $rel, $h, $baseC, $oursC, $theirsC));
                 continue;
             }
+            if ($old !== null) {
+                $this->note[$key] = "база слияния — {$old['label']}: копия ближе к ней, чем к версии до обновления (копия отстала), — "
+                    . 'исправления вендора между ними тоже перенесены; base в тройке — эта версия';
+                $this->mergeEntry($a, $rel, ['base' => Util::gitHash($old['content'])] + $h, $old['content'], $oursC, (string)$theirsC, $ours['h']);
+                continue;
+            }
             $this->mergeEntry($a, $rel, $h, $baseC, $oursC, (string)$theirsC, $ours['h']);
         }
+    }
+
+    /**
+     * Режим «копия»: старая версия вендора, от которой копия файла на самом деле произошла, — если копия к ней ближе,
+     * чем к версии до обновления. Кандидаты: бэкапы обновлятора рядом с файлом (_<файл>.back<версия> в установленной
+     * папке и в копии) и эталоны прежних снимков. ['label', 'content', 'same' — копия с ней совпадает без учёта пробелов]
+     * или null (копия ближе к версии до обновления — обычное слияние).
+     */
+    private function closestOldVendor(Area $a, string $rel, string $oursC, string $baseC): ?array
+    {
+        $cands = Updater::oldVersions($this->c, $a, $rel);
+        foreach ($this->oldSnapshots() as $ver => $snap) {
+            $c = $snap->etalonContent($a, $rel);
+            if ($c !== null) {
+                $cands["эталон снимка $ver"] ??= $c;
+            }
+        }
+        $best = null;
+        $baseD = self::distance($baseC, $oursC);
+        foreach ($cands as $label => $c) {
+            if (Util::wsSame($c, $baseC)) {
+                continue; // та же версия, что база
+            }
+            if (Util::wsSame($c, $oursC)) {
+                return ['label' => $label, 'content' => $c, 'same' => true];
+            }
+            $d = self::distance($c, $oursC);
+            if ($d < $baseD && ($best === null || $d < $best['d'])) {
+                $best = ['label' => $label, 'content' => $c, 'same' => false, 'd' => $d];
+            }
+        }
+        // заметно ближе, а не на пару строк: иначе обычное слияние от базы надёжнее
+        return $best !== null && $best['d'] * 2 <= $baseD ? $best : null;
+    }
+
+    /** Снимки прежних версий, кроме базы сеанса (для поиска старых версий вендора) */
+    private function oldSnapshots(): array
+    {
+        if ($this->oldSnaps === null) {
+            $this->oldSnaps = [];
+            $baseVer = $this->base?->version;
+            foreach (Snapshot::versions($this->c) as $v) {
+                if ($v !== $baseVer && version_compare($v, $this->vNow, '<') && ($snap = Snapshot::load($this->c, $v))) {
+                    $this->oldSnaps[$v] = $snap;
+                }
+            }
+        }
+        return $this->oldSnaps;
+    }
+
+    /** Число различающихся строк (без учёта переводов строк, BOM и пробелов) */
+    private static function distance(string $x, string $y): int
+    {
+        $n = static fn(string $c) => implode("\n", array_map(static fn($l) => preg_replace('/\s+/', ' ', trim($l)),
+            explode("\n", Util::stripBom(am_to_lf($c))))) . "\n";
+        $d = 0;
+        foreach (am_xdiff(am_split($n($x)), am_split($n($y))) as [, , $c1, $c2]) {
+            $d += $c1 + $c2;
+        }
+        return $d;
+    }
+
+    /**
+     * Режим «копия»: возьмёт ли ядро файл, которого нет в копии, из установленной папки. Шаблон компонента ядро ищет по
+     * папкам по очереди (local/templates/<шаблон>/components/…, затем bitrix/templates/<шаблон>/components/…) и берёт
+     * первый найденный каталог шаблона целиком; остальные файлы шаблона сайта (js/, css/, lang/, header.php) подключаются
+     * по SITE_TEMPLATE_PATH — только из копии. Поэтому подмена есть, лишь когда в копии нет каталога шаблона компонента,
+     * к которому относится файл (для вложенных шаблонов комплексного компонента — самого глубокого из них).
+     */
+    private function copyFallback(Area $a, string $rel): bool
+    {
+        if ($a->kind !== 'tpl' || !str_starts_with($rel, 'components/')) {
+            return false;
+        }
+        $seg = explode('/', $rel);
+        $dir = null;
+        // группы <пространство>/<компонент>/<шаблон>, за которыми есть ещё хотя бы имя файла; вложенная группа — только
+        // если такой компонент есть на сайте (иначе это просто подпапка шаблона: lang/ru, page_blocks…)
+        for ($i = 1; $i + 3 < count($seg); $i += 3) {
+            if ($i > 1 && !is_dir($this->c->abs("bitrix/components/{$seg[$i]}/{$seg[$i + 1]}"))
+                && !is_dir($this->c->abs("local/components/{$seg[$i]}/{$seg[$i + 1]}"))) {
+                break;
+            }
+            $dir = implode('/', array_slice($seg, 0, $i + 3));
+        }
+        return $dir !== null && !is_dir($this->c->abs($a->copy . '/' . $dir));
     }
 
     /** Подсказка для разбора: результат слияния с маркерами (если все три версии — текст) */
@@ -791,6 +905,9 @@ final class Planner
         $key = "{$a->id}:$rel";
         $needs = $more['needs'] ?? null;
         $note = $more['note'] ?? null;
+        if (isset($this->note[$key])) {
+            $note = trim(($note ?? '') . '; ' . $this->note[$key], '; ');
+        }
         if (isset($this->flag[$key]) && $cat !== 'not-applied') {
             $needs ??= 'review';
             $note = trim(($note ?? '') . '; ' . $this->flag[$key], '; ');

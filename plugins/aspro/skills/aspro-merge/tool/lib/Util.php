@@ -740,8 +740,11 @@ final class Util
 
     // --- блокировка хранилища ---
 
-    /** @return resource */
-    public static function lock(string $file, int $wait = 60)
+    /**
+     * Блокировка хранилища. $who — кто берёт (в <файл>.who пишется он и время: при ожидании ошибка скажет, кто держит).
+     * @return resource
+     */
+    public static function lock(string $file, int $wait = 60, string $who = '')
     {
         self::mkdir(dirname($file));
         $new = !is_file($file);
@@ -758,9 +761,21 @@ final class Util
         while (!flock($fp, LOCK_EX | LOCK_NB)) {
             if (microtime(true) > $until) {
                 fclose($fp);
-                self::fail("Хранилище занято другим процессом сверки (ждали $wait с): $file");
+                $h = json_decode((string)@file_get_contents("$file.who"), true);
+                $holder = is_array($h) && isset($h['who'], $h['time'])
+                    ? sprintf(' — держит «%s» с %s', $h['who'], date('d.m.Y H:i:s', (int)$h['time']))
+                    : '';
+                self::fail("Хранилище занято другим процессом сверки$holder (ждали $wait с): $file");
             }
             usleep(200000);
+        }
+        if ($who !== '') {
+            // рядом, а не в сам файл блокировки: в Windows заблокированный файл другой процесс не прочитает
+            $newWho = !is_file("$file.who");
+            @file_put_contents("$file.who", (string)json_encode(['who' => $who, 'time' => time(), 'pid' => getmypid()], JSON_UNESCAPED_UNICODE));
+            if ($newWho) {
+                self::own("$file.who");
+            }
         }
         return $fp;
     }

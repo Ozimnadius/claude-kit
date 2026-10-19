@@ -425,9 +425,29 @@ final class Snapshot
                         }
                     }
                 }
-                if ($behind > 150) {
-                    $w[] = "Копия {$a->copy} отличается от {$a->installed} в $behind файлах — похоже, копия снята со старой версии: "
-                        . '«доработками» станут отставания от вендора. Сначала обновите копию до текущей версии.';
+                // файлы копии, которые без учёта пробелов равны прежней версии вендора (по бэкапам обновлятора), — не доработки
+                $stale = [];
+                foreach (array_keys($mods) as $rel) {
+                    if (!isset($inst[$rel])) {
+                        continue;
+                    }
+                    $cur = Util::read($c->abs("{$a->copy}/$rel"));
+                    foreach (Updater::oldVersions($c, $a, $rel) as $label => $old) {
+                        if (Util::wsSame($cur, $old)) {
+                            $stale[$rel] = $label;
+                            break;
+                        }
+                    }
+                }
+                if ($behind > 150 || $stale) {
+                    $list = array_map(static fn($rel, $l) => "$rel ($l)", array_keys($stale), $stale);
+                    $w[] = "Копия {$a->copy} отличается от {$a->installed} в $behind " . Util::plural($behind, 'файле', 'файлах', 'файлах')
+                        . ($behind > 150 ? ' — похоже, копия снята со старой версии' : '') . ': «доработками» станут отставания от вендора, и слияние '
+                        . 'сохранит старый код поверх исправлений вендора. '
+                        . ($stale ? count($stale) . ' ' . Util::plural(count($stale), 'файл', 'файла', 'файлов') . ' копии — просто старая версия вендора '
+                            . '(совпадает с бэкапом обновлятора), их можно заменить файлами из ' . $a->installed . ': '
+                            . implode(', ', array_slice($list, 0, 10)) . (count($list) > 10 ? ' …' : '') . '. ' : '')
+                        . 'Остальное — обновить до текущей версии по README («Отставшая копия»).';
                 }
             } else {
                 $mods = array_filter($inst, static fn($h, $rel) => isset($ref[$rel]) && $real($h, $ref[$rel], $rel), ARRAY_FILTER_USE_BOTH);

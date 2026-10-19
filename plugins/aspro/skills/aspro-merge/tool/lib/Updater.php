@@ -114,6 +114,27 @@ final class Updater
     }
 
     /** Бэкап обновлятора по имени файла: [имя исходного файла или папки, версия, zip?] или null */
+    /**
+     * Прежние версии файла вендора по бэкапам обновлятора рядом с ним (_<файл>.back<версия>) — в установленной папке
+     * области и, в режиме «копия», в копии: ['бэкап обновлятора <версия>' => содержимое], только текстовые.
+     */
+    public static function oldVersions(Config $c, Area $a, string $rel): array
+    {
+        $out = [];
+        $dir = dirname($rel) === '.' ? '' : dirname($rel) . '/';
+        foreach (array_unique(array_filter([$a->installed, $a->copy], static fn($r) => $r !== null)) as $root) {
+            $pre = $root === '' ? '' : "$root/";
+            foreach (glob($c->abs("$pre{$dir}_" . basename($rel) . '.back*')) ?: [] as $f) {
+                $p = self::parseName(basename($f));
+                $content = $p && !$p[2] ? Util::read($f) : null;
+                if ($content !== null && Util::isText($content)) {
+                    $out['бэкап обновлятора ' . $p[1]] ??= $content;
+                }
+            }
+        }
+        return $out;
+    }
+
     public static function parseName(string $name): ?array
     {
         if (preg_match('/^_(.+)\.back(\d+(?:\.\d+)*)$/', $name, $m)) {

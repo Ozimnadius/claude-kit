@@ -131,6 +131,18 @@ final class Verifier
                 }
             }
         }
+        // 3б. языковые фразы итога: шаблон вендора мог начать брать фразы, которых нет в нашем языковом файле
+        foreach (array_keys($last) as $t) {
+            $e = $byTarget[$t] ?? null;
+            if ($e && $last[$t]['after'] !== null && str_ends_with($t, '.php') && ($a = $c->area((string)$e['area']))) {
+                $miss = $this->missingPhrases($a, (string)$e['rel'], (string)Util::read($c->abs($t)));
+                if ($miss) {
+                    $notes[] = "$t: фраз нет в языковых файлах на сайте, а у вендора они есть — на странице будут пустые подписи: "
+                        . implode(', ', array_map(static fn($k, $f) => "$k (взять из $f)", array_keys($miss), $miss))
+                        . ' (фразы с именем из переменной так не находятся — проверьте страницу)';
+                }
+            }
+        }
         if ($rows) {
             $r->line('Записанные инструментом файлы:');
             array_push($r->lines, ...Result::table($rows, ['Файл', 'Как записан', 'Проверка']));
@@ -177,6 +189,50 @@ final class Verifier
             : ($this->pagesInfo['requested'] ? 'страницы не проверены' : 'страницы не проверялись (verify --urls)');
         $r->line(($r->problems ? 'Итог: есть проблемы' : ($this->notes ? 'Итог: ошибок нет, есть что посмотреть (' . count($this->notes) . ')' : 'Итог: всё в порядке'))
             . "; $pg");
+    }
+
+    /**
+     * Фразы, которые итог берёт через GetMessage / Loc::getMessage / BX.message, а на сайте их нет ни в языковом файле
+     * рядом (<папка файла>/lang/<язык>/<файл>), ни в общем lang/<язык>/header.php шаблона сайта, — хотя в тех же файлах
+     * вендора они есть. [фраза => языковой файл вендора, где она есть]. Только области шаблона и компонентов.
+     */
+    private function missingPhrases(Area $a, string $rel, string $code): array
+    {
+        if ($a->kind === 'pub' || $code === '') {
+            return [];
+        }
+        preg_match_all('~(?:GetMessage|Loc::getMessage|BX\.message)\(\s*[\'"]([A-Za-z0-9_]+)[\'"]~', $code, $m);
+        $used = array_unique($m[1]);
+        if (!$used) {
+            return [];
+        }
+        $lang = $this->c->lang;
+        $files = [(dirname($rel) === '.' ? '' : dirname($rel) . '/') . "lang/$lang/" . basename($rel)];
+        if ($a->kind === 'tpl') {
+            $files[] = "lang/$lang/header.php";
+        }
+        $keys = static function (?string $php): array {
+            preg_match_all('~\$MESS\s*\[\s*[\'"]([^\'"]+)[\'"]\s*\]~', (string)$php, $mm);
+            return array_flip($mm[1]);
+        };
+        $have = [];
+        $vendor = [];
+        $E1 = Etalon::current($this->c, $a);
+        foreach ($files as $f) {
+            $have += $keys(Util::read($this->c->abs($a->target($f))));
+            // у вендора: установленная папка (режим «копия») или новый эталон
+            $vc = $a->mode === Area::COPY ? Util::read($this->c->abs(($a->installed === '' ? '' : $a->installed . '/') . $f)) : $E1->content($f);
+            foreach (array_keys($keys($vc)) as $k) {
+                $vendor[$k] ??= ($a->mode === Area::COPY ? ($a->installed === '' ? '' : $a->installed . '/') : 'эталон: ') . $f;
+            }
+        }
+        $out = [];
+        foreach ($used as $k) {
+            if (!isset($have[$k]) && isset($vendor[$k])) {
+                $out[$k] = $vendor[$k];
+            }
+        }
+        return $out;
     }
 
     /**
