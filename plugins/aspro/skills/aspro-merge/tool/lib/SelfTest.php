@@ -268,15 +268,25 @@ final class SelfTest
         $this->check(str_contains(Verifier::ajaxHint('/ajax/basket_fly.php', 500, 403), 'только POST')
             && Verifier::ajaxHint('/catalog/', 200, 403) === '' && Verifier::ajaxHint('/ajax/x.php', 403, 403) === ''
             && Verifier::ajaxHint('/ajax/x.php', 200, 500) === '', 'verify: подсказка про ajax только для POST — у ajax-адреса с 403/405');
-        // раздел «Окно…»: связанные изменения вендора и абзац о смеси версий
-        $e = ['key' => 'tpl:a', 'target' => 'components/x/template.php', 'needs' => 'conflict', 'cat' => 'merge', 'action' => 'restore', 'mode' => Area::COPY,
-            'status' => 'conflict', 'related' => [['target' => 'ajax/x.php', 'tokens' => ['unsignParameters']]]];
-        $lines = implode("\n", Report::windowLines(['entries' => [$e], 'ours' => [], 'opened' => 0, 'batches' => []], true));
-        $this->check(str_contains($lines, 'связанные изменения вендора: `ajax/x.php`') && str_contains($lines, '**Смесь версий.**'),
-            'report.md: в окне — связанные изменения вендора и смесь версий');
-        $e['related'] = [];
-        $this->check(!str_contains(implode("\n", Report::windowLines(['entries' => [$e], 'ours' => [], 'opened' => 0, 'batches' => []], true)), 'Смесь версий'),
-            'report.md: без связанных изменений абзаца о смеси версий нет');
+        // раздел «Окно…»: связанные изменения вендора и смесь версий по парам файлов (с 1.2.1)
+        $mk = static fn(string $key, string $act, ?string $needs, string $st, array $rel = []) => ['key' => $key, 'target' => $key, 'needs' => $needs,
+            'cat' => 'merge', 'action' => $act, 'mode' => Area::COPY, 'status' => $st,
+            'related' => array_map(static fn($k) => ['key' => $k, 'target' => $k, 'tokens' => ['unsignParameters']], $rel)];
+        $d = ['entries' => [$mk('tpl/stores.php', 'restore', 'conflict', 'conflict', ['ajax/stores.php']), $mk('ajax/stores.php', 'take', null, 'applied'),
+            $mk('tpl/a.php', 'restore', 'conflict', 'conflict', ['tpl/b.php']), $mk('tpl/b.php', 'restore', 'conflict', 'conflict', ['tpl/a.php'])],
+            'ours' => [], 'opened' => 0, 'batches' => []];
+        $lines = implode("\n", Report::windowLines($d, true));
+        $this->check(str_contains($lines, 'связанные изменения вендора: `ajax/stores.php`') && str_contains($lines, '**Смесь версий в окне**')
+            && str_contains($lines, '- `tpl/stores.php` — прежняя версия ↔ `ajax/stores.php` — новая версия вендора (общие имена: `unsignParameters`)')
+            && str_contains($lines, 'Одна версия у обоих файлов (между собой согласованы): `tpl/a.php` ↔ `tpl/b.php`.')
+            && substr_count($lines, 'tpl/a.php` ↔') === 1, 'report.md: смесь версий — пары с разными версиями и согласованные, без повторов');
+        $d['entries'] = [$mk('tpl/a.php', 'restore', 'conflict', 'conflict')];
+        $this->check(!str_contains(implode("\n", Report::windowLines($d, true)), 'Смесь версий'), 'report.md: без связанных изменений смеси версий нет');
+        // автослияния со старым кодом: только слияние на месте (или ждёт apply) без решения поверх
+        $rb = static fn(string $st, string $act = 'merge') => ['target' => "t-$st", 'status' => $st, 'action' => $act, 'rollback' => 't: старый код'];
+        $this->check(array_column(Planner::rollbacks([$rb('applied'), $rb('auto'), $rb('done'), $rb('conflict'), $rb('applied', 'take'),
+            ['target' => 'x', 'status' => 'applied', 'action' => 'merge']]), 'target') === ['t-applied', 't-auto'],
+            'status: автослияния со старым кодом — применённые и ждущие apply, без решённых и записей без пометки');
     }
 
     /**

@@ -439,6 +439,15 @@ final class Tool
                 }
             }
         }
+        $rbs = $s->isOpen() ? Planner::rollbacks($d['entries']) : [];
+        if ($rbs) {
+            $r->attention();
+            $r->line('Автослияния со старым кодом копии (наша версия откатывает исправления вендора, бывшие до обновления) — разберите '
+                . 'вместе с конфликтами: старый код — заменить вендорским (resolved от theirs с настоящей доработкой → resolve → apply-resolved):');
+            foreach ($rbs as $e) {
+                $r->line('  СТАРЫЙ КОД ' . $e['rollback']);
+            }
+        }
         $open = array_filter($att, static fn($e) => in_array($e['status'], ['conflict', 'review', 'error'], true));
         if ($open && $s->isOpen() && ($win['held_ours'] || $win['other'])) {
             $r->warn('До сверки сайт работает на смеси версий: в файлах на разбор — прежняя (наша) версия или файл не тронут, а остальные '
@@ -459,12 +468,12 @@ final class Tool
         foreach ($d['warnings'] as $w) {
             $r->warn($w);
         }
-        if ($att || !empty($counts['auto'])) {
+        if ($att || !empty($counts['auto']) || $rbs) {
             if (!empty($counts['auto'])) {
                 $r->next("{$this->cmd()} apply — применить очевидное");
             }
-            if (array_filter($att, static fn($e) => in_array($e['status'], ['conflict', 'review'], true))) {
-                $r->next('по каждому конфликту/разбору: прочитать merged, ours.diff, theirs.diff в папке тройки, записать итог в файл resolved там же');
+            if (array_filter($att, static fn($e) => in_array($e['status'], ['conflict', 'review'], true)) || $rbs) {
+                $r->next('по каждому конфликту/разбору и автослиянию со старым кодом: прочитать merged, ours.diff, theirs.diff в папке тройки, записать итог в файл resolved там же');
                 $r->next("{$this->cmd()} resolve <файл> [ours|theirs|keep|<путь к решению>] — принять решение (проверка маркеров и php -l)");
             }
             if (array_filter($att, static fn($e) => $e['status'] === 'resolved')) {
@@ -486,7 +495,8 @@ final class Tool
                 'vendor_fix' => $e['vendor_fix'] ?? null, 'outcome' => Planner::outcome($e)], $s->attention())),
             'entries' => array_values(array_map(static fn($e) => ['key' => $e['key'], 'target' => $e['target'], 'cat' => $e['cat'],
                 'action' => $e['action'], 'status' => $e['status'], 'outcome' => Planner::outcome($e), 'related' => $e['related'] ?? [],
-                'vendor_fix' => $e['vendor_fix'] ?? null], $d['entries'])),
+                'vendor_fix' => $e['vendor_fix'] ?? null, 'rollback' => $e['rollback'] ?? null], $d['entries'])),
+            'rollbacks' => array_column(Planner::rollbacks($d['entries']), 'target'),
             'window' => array_map(static fn($l) => array_column($l, 'target'), Planner::window($d['entries'])),
             'conflict_keep' => $d['conflict_keep'] ?? null,
             'warnings' => $d['warnings']];
@@ -1684,6 +1694,12 @@ final class Tool
             foreach (Planner::windowText($win, 4) as $line) {
                 $msg .= ' ' . htmlspecialchars($line);
             }
+            $rbs = Planner::rollbacks($s->d['entries']);
+            if ($rbs) {
+                $t = array_column($rbs, 'target');
+                $msg .= ' Автослияний со старым кодом копии (откатывают исправления вендора, бывшие до обновления): ' . count($t) . ' — '
+                    . htmlspecialchars(implode(', ', array_slice($t, 0, 3)) . (count($t) > 3 ? ' …' : '')) . '; разобрать вместе с конфликтами.';
+            }
             $msg .= sprintf(' Запустите сверку в Claude Code (скил aspro-merge): <code>%s status</code>.', $this->cmd());
             if ($n < 0) {
                 $msg = sprintf('Обновлено решение Аспро (%s) %s → %s, но рассчитать сверку за отведённое время (%d с) не удалось — ничего не применено. '
@@ -1721,8 +1737,8 @@ final class Tool
             }
             $r->line(strip_tags($msg));
             $r->line('Уведомление: ' . Bitrix::notify($c, $msg));
-            Bitrix::log($att || $n < 0 ? 'WARNING' : 'INFO', 'update', strip_tags($msg));
-            if ($att || $pending || $n < 0) {
+            Bitrix::log($att || $rbs || $n < 0 ? 'WARNING' : 'INFO', 'update', strip_tags($msg));
+            if ($att || $rbs || $pending || $n < 0) {
                 $r->attention();
             }
             $r->data = ['written' => $n, 'session' => $this->sessionData($s)];

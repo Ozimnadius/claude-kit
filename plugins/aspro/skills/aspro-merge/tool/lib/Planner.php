@@ -837,21 +837,23 @@ final class Planner
         [$act, $auto, $hold] = $this->hold($a, $oursH, $h['theirs']);
         if ($r['conflicts'] === 0) {
             $mh = $this->s->putBlob($r['text']);
+            // чистое слияние, которое сохраняет старый код отставшей копии (с 1.2.1): видно уже в status и уведомлении
+            $rb = Verifier::rollbackNotes($a->target($rel), $baseC, $oursC, $theirsC, $r['text'], 'merge.php')[0] ?? null;
             if (($this->s->d['lint'][$key]['h'] ?? null) === $mh) {
-                $this->add($a, $rel, 'lint', $act, $h, ['needs' => 'review', 'auto' => $auto,
+                $this->add($a, $rel, 'lint', $act, $h, ['needs' => 'review', 'auto' => $auto, 'rollback' => $rb,
                     'note' => 'слилось без конфликтов, но php -l: ' . $this->s->d['lint'][$key]['error'] . "; $hold"]
                     + $this->triple($a, $rel, $h, $baseC, $oursC, $theirsC, $extra));
                 return;
             }
             if (($this->s->d['lint_defer'][$key] ?? null) === $mh) {
-                $this->add($a, $rel, 'lint', $act, $h, ['needs' => 'review', 'auto' => $auto,
+                $this->add($a, $rel, 'lint', $act, $h, ['needs' => 'review', 'auto' => $auto, 'rollback' => $rb,
                     'note' => 'слилось без конфликтов, но проверить php -l в веб-запросе было нечем (нет PHP CLI): разбор token_get_all не ловит ошибки '
                         . "компиляции — результат не записан; $hold; выполните в консоли merge.php apply (там php -l есть)"]
                     + $this->triple($a, $rel, $h, $baseC, $oursC, $theirsC, $extra));
                 return;
             }
             // fallback — что положить на место, если результат слияния не пройдёт php -l при записи (как у конфликта)
-            $this->add($a, $rel, 'merge', 'merge', $h, ['auto' => $mh, 'conflicts' => 0, 'share' => $share, 'fallback' => $auto]
+            $this->add($a, $rel, 'merge', 'merge', $h, ['auto' => $mh, 'conflicts' => 0, 'share' => $share, 'fallback' => $auto, 'rollback' => $rb]
                 + $this->triple($a, $rel, $h, $baseC, $oursC, $theirsC, $extra));
             return;
         }
@@ -917,7 +919,8 @@ final class Planner
             'cat' => $cat, 'about' => self::CAT[$cat], 'action' => $action, 'auto' => $more['auto'] ?? null,
             'perms' => $more['perms'] ?? null, 'needs' => $needs, 'h' => $h,
             'conflicts' => $more['conflicts'] ?? null, 'hunks' => $more['hunks'] ?? null, 'share' => $more['share'] ?? null,
-            'note' => $note, 'files' => $more['files'] ?? null, 'fallback' => $more['fallback'] ?? null, 'status' => null,
+            'note' => $note, 'files' => $more['files'] ?? null, 'fallback' => $more['fallback'] ?? null, 'rollback' => $more['rollback'] ?? null,
+            'status' => null,
         ];
     }
 
@@ -1071,6 +1074,17 @@ final class Planner
             }
         }
         return $w;
+    }
+
+    /**
+     * Автослияния, которые сохранили старый код отставшей копии (поле rollback записи, с 1.2.1): слияние на месте или ждёт
+     * apply, решения поверх него нет. Слияние всё равно лучше прежней версии (в нём есть изменения вендора этого
+     * обновления), поэтому применяется, но в status, уведомлении и report.md оно — «разобрать вместе с конфликтами».
+     */
+    public static function rollbacks(array $entries): array
+    {
+        return array_values(array_filter($entries, static fn($e) => !empty($e['rollback'])
+            && in_array($e['status'], ['applied', 'auto', 'ok'], true) && ($e['action'] ?? '') === 'merge'));
     }
 
     /**
