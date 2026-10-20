@@ -6,7 +6,8 @@
  * сравнение со страницами «до» из снимка).
  *
  * «ПОСМОТРЕТЬ» — не ошибка, а место для проверки глазами (код выхода от них не меняется): изменение доработки или
- * вендора не нашлось в итоговом файле (строки — целиком), признаков исправления вендора в итоге меньше, файл не равен
+ * вендора не нашлось в итоговом файле (строки — целиком), признаков исправления вендора в итоге меньше, наша версия
+ * откатывает исправления вендора, бывшие уже до обновления (копия отстала), файл не равен
  * эталону или решению, файл изменили после записи инструмента (или после завершения сверки), размер
  * страницы изменился больше чем на 20%. Они сохраняются в session.json (verify.notes) и report.md.
  * $readOnly — завершённый сеанс: ничего не записывается (ни pages-after.json, ни что-либо ещё).
@@ -118,6 +119,7 @@ final class Verifier
                     . ') — проверить, что исправление вендора не потеряно; строки версии вендора целиком', $lostT, $e['target']);
             }
             // признаки исправлений вендора (экранирование, подпись параметров, sessid…): в итоге их не меньше, чем у вендора
+            $noted = [];
             foreach (Planner::fixHints($b, $th) as $hint) {
                 if ($hint['added'] <= $hint['removed']) {
                     continue;
@@ -126,10 +128,13 @@ final class Verifier
                 $inFinal = preg_match_all($re, Util::stripBom(am_to_lf($cur)));
                 $inTheirs = preg_match_all($re, Util::stripBom(am_to_lf($th)));
                 if ($inFinal < $inTheirs) {
+                    $noted[] = $hint['marker'];
                     $notes[] = "{$e['target']}: {$hint['marker']} в итоге $inFinal, у вендора $inTheirs ({$hint['label']}) — проверить, не потеряно ли "
                         . "исправление вендора (подсказка по словам; сравнить: {$this->tool->cmdName()} diff {$e['target']})";
                 }
             }
+            // наша версия откатывает то, что у вендора было уже до обновления (копия отстала), — слияние это сохраняет молча
+            array_push($notes, ...self::rollbackNotes($e['target'], $b, $o, $th, $cur, $this->tool->cmdName(), $noted));
         }
         // 3б. языковые фразы итога: шаблон вендора мог начать брать фразы, которых нет в нашем языковом файле
         foreach (array_keys($last) as $t) {
@@ -178,7 +183,7 @@ final class Verifier
         unset($notes);
         if ($this->notes) {
             $r->line('ПОСМОТРЕТЬ — не ошибки, а места для проверки глазами (изменение доработки или вендора не нашлось в итоге, '
-                . 'файл изменили после записи, размер страницы заметно изменился):');
+                . 'наша версия откатывает исправления вендора, файл изменили после записи, размер страницы заметно изменился):');
             foreach ($this->notes as $n) {
                 $r->line("ПОСМОТРЕТЬ: $n");
             }
@@ -450,6 +455,43 @@ final class Verifier
         return $out;
     }
 
+    /**
+     * Откат исправлений вендора в слиянии (с 1.2.0): признак из Planner::FIX_MARKERS был уже в базе, наша версия его
+     * убрала, и в итоге его меньше, чем у вендора (count((array)…) → count(…), убранный блок Secure logout с bitrix_sessid,
+     * htmlspecialcharsbx); или наша добавила старый код из Planner::OLD_CODE (.live() на jQuery 2), и в итоге его больше,
+     * чем у вендора. Вендор эту строку в обновлении не менял, правкой она числится у нас — автослияние сохраняет её
+     * молча. Пометка на файл, признаки — по меткам; $skip — признаки, уже помеченные как «потерянное исправление вендора».
+     */
+    public static function rollbackNotes(string $target, string $base, string $ours, string $theirs, string $final, string $cmd, array $skip = []): array
+    {
+        $n = static fn(string $x) => Util::stripBom(am_to_lf($x));
+        $txt = ['base' => $n($base), 'ours' => $n($ours), 'theirs' => $n($theirs), 'final' => $n($final)];
+        $cnt = static fn(string $re) => array_map(static fn($t) => preg_match_all($re, $t), $txt);
+        $by = [];
+        foreach (Planner::FIX_MARKERS as $marker => [$label, $re]) {
+            $c = $cnt($re);
+            if (!in_array($marker, $skip, true) && $c['ours'] < $c['base'] && $c['final'] < $c['theirs']) {
+                $by['убрано'][$label][] = "$marker: в базе {$c['base']}, у нас {$c['ours']}, в итоге {$c['final']}, у вендора {$c['theirs']}";
+            }
+        }
+        foreach (Planner::OLD_CODE as $marker => [$label, $re]) {
+            $c = $cnt($re);
+            if ($c['ours'] > $c['base'] && $c['final'] > $c['theirs']) {
+                $by['добавлено'][$label][] = "$marker: в базе {$c['base']}, у нас {$c['ours']}, в итоге {$c['final']}, у вендора {$c['theirs']}";
+            }
+        }
+        if (!$by) {
+            return [];
+        }
+        $parts = [];
+        foreach ($by as $verb => $labels) {
+            $parts[] = "у нас $verb: " . implode('; ', array_map(static fn($l, $m) => "$l (" . implode(', ', $m) . ')', array_keys($labels), $labels));
+        }
+        return ["$target: наша версия откатывает исправления вендора, бывшие до обновления — " . implode('; ', $parts)
+            . ' — похоже на старый код вендора (копия отстала), а не на доработку: '
+            . "слияние оставило его в итоге; сравнить: $cmd diff $target --against=base"];
+    }
+
     /** Пометка со строками целиком: первая строка — что не так, дальше строки файла с отступом 4 пробела (до 40) */
     private static function linesNote(string $head, array $lines, string $target): string
     {
@@ -491,7 +533,8 @@ final class Verifier
             $bad = $p['code'] === 0 || $p['code'] >= 500 || $p['errors'] || ($b && $b['code'] !== $p['code']);
             if ($bad) {
                 $this->pagesInfo['bad']++;
-                $r->problem("страница $u: код " . ($b['code'] ?? '?') . " → {$p['code']}" . ($p['errors'] ? ', ' . implode(', ', $p['errors']) : ''));
+                $r->problem("страница $u: код " . ($b['code'] ?? '?') . " → {$p['code']}" . ($p['errors'] ? ', ' . implode(', ', $p['errors']) : '')
+                    . self::ajaxHint($u, $b['code'] ?? null, $p['code']));
             } elseif ($b && $b['size'] > 0 && abs($p['size'] - $b['size']) / $b['size'] > 0.2) {
                 $this->notes[] = "страница $u — размер изменился на $delta";
             }
@@ -502,6 +545,20 @@ final class Verifier
         if ($this->s && !$this->readOnly) {
             Util::jsonWrite($this->s->dir . '/pages-after.json', ['time' => time(), 'pages' => $pages]);
         }
+    }
+
+    /**
+     * Подсказка к проблеме страницы (с 1.2.0): ajax-адрес стал отвечать 403/405 — вендор мог закрыть его для GET (только
+     * POST с проверкой сессии; в 1.7.21 — ajax/basket_fly.php). verify запрашивает адреса GET без сессии и отличить такое
+     * от поломки не может: проверьте действием посетителя, а адрес уберите из urls.
+     */
+    public static function ajaxHint(string $u, ?int $before, int $now): string
+    {
+        if (!preg_match('~(^|/)ajax/~i', $u) || !in_array($now, [403, 405], true) || $before === $now) {
+            return '';
+        }
+        return " — ajax-адрес: если с этой версии он принимает только POST с проверкой сессии, это не поломка; проверьте его "
+            . 'действием посетителя (в браузере) и уберите из urls — verify запрашивает адреса GET без сессии';
     }
 
     /** Получить страницы: код ответа, размер, признаки ошибок PHP и маркеров конфликта */

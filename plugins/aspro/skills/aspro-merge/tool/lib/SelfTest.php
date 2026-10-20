@@ -222,6 +222,61 @@ final class SelfTest
             'агенты: свой — только точное имя; посторонние — похожие на AsproMerge/aspro_merge (и другой регистр своего), чужие — нет');
         $this->check(str_contains(Session::HASH_FORMAT, 'git blob sha1'), 'формат хешей описан');
         $this->windowChecks();
+        $this->rollbackChecks();
+    }
+
+    /**
+     * Откат исправлений вендора отставшей копией (с 1.2.0; случаи проверки 1.7.20 → 1.7.21): автослияние сохраняет старый
+     * код молча — verify помечает; подсказка у ajax-адреса только для POST; связанные изменения в разделе «Окно…».
+     */
+    private function rollbackChecks(): void
+    {
+        $cmd = 'merge.php';
+        // летающая корзина: у вендора давно count((array)…), копия — без (array) (500 под PHP 8); вендор правил другое место
+        $base = "<?\$n = count((array)\$_SESSION['LIST']);\n\$a = 1;\n?>\n<div class=\"fly\"></div>\n";
+        $ours = "<?\$n = count(\$_SESSION['LIST']);\n\$a = 1;\n?>\n<div class=\"fly\"></div>\n";
+        $theirs = "<?\$n = count((array)\$_SESSION['LIST']);\n\$a = 1;\n?>\n<div class=\"fly basket\"></div>\n";
+        $m = Planner::merge3($base, $ours, $theirs);
+        $notes = Verifier::rollbackNotes('fly/template.php', $base, $ours, $theirs, $m['text'], $cmd);
+        $this->check($m['conflicts'] === 0 && str_contains($m['text'], "count(\$_SESSION['LIST'])") && count($notes) === 1
+            && str_contains($notes[0], 'у нас убрано: приведение типов и проверка ввода ((array): в базе 1, у нас 0, в итоге 0, у вендора 1)')
+            && str_contains($notes[0], 'merge.php diff fly/template.php --against=base'), 'verify: слияние молча оставило count() без (array) — ПОСМОТРЕТЬ');
+        $this->check(Verifier::rollbackNotes('fly/template.php', $base, $ours, $theirs, $theirs, $cmd) === [], 'verify: в итоге вендорская строка — пометки нет');
+        $this->check(Verifier::rollbackNotes('fly/template.php', $base, $ours, $theirs, $m['text'], $cmd, ['(array)']) === [], 'verify: уже помеченный признак не повторяется');
+        // меню: копия без блока Secure logout (bitrix_sessid) — одна пометка на файл, признаки по меткам
+        $blk = "<?if(strpos(\$i['LINK'], 'logout') && \$secure){\$i['LINK'] .= '&sessid='.bitrix_sessid();}?>\n";
+        $base = "<ul>\n$blk<li><?=\$i['TEXT']?></li>\n<li>2</li>\n<li>3</li>\n</ul>\n";
+        $ours = "<ul>\n<li><?=\$i['TEXT']?></li>\n<li>2</li>\n<li>3</li>\n</ul>\n";
+        $theirs = "<ul>\n$blk<li><?=\$i['TEXT']?></li>\n<li>2</li>\n<li>3</li>\n</ul><!-- menu -->\n";
+        $m = Planner::merge3($base, $ours, $theirs);
+        $notes = Verifier::rollbackNotes('menu/template.php', $base, $ours, $theirs, $m['text'], $cmd);
+        $this->check($m['conflicts'] === 0 && count($notes) === 1 && str_contains($notes[0], 'проверка сессии (sessid) (bitrix_sessid: в базе 1, у нас 0')
+            && str_contains($notes[0], 'sessid: в базе 1'), 'verify: слияние молча убрало Secure logout — одна пометка');
+        // быстрый просмотр: копия держит .live(), у вендора $(document).on()
+        $base = "\$(document).on('click', '.tab', f);\nvar a = 1;\n";
+        $ours = "\$('.tab').live('click', f);\nvar a = 1;\n";
+        $theirs = "\$(document).on('click', '.tab', f);\nvar a = 2;\n";
+        $m = Planner::merge3($base, $ours, $theirs);
+        $notes = Verifier::rollbackNotes('fast_view/script.js', $base, $ours, $theirs, $m['text'], $cmd);
+        $this->check(count($notes) === 1 && str_contains($notes[0], 'у нас добавлено: устаревший jQuery: .live() убран в jQuery 1.9'),
+            'verify: слияние молча оставило .live() — ПОСМОТРЕТЬ');
+        // настоящая доработка рядом с исправлениями вендора — не откат
+        $base = "<a href=\"<?=htmlspecialcharsbx(\$u)?>\">\n";
+        $ours = "<a class=\"site\" href=\"<?=htmlspecialcharsbx(\$u)?>\">\n";
+        $this->check(Verifier::rollbackNotes('a.php', $base, $ours, $base, $ours, $cmd) === [], 'verify: доработка без отката признаков — пометки нет');
+        // ajax-адрес только для POST: подсказка у 403/405, у страниц и без смены кода — нет
+        $this->check(str_contains(Verifier::ajaxHint('/ajax/basket_fly.php', 500, 403), 'только POST')
+            && Verifier::ajaxHint('/catalog/', 200, 403) === '' && Verifier::ajaxHint('/ajax/x.php', 403, 403) === ''
+            && Verifier::ajaxHint('/ajax/x.php', 200, 500) === '', 'verify: подсказка про ajax только для POST — у ajax-адреса с 403/405');
+        // раздел «Окно…»: связанные изменения вендора и абзац о смеси версий
+        $e = ['key' => 'tpl:a', 'target' => 'components/x/template.php', 'needs' => 'conflict', 'cat' => 'merge', 'action' => 'restore', 'mode' => Area::COPY,
+            'status' => 'conflict', 'related' => [['target' => 'ajax/x.php', 'tokens' => ['unsignParameters']]]];
+        $lines = implode("\n", Report::windowLines(['entries' => [$e], 'ours' => [], 'opened' => 0, 'batches' => []], true));
+        $this->check(str_contains($lines, 'связанные изменения вендора: `ajax/x.php`') && str_contains($lines, '**Смесь версий.**'),
+            'report.md: в окне — связанные изменения вендора и смесь версий');
+        $e['related'] = [];
+        $this->check(!str_contains(implode("\n", Report::windowLines(['entries' => [$e], 'ours' => [], 'opened' => 0, 'batches' => []], true)), 'Смесь версий'),
+            'report.md: без связанных изменений абзаца о смеси версий нет');
     }
 
     /**
