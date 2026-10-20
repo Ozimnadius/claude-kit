@@ -323,6 +323,14 @@ test('--paths: папка — каждый файл, который из неё 
   assert.equal(stdin.code, 1, stdin.stdout);
   assert.match(stdin.stdout, /^ {2}\.idea\/x\.xml: запрещённый путь/m);
   assert.doesNotMatch(stdin.stdout, /theme\/a\.php/);
+  // папка без изменений (всё закоммичено или игнорируется) — так и сказано, а не голое «файлов: 0» (с 3.2.1)
+  git(dir, 'rm', '-q', '--cached', '--ignore-unmatch', 'bitrix/templates/theme/_a.php.back1');
+  require('fs').unlinkSync(path.join(dir, 'bitrix/templates/theme/_a.php.back1'));
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', '41.2: рабочие папки');
+  const idle = scan(dir, '--paths', 'bitrix', 'a.php');
+  assert.equal(idle.code, 0, idle.stdout);
+  assert.match(idle.stdout, /чисто \(файлов: 1\); в папках bitrix изменений к коммиту нет — всё закоммичено или игнорируется \.gitignore/);
 });
 
 test('снимки docs/visual — базовый запрет (от корня проекта)', () => {

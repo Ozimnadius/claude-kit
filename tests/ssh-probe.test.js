@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { runScript, writeFiles, tmpDir } = require('./helpers');
-const { domainsOf, probeScript, parseProbe, workCandidates } = require('../plugins/kit/scripts/ssh-probe');
+const { parseArgs, domainsOf, probeScript, parseProbe, format, workCandidates } = require('../plugins/kit/scripts/ssh-probe');
 
 const FAKE = path.join(__dirname, 'fake-ssh.js');
 
@@ -119,6 +119,40 @@ test('ssh-probe: скрипт разведки в настоящем sh нахо
   assert.ok(p.dirs.some((d) => /www\/alpha\.example\.com$/.test(d.path) && d.bitrix), r.stdout);
   assert.ok(p.dirs.some((d) => /public_html$/.test(d.path) && !d.bitrix), r.stdout);
   assert.match(r.stdout, /^USER \S+/m);
+});
+
+test('ssh-probe: папка не по домену — находит перебор ~/www/*; по адресу и по --dir — с пометкой, одна папка — один раз (с 3.2.1)', { skip: !shOk }, () => {
+  const home = writeFiles(tmpDir('kit-home4-'), {
+    'www/site-folder/bitrix/.settings.php': '<?php', 'www/site-folder/bitrix/templates/landing24/a.php': '',
+    'www/site-folder/bitrix/templates/theme/a.php': '', 'www/alpha.example.com/bitrix/.settings.php': '<?php', 'www/plain/index.php': '',
+  });
+  const run = (domains, dirs) => {
+    const r = spawnSync('sh', ['-s'], { input: probeScript(domains, dirs), env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    assert.equal(r.status, 0, r.stderr);
+    return parseProbe(r.stdout, null);
+  };
+  const p = run(['alpha.example.com'], []);
+  const site = p.dirs.find((d) => /www\/site-folder$/.test(d.path));
+  const alpha = p.dirs.filter((d) => /www\/alpha\.example\.com$/.test(d.path));
+  assert.ok(site && site.bitrix && !p.via[site.path], 'папка не по домену найдена перебором, без пометки: ' + JSON.stringify(p));
+  assert.equal(alpha.length, 1, 'папка по домену — один раз, хотя её находит и перебор');
+  assert.equal(p.via[alpha[0].path], 'url');
+  assert.ok(p.dirs.some((d) => /www\/plain$/.test(d.path) && !d.bitrix));
+  const out = format(p);
+  assert.match(out, /^Папка: .*www\/alpha\.example\.com \[bitrix\] \[по адресу\]$/m);
+  assert.match(out, /^Папка: .*www\/site-folder \[bitrix\]\n {2}где правят — кандидаты в bitrix\/: bitrix\/templates\/theme\n {2}шаблоны ядра \(не правят, не кандидаты\): landing24$/m);
+  const d = run([], ['www/site-folder']);
+  assert.equal(d.via[d.dirs.find((x) => /site-folder$/.test(x.path)).path], 'dir');
+});
+
+test('ssh-probe: --dir — путь без ведущего «/» или с ним; переписанный Git Bash (C:/…) и «..» — код 4', () => {
+  assert.deepEqual(parseArgs(['ok', '--dir', '/www/site/', '--dir', 'www/b']).dirs, ['www/site', 'www/b']);
+  assert.ok(probeScript([], ['www/site']).includes("probe \"$HOME\"/'www/site' ' via:dir'"));
+  for (const bad of ['C:/Program Files/Git/www/site', 'www/../etc', 'a\\b']) {
+    assert.equal(runScript('ssh-probe.js', { args: ['ok', '--dir', bad], env: { KIT_SSH: FAKE } }).code, 4, bad);
+  }
+  assert.deepEqual(workCandidates(['bitrix/templates/.default/', 'bitrix/templates/learning/', 'bitrix/templates/mail_user/', 'bitrix/templates/shop/']),
+    { work: ['bitrix/templates/shop'], copies: [], system: ['learning', 'mail_user'] });
 });
 
 test('ssh-probe: нет `readlink -f` — запасной путь через cd && pwd -P; версия PHP через "$b" -r', { skip: !shOk }, () => {

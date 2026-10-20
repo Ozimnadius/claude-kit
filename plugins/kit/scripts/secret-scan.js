@@ -134,13 +134,14 @@ function git(args, maxBuffer = 512 * 1024 * 1024) {
 }
 
 // --paths: папка — пути, которые из неё возьмёт git: изменённые, удалённые и новые неигнорируемые (git status -uall),
-// у переименования — оба. Файлы и несуществующие пути — как есть.
+// у переименования — оба. Файлы и несуществующие пути — как есть. → { files, idle — папки, из которых git не возьмёт
+// ничего (всё закоммичено или игнорируется .gitignore; с 3.2.1 об этом говорит вывод, а не голое «файлов: 0») }.
 function expandDirs(root, list) {
   const isDir = (p) => {
     try { return fs.statSync(path.join(root, p)).isDirectory(); } catch { return false; }
   };
   const dirs = list.filter(isDir);
-  if (!dirs.length) return list;
+  if (!dirs.length) return { files: list, idle: [] };
   const parts = git(['status', '--porcelain=v1', '-z', '-uall', '--', ...dirs]).split('\0');
   const inside = [];
   for (let i = 0; i < parts.length; i++) {
@@ -148,7 +149,11 @@ function expandDirs(root, list) {
     inside.push(norm(parts[i].slice(3)));
     if (/[RC]/.test(parts[i].slice(0, 2))) inside.push(norm(parts[++i]));
   }
-  return [...new Set([...list.filter((p) => !dirs.includes(p)), ...inside])];
+  const under = (d) => {
+    const low = d.replace(/\/+$/, '').toLowerCase() + '/';
+    return inside.some((p) => p.toLowerCase().startsWith(low));
+  };
+  return { files: [...new Set([...list.filter((p) => !dirs.includes(p)), ...inside])], idle: dirs.filter((d) => !under(d)) };
 }
 
 function scanDiff(diff, extra, out) {
@@ -200,6 +205,7 @@ function main(argv) {
   const rules = parseRules([...BASE_FORBIDDEN, ...params.list('Не коммитить')]);
   const findings = [];
   let files;
+  let idle = [];
   let commits = null;
   if (argv[0] === '--cached') {
     const sep = argv.indexOf('--');
@@ -216,7 +222,7 @@ function main(argv) {
   } else if (argv[0] === '--paths' && argv.slice(argv[1] === '--' ? 2 : 1).length) {
     let list = argv.slice(argv[1] === '--' ? 2 : 1);
     if (list.length === 1 && list[0] === '-') list = fs.readFileSync(0, 'utf8').split(/\r?\n/).filter(Boolean);
-    files = expandDirs(root, list.map(norm));
+    ({ files, idle } = expandDirs(root, list.map(norm)));
   } else if (argv[0] === '--history') {
     // По коммиту за раз: первый коммит проекта — копия сайта, одним `git log -p` он упёрся бы в память.
     commits = git(['rev-list', '--reverse', 'HEAD']).split(/\s+/).filter(Boolean);
@@ -245,8 +251,9 @@ function main(argv) {
     if (r) pathHits.push(norm(f) + ': запрещённый путь (' + r.pattern + ')');
   }
   const all = [...pathHits, ...findings];
+  const idleLine = idle.length ? '; в папках ' + idle.join(', ') + ' изменений к коммиту нет — всё закоммичено или игнорируется .gitignore' : '';
   if (!all.length) {
-    console.log('secret-scan: чисто (' + (commits ? 'коммитов: ' + commits.length + ', ' : '') + 'файлов: ' + files.length + ')');
+    console.log('secret-scan: чисто (' + (commits ? 'коммитов: ' + commits.length + ', ' : '') + 'файлов: ' + files.length + ')' + idleLine);
     return 0;
   }
   console.log('secret-scan: найдено ' + all.length + ':');
