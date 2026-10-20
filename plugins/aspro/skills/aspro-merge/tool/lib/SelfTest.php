@@ -269,17 +269,33 @@ final class SelfTest
             && Verifier::ajaxHint('/catalog/', 200, 403) === '' && Verifier::ajaxHint('/ajax/x.php', 403, 403) === ''
             && Verifier::ajaxHint('/ajax/x.php', 200, 500) === '', 'verify: подсказка про ajax только для POST — у ajax-адреса с 403/405');
         // раздел «Окно…»: связанные изменения вендора и смесь версий по парам файлов (с 1.2.1)
-        $mk = static fn(string $key, string $act, ?string $needs, string $st, array $rel = []) => ['key' => $key, 'target' => $key, 'needs' => $needs,
-            'cat' => 'merge', 'action' => $act, 'mode' => Area::COPY, 'status' => $st,
+        // запись: ключ = путь, область — первая папка пути (tpl — копия шаблона, cmp — компонент «на месте», pub — публичная часть)
+        $mk = static fn(string $key, string $act, ?string $needs, string $st, array $rel = [], string $cat = 'merge') => ['key' => $key, 'target' => $key,
+            'area' => strtok($key, '/'), 'needs' => $needs, 'cat' => $cat, 'action' => $act, 'mode' => str_starts_with($key, 'tpl/') ? Area::COPY : Area::INPLACE,
+            'status' => $st, 'h' => ['base' => 'b', 'theirs' => 't'],
             'related' => array_map(static fn($k) => ['key' => $k, 'target' => $k, 'tokens' => ['unsignParameters']], $rel)];
-        $d = ['entries' => [$mk('tpl/stores.php', 'restore', 'conflict', 'conflict', ['ajax/stores.php']), $mk('ajax/stores.php', 'take', null, 'applied'),
+        $d = ['entries' => [$mk('tpl/stores.php', 'restore', 'conflict', 'conflict', ['pub/stores.php']), $mk('pub/stores.php', 'none', null, 'ok', [], 'vendor-only'),
+            $mk('tpl/epilog.php', 'keep', 'review', 'done', ['cmp/script.php'], 'base-ambiguous'), $mk('cmp/script.php', 'none', null, 'ok', [], 'vendor-only'),
+            $mk('tpl/menu.php', 'restore', 'conflict', 'conflict', ['tpl/top.php']), $mk('tpl/top.php', 'take', null, 'applied', [], 'vendor-only'),
             $mk('tpl/a.php', 'restore', 'conflict', 'conflict', ['tpl/b.php']), $mk('tpl/b.php', 'restore', 'conflict', 'conflict', ['tpl/a.php'])],
             'ours' => [], 'opened' => 0, 'batches' => []];
         $lines = implode("\n", Report::windowLines($d, true));
-        $this->check(str_contains($lines, 'связанные изменения вендора: `ajax/stores.php`') && str_contains($lines, '**Смесь версий в окне**')
-            && str_contains($lines, '- `tpl/stores.php` — прежняя версия ↔ `ajax/stores.php` — новая версия вендора (общие имена: `unsignParameters`)')
+        $strong = strpos($lines, '- `tpl/stores.php` — прежняя версия ↔ `pub/stores.php` — новая версия вендора (общие имена: `unsignParameters`)');
+        $weak = strpos($lines, "Слабая связь — оба файла в одной области (чаще общие имена переменных шаблона, а не формат данных):\n- `tpl/menu.php` — прежняя версия ↔ `tpl/top.php`");
+        $this->check(str_contains($lines, 'связанные изменения вендора: `pub/stores.php`') && str_contains($lines, '**Смесь версий в окне**')
+            && $strong !== false && $weak !== false && $strong < $weak
+            && str_contains($lines, '- `tpl/epilog.php` — прежняя версия ↔ `cmp/script.php` — новая версия вендора')
             && str_contains($lines, 'Одна версия у обоих файлов (между собой согласованы): `tpl/a.php` ↔ `tpl/b.php`.')
-            && substr_count($lines, 'tpl/a.php` ↔') === 1, 'report.md: смесь версий — пары с разными версиями и согласованные, без повторов');
+            && substr_count($lines, 'tpl/a.php` ↔') === 1,
+            'report.md: смесь версий — файлы, записанные обновлятором, и «оставить как есть» в копии учитываются; межобластные пары первыми, слабые с пометкой');
+        $this->check(str_contains($lines, '`tpl/epilog.php` — с ') && str_contains($lines, 'в копии прежний файл — изменения вендора не действовали'),
+            'окно: «оставить как есть» в копии — прежний файл, а не «как оставил обновлятор»');
+        $this->check(Report::windowState($mk('pub/x.php', 'none', null, 'ok', [], 'vendor-only')) === 'new'
+            && Report::windowState(['action' => 'none', 'cat' => 'vendor-only', 'mode' => Area::INPLACE, 'h' => ['base' => 'b', 'theirs' => 'b']]) === null
+            && Report::windowState($mk('tpl/x.php', 'none', null, 'ok', [], 'theirs-eol')) === null
+            && Report::windowState($mk('tpl/x.php', 'none', null, 'ok', [], 'absent-in-copy')) === 'new', 'окно: какая версия стояла — по действию, режиму и изменению вендора');
+        $this->check(Util::collapseRel('local/templates/t/components/bitrix/../aspro/x/template.php') === 'local/templates/t/components/aspro/x/template.php'
+            && Util::collapseRel('./a//b/./c') === 'a/b/c' && Util::collapseRel('a/../../etc/passwd') === null, 'resolve: путь с «.» и «..» приводится к обычному, выше корня — нет');
         $d['entries'] = [$mk('tpl/a.php', 'restore', 'conflict', 'conflict')];
         $this->check(!str_contains(implode("\n", Report::windowLines($d, true)), 'Смесь версий'), 'report.md: без связанных изменений смеси версий нет');
         // автослияния со старым кодом: только слияние на месте (или ждёт apply) без решения поверх

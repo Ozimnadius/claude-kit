@@ -41,6 +41,29 @@ final class Util
     }
 
     /** Путь безопасен как относительный: без «..», без абсолютного начала и NUL */
+    /**
+     * Относительный путь без «.» и «..» (с 1.2.2: resolve с опечаткой «components/bitrix/../aspro/…» находит файл):
+     * «a/b/../c» → «a/c»; выход выше начала пути — null.
+     */
+    public static function collapseRel(string $rel): ?string
+    {
+        $out = [];
+        foreach (explode('/', str_replace('\\', '/', $rel)) as $seg) {
+            if ($seg === '' || $seg === '.') {
+                continue;
+            }
+            if ($seg === '..') {
+                if (!$out) {
+                    return null;
+                }
+                array_pop($out);
+                continue;
+            }
+            $out[] = $seg;
+        }
+        return implode('/', $out);
+    }
+
     public static function safeRel(string $rel): bool
     {
         $rel = str_replace('\\', '/', $rel);

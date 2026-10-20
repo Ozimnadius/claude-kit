@@ -859,7 +859,7 @@ final class Tool
             $f = substr($f, strlen($s->dir) + 1);
         }
         $f = preg_replace('~/(base|ours|theirs|merged|resolved|info\.json|[a-z-]+\.diff)$~', '', $f);
-        $f = trim($f, '/');
+        $f = Util::collapseRel(trim($f, '/')) ?? Util::fail("Путь «{$file}» выходит выше корня сайта («..») — укажите путь файла от корня сайта");
         $cands = [];
         foreach ($s->d['entries'] as $e) {
             if ($f === $e['target'] || $f === $e['key'] || $f === $e['files'] || $f === $e['area'] . '/' . $e['rel']) {

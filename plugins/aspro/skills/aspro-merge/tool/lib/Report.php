@@ -224,6 +224,8 @@ final class Report
                 $act === 'restore' => 'на месте наша прежняя версия — изменения вендора не действовали',
                 $act === 'take' => 'на месте версия вендора — нашей доработки не было',
                 $act === 'delete' => 'файл удалён',
+                // копию обновлятор не трогает: «оставить как есть» в ней — прежний файл (с 1.2.2; раньше — «как оставил обновлятор»)
+                ($e['mode'] ?? '') === Area::COPY => 'в копии прежний файл — изменения вендора не действовали',
                 default => 'файл как оставил обновлятор',
             };
             $when = $end !== null
@@ -240,50 +242,80 @@ final class Report
     }
 
     /**
+     * Какая версия файла стояла в окне (с 1.2.2): 'old' — прежняя (restore; в копии — и «оставить как есть»: копию
+     * обновлятор не трогает), 'new' — версия вендора или слияние с ней (take, copy, merge; «на месте» — и none/keep, если
+     * вендор файл менял: его записал сам обновлятор; файла нет в копии — ядро берёт его из обновлённой папки), null —
+     * не понять или вендор файл не менял.
+     */
+    public static function windowState(?array $x): ?string
+    {
+        if ($x === null) {
+            return null;
+        }
+        $act = (string)$x['action'];
+        return match (true) {
+            $act === 'restore' => 'old',
+            in_array($act, ['take', 'copy', 'merge'], true), in_array($x['cat'] ?? '', ['same', 'absent-in-copy'], true) => 'new',
+            !in_array($act, ['none', 'keep'], true), ($x['cat'] ?? '') === 'theirs-eol' => null,
+            ($x['mode'] ?? '') === Area::COPY => 'old',
+            ($x['h']['theirs'] ?? null) !== ($x['h']['base'] ?? null) => 'new',
+            default => null,
+        };
+    }
+
+    /**
      * «Смесь версий» по этому сайту (с 1.2.1): пары «файл на разбор ↔ связанный файл вендора» («возможно связано») —
-     * были ли у них в окне разные версии. Прежняя — действие restore (наша версия до решения), новая — версия вендора или
-     * слияние с ней (take, copy, merge). Разные версии при общем формате данных — связанная функция в окне не работала;
-     * формат инструмент не проверяет — это вывод Claude по контрактам.
+     * были ли у них в окне разные версии (windowState). Разные версии при общем формате данных — связанная функция в окне
+     * не работала; формат инструмент не проверяет — это вывод Claude по контрактам. С 1.2.2 пары, где второй файл в другой
+     * области (компонент, ajax, include), — первыми: это межфайловые контракты; пары внутри одной области (общие имена
+     * переменных шаблона) — ниже, «слабая связь».
      */
     private static function mixLines(array $d, array $list, array $ends): array
     {
         $byKey = array_column($d['entries'], null, 'key');
-        $state = static fn(?array $x) => $x === null ? null : match ((string)$x['action']) {
-            'restore' => 'old', 'take', 'copy', 'merge' => 'new', default => null,
-        };
-        $say = static fn(array $x, ?int $end) => "`{$x['target']}` — " . ($x['action'] === 'restore'
+        $say = static fn(array $x, ?string $st, ?int $end) => "`{$x['target']}` — " . ($st === 'old'
             ? 'прежняя версия' . ($end !== null ? ' до ' . Util::date($end) : '') : 'новая версия вендора');
-        $split = [];
+        $split = ['strong' => [], 'weak' => []];
         $same = [];
+        $seen = [];
         foreach ($list as $e) {
             foreach ($e['related'] ?? [] as $rel) {
                 $x = $byKey[$rel['key'] ?? ''] ?? null;
-                $s1 = $state($e);
-                $s2 = $state($x);
+                $s1 = self::windowState($e);
+                $s2 = self::windowState($x);
                 $pair = [$e['target'], $rel['target']];
                 sort($pair);
                 $id = implode("\0", $pair);
-                if ($s1 === null || $s2 === null || isset($split[$id]) || isset($same[$id])) {
+                if ($s1 === null || $s2 === null || isset($seen[$id])) {
                     continue;
                 }
+                $seen[$id] = true;
                 $names = implode(', ', array_map(static fn($t) => "`$t`", array_slice($rel['tokens'] ?? [], 0, 3)));
                 if ($s1 !== $s2) {
-                    $split[$id] = $say($e, $ends[$e['key']] ?? null) . ' ↔ ' . $say($x, $ends[$x['key']] ?? null) . ($names !== '' ? " (общие имена: $names)" : '');
+                    $split[($e['area'] ?? '') !== ($x['area'] ?? '') ? 'strong' : 'weak'][] = $say($e, $s1, $ends[$e['key']] ?? null) . ' ↔ '
+                        . $say($x, $s2, $ends[$x['key']] ?? null) . ($names !== '' ? " (общие имена: $names)" : '');
                 } else {
-                    $same[$id] = "`{$e['target']}` ↔ `{$rel['target']}`";
+                    $same[] = "`{$e['target']}` ↔ `{$rel['target']}`";
                 }
             }
         }
-        if (!$split && !$same) {
+        if (!$split['strong'] && !$split['weak'] && !$same) {
             return [];
         }
         $o = ['', '**Смесь версий в окне** (по «возможно связано» — вендор менял в этих файлах одни и те же имена):'];
-        if ($split) {
+        if ($split['strong'] || $split['weak']) {
             $o[] = '';
             $o[] = 'Разные версии — один файл ещё прежний, связанный уже новый; если эти имена — общий формат данных, связанная функция '
                 . 'в окне не работала:';
-            foreach ($split as $line) {
+            foreach ($split['strong'] as $line) {
                 $o[] = "- $line";
+            }
+            if ($split['weak']) {
+                $o[] = '';
+                $o[] = 'Слабая связь — оба файла в одной области (чаще общие имена переменных шаблона, а не формат данных):';
+                foreach ($split['weak'] as $line) {
+                    $o[] = "- $line";
+                }
             }
         } else {
             $o[] = '';
