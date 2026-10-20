@@ -150,9 +150,13 @@ test('report: отчёт заказчику простыми словами, п�
   assert.doesNotMatch(body, /docs-keeper"|git commit|git add/, 'отчёт ничего не коммитит');
 });
 
-test('финальное ревью этапа 32: точка отсчёта заливки в project-init', () => {
+test('точка отсчёта заливки: в project-init и посреди проекта — после сверки ssh-deploy.js --md5 (этап 32, с 3.2.0)', () => {
   const pi = skill('project-init').body;
-  for (const s of ['**Точка отсчёта заливки**', '«Сервер совпадает с проектом — записать точку отсчёта»']) assert.ok(pi.includes(s), 'project-init: ' + s);
+  for (const s of ['**Точка отсчёта заливки**', 'scripts/ssh-deploy.js" --md5', '«Сервер новее — скачать отличающиеся и записать точку отсчёта»']) assert.ok(pi.includes(s), 'project-init: ' + s);
+  const ssh = fs.readFileSync(path.join(PLUGIN, 'skills', 'step-done', 'reference', 'ssh.md'), 'utf8');
+  for (const s of ['## Файлы взяты с сервера — точка отсчёта без заливки', 'scripts/ssh-deploy.js" --md5', '«Коммитить — точка отсчёта, без заливки»', 'раздел «Файлы взяты с сервера»']) {
+    assert.ok(ssh.includes(s), 'step-done/reference/ssh.md: ' + s);
+  }
 });
 
 test('«Документы на сервере» в режиме «Claude по SSH»: вопрос и первая заливка в project-init, шаблоны (этап 35)', () => {

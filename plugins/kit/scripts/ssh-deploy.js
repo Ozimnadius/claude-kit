@@ -11,10 +11,14 @@
 //                                                                                 .claude/.htaccess (первым), .claude/CLAUDE.md,
 //                                                                                 .claude/docs без visual — изменённые с базы;
 //                                                                                 --all — все, без удалений (первая заливка)
+//   node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] --md5   сверить по md5 с сервером, ничего не
+//                                                                                 записывая (с 3.2.0): файлы шага скачаны с
+//                                                                                 сервера — всё совпало, это точка отсчёта
+//                                                                                 заливки (строка «DEPLOY Файлы:»)
 // Сервер — --env, иначе «Окружение»; куда — «SSH прод» / «SSH дев» (хост:/папка). База — из плана выкладки
 // (lib/deploy.js), изменения — до папки проекта: и незакоммиченное, и новые файлы. Удаляется на сервере только то,
 // чего нет на диске (файл, убранный из git через git rm --cached, остаётся). Повтор безопасен.
-// Коды: 0 — залито и сверено (или нечего); 1 — часть не вышла; 2 — SSH не задан или параметр неверный; с --docs —
+// Коды: 0 — залито и сверено (или нечего; с --md5 — всё совпало с сервером); 1 — часть не вышла (с --md5 — есть различия); 2 — SSH не задан или параметр неверный; с --docs —
 // «Документы на сервере» не «да» или нет .claude/.htaccess;
 // 3 — нет подключения, обрыв, вышло время; 4 — аргументы, git, недопустимый путь (на сервер ничего не ушло).
 const fs = require('fs');
@@ -25,13 +29,13 @@ const { matchRules } = require('./lib/paths');
 const { shq, serverSsh, runSsh, lastLine } = require('./lib/ssh');
 const { skipRules, git, resolveBase, changes, docsChanges } = require('./lib/deploy');
 
-const USAGE = 'Использование: node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] [--docs [--all]] [--go] [-- <пути>]';
+const USAGE = 'Использование: node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] [--docs [--all]] [--go | --md5] [-- <пути>]';
 // Меньше предела инструмента Bash (120 с): при зависании — код 3, а не обрыв вызова.
 const DEFAULT_TIMEOUT = 100;
 const EOF = 'KIT_B64'; // в алфавите base64 нет «_» — строка тела с ней не совпадёт
 
 function parseArgs(argv) {
-  const o = { env: null, base: null, timeout: DEFAULT_TIMEOUT, go: false, paths: null, docs: false, all: false };
+  const o = { env: null, base: null, timeout: DEFAULT_TIMEOUT, go: false, md5: false, paths: null, docs: false, all: false };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--') {
@@ -41,6 +45,7 @@ function parseArgs(argv) {
       break;
     }
     if (a === '--go') o.go = true;
+    else if (a === '--md5') o.md5 = true;
     else if (a === '--docs') o.docs = true;
     else if (a === '--all') o.all = true;
     else if (a === '--env' || a === '--base' || a === '--timeout') {
@@ -49,6 +54,7 @@ function parseArgs(argv) {
     } else throw new Error('неизвестный аргумент ' + a);
   }
   if (o.all && !o.docs) throw new Error('--all — только вместе с --docs');
+  if (o.md5 && (o.go || o.docs)) throw new Error('--md5 только сверяет — без --go и --docs');
   if (o.docs && o.paths) throw new Error('--docs и пути после -- вместе не задаются');
   if (o.env !== null && o.env !== 'прод' && o.env !== 'дев') throw new Error('--env: прод или дев');
   if (typeof o.timeout === 'string') {
@@ -94,8 +100,23 @@ function buildScript(root, files, del) {
   return lines.join('\n') + '\n';
 }
 
+// Сценарий сверки --md5: только чтение — md5 каждого файла (нет на сервере — пусто) и есть ли там удалённые локально.
+function md5Script(root, files, del) {
+  const lines = [
+    'cd ' + shq(root) + " || { echo 'KIT_ERR нет папки сайта'; exit 0; }",
+    "command -v md5sum >/dev/null 2>&1 || { echo 'KIT_ERR на сервере нет md5sum'; exit 0; }",
+  ];
+  files.forEach((f, i) => {
+    const p = shq(f.path);
+    lines.push("printf 'KIT_MD5 " + (i + 1) + " %s\\n' \"$([ -f " + p + ' ] && md5sum < ' + p + ' | cut -c1-32)"');
+  });
+  del.forEach((p, i) => lines.push('[ -e ' + shq(p) + " ] && echo 'KIT_EXISTS " + (i + 1) + "'"));
+  lines.push('exit 0');
+  return lines.join('\n') + '\n';
+}
+
 function parseResult(text) {
-  const r = { err: null, put: new Set(), fail: new Set(), del: new Set(), failDel: new Set(), md5: new Map() };
+  const r = { err: null, put: new Set(), fail: new Set(), del: new Set(), failDel: new Set(), md5: new Map(), exists: new Set() };
   for (const line of String(text).split(/\r?\n/)) {
     let m;
     if ((m = /^KIT_ERR (.+)$/.exec(line))) r.err = m[1];
@@ -103,6 +124,7 @@ function parseResult(text) {
     else if ((m = /^KIT_FAIL (\d+)$/.exec(line))) r.fail.add(Number(m[1]));
     else if ((m = /^KIT_DEL (\d+)$/.exec(line))) r.del.add(Number(m[1]));
     else if ((m = /^KIT_FAILDEL (\d+)$/.exec(line))) r.failDel.add(Number(m[1]));
+    else if ((m = /^KIT_EXISTS (\d+)$/.exec(line))) r.exists.add(Number(m[1]));
     else if ((m = /^KIT_MD5 (\d+) ?([0-9a-f]{32})?\s*$/.exec(line))) r.md5.set(Number(m[1]), m[2] || '');
   }
   return r;
@@ -115,6 +137,48 @@ function deployLine(files, del) {
   const parts = ['залито ' + files.length + ': ' + shortList(files)];
   if (del.length) parts.push('удалено ' + del.length + ': ' + shortList(del));
   return parts.join('; ') + ' (ssh-deploy.js, md5 сверен)';
+}
+
+// Значение поля «Файлы» для точки отсчёта (--md5): файлы шага уже такие же на сервере, заливки не было.
+function pointLine(files, del) {
+  const parts = ['точка отсчёта заливки — совпадают с сервером по md5 ' + files.length + ': ' + shortList(files)];
+  if (del.length) parts.push('нет на сервере, как и локально, ' + del.length + ': ' + shortList(del));
+  return parts.join('; ') + ' (ssh-deploy.js --md5, не заливались)';
+}
+
+// --md5: одно подключение, ничего не записывается. → код 0 — всё совпало, 1 — есть различия, 3 — нет подключения.
+async function checkMd5(target, files, dels, timeout) {
+  const r = await runSsh(target.host, 'sh -s', md5Script(target.root, files, dels), { timeoutMs: timeout * 1000 });
+  if (!r.connected) {
+    if (r.stderr) process.stderr.write(r.stderr);
+    const why = r.timedOut ? 'вышло время (' + timeout + ' с)' : lastLine(r.stderr);
+    console.error('ssh-deploy: нет подключения или обрыв' + (why ? ': ' + why : '') + ' — повтор безопасен');
+    return 3;
+  }
+  const res = parseResult(r.stdout);
+  if (res.err) {
+    console.error('ssh-deploy: ' + res.err + ' — сверка не сделана');
+    return 1;
+  }
+  const differ = [];
+  const absent = [];
+  files.forEach((f, i) => {
+    const h = res.md5.get(i + 1);
+    if (h === undefined) differ.push(f.path + ' — результат неизвестен');
+    else if (h === '') absent.push(f.path);
+    else if (h !== md5(f.data)) differ.push(f.path);
+  });
+  const still = dels.filter((p, i) => res.exists.has(i + 1));
+  const same = files.length - differ.length - absent.length;
+  const out = ['', 'Сверка md5 с сервером (ничего не записано): совпадают ' + same + ' из ' + files.length];
+  if (differ.length) out.push('', 'Отличаются (' + differ.length + '):', ...differ.map((p) => '  ' + p));
+  if (absent.length) out.push('', 'Нет на сервере (' + absent.length + '):', ...absent.map((p) => '  ' + p));
+  if (still.length) out.push('', 'Удалены локально, а на сервере есть (' + still.length + '):', ...still.map((p) => '  ' + p));
+  if (r.exitCode !== 0) out.push('', 'сценарий на сервере завершился с кодом ' + r.exitCode);
+  const ok = !differ.length && !absent.length && !still.length && r.exitCode === 0;
+  if (ok) out.push('', 'Всё совпадает с сервером — заливать нечего.', 'DEPLOY Файлы: ' + pointLine(files.map((f) => f.path), dels));
+  console.log(out.join('\n'));
+  return ok ? 0 : 1;
 }
 
 async function main(argv) {
@@ -213,6 +277,10 @@ async function main(argv) {
     console.log('\nНечего заливать.');
     return skipped.length ? 1 : 0;
   }
+  if (o.md5) {
+    const c = await checkMd5(target, files, dels, o.timeout);
+    return c === 0 && skipped.length ? 1 : c;
+  }
   if (!o.go) return 0;
   const r = await runSsh(target.host, 'sh -s', buildScript(target.root, files, dels), { timeoutMs: o.timeout * 1000 });
   if (!r.connected) {
@@ -258,4 +326,4 @@ if (require.main === module) {
     process.exitCode = 4;
   });
 }
-module.exports = { parseArgs, safePath, buildScript, parseResult, deployLine };
+module.exports = { parseArgs, safePath, buildScript, md5Script, parseResult, deployLine, pointLine };

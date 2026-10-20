@@ -43,11 +43,13 @@ function docsProject(target, extra = {}) {
 }
 
 test('parseArgs и safePath: флаги, --env, --timeout; пути — не абсолютные, без .. и управляющих символов', () => {
-  assert.deepEqual(parseArgs([]), { env: null, base: null, timeout: 100, go: false, paths: null, docs: false, all: false });
-  assert.deepEqual(parseArgs(['--go', '--env', 'дев', '--base', 'abc1234', '--timeout', '5']), { env: 'дев', base: 'abc1234', timeout: 5, go: true, paths: null, docs: false, all: false });
+  assert.deepEqual(parseArgs([]), { env: null, base: null, timeout: 100, go: false, md5: false, paths: null, docs: false, all: false });
+  assert.deepEqual(parseArgs(['--go', '--env', 'дев', '--base', 'abc1234', '--timeout', '5']), { env: 'дев', base: 'abc1234', timeout: 5, go: true, md5: false, paths: null, docs: false, all: false });
   assert.deepEqual(parseArgs(['--go', '--', 'a.php', 'b c/d.php']).paths, ['a.php', 'b c/d.php']);
-  assert.deepEqual(parseArgs(['--docs', '--all', '--go']), { env: null, base: null, timeout: 100, go: true, paths: null, docs: true, all: true });
-  for (const bad of [['--env', 'тест'], ['--timeout', '0'], ['--timeout', '601'], ['--нет'], ['--base'], ['--'], ['--base', 'x', '--', 'a.php'], ['--all'], ['--docs', '--', 'a.php']]) assert.throws(() => parseArgs(bad), bad.join(' '));
+  assert.deepEqual(parseArgs(['--docs', '--all', '--go']), { env: null, base: null, timeout: 100, go: true, md5: false, paths: null, docs: true, all: true });
+  assert.equal(parseArgs(['--md5', '--base', 'abc1234']).md5, true);
+  for (const bad of [['--env', 'тест'], ['--timeout', '0'], ['--timeout', '601'], ['--нет'], ['--base'], ['--'], ['--base', 'x', '--', 'a.php'], ['--all'], ['--docs', '--', 'a.php'],
+    ['--md5', '--go'], ['--md5', '--docs']]) assert.throws(() => parseArgs(bad), bad.join(' '));
   for (const ok of ['a.php', "local/it's файл.php", 'a b/c.php']) assert.ok(safePath(ok), ok);
   for (const bad of ['/etc/passwd', '../x', 'a/../../x', 'C:/x', 'a\nb', '']) assert.ok(!safePath(bad), JSON.stringify(bad));
 });
@@ -222,6 +224,56 @@ test('откат через пути после -- на локальном sh: �
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.equal(fs.readFileSync(path.join(server, 'a.php'), 'utf8'), '1');
   assert.ok(!fs.existsSync(path.join(server, 'new.php')));
+});
+
+// Содержимое папки «сервера»: { путь: текст } — чтобы убедиться, что --md5 ничего не записал.
+function tree(root) {
+  const out = {};
+  (function walk(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else out[path.relative(root, p).replace(/\\/g, '/')] = fs.readFileSync(p, 'utf8');
+    }
+  })(root);
+  return out;
+}
+
+test('--md5 через локальный sh: файлы шага скачаны с сервера — всё совпало, строка точки отсчёта; различия — код 1 со списком; на сервер ничего не пишется (с 3.2.0)', { skip: !SH }, async () => {
+  const server = tmpDir('kit-server-');
+  writeFiles(server, { 'a.php': '1', 'local/keep.php': 'k', 'bitrix/templates/t/header.php': 'новый вендор', "bitrix/templates/t/it's файл.php": 'ф' });
+  const dir = project('sh:' + shPath(server));
+  // «скачали» с сервера: новые файлы шаблона, b.php на сервере уже нет — удалили и локально
+  writeFiles(dir, { 'bitrix/templates/t/header.php': 'новый вендор', "bitrix/templates/t/it's файл.php": 'ф' });
+  fs.unlinkSync(path.join(dir, 'b.php'));
+  const before = tree(server);
+  const ok = await runScriptAsync('ssh-deploy.js', { cwd: dir, args: ['--md5'], env: env() });
+  assert.equal(ok.code, 0, ok.stdout + ok.stderr);
+  assert.match(ok.stdout, /Сверка md5 с сервером \(ничего не записано\): совпадают 2 из 2/);
+  assert.match(ok.stdout, /^DEPLOY Файлы: точка отсчёта заливки — совпадают с сервером по md5 2: bitrix\/templates\/t\/header\.php, bitrix\/templates\/t\/it's файл\.php; нет на сервере, как и локально, 1: b\.php \(ssh-deploy\.js --md5, не заливались\)$/m);
+  assert.deepEqual(tree(server), before, 'на сервере ничего не изменилось');
+  // сервер изменился после скачивания, файла нет на сервере, удалённое локально там есть
+  writeFiles(server, { 'bitrix/templates/t/header.php': 'ещё новее', 'b.php': 'old' });
+  fs.unlinkSync(path.join(server, "bitrix/templates/t/it's файл.php"));
+  const bad = await runScriptAsync('ssh-deploy.js', { cwd: dir, args: ['--md5'], env: env() });
+  assert.equal(bad.code, 1, bad.stdout + bad.stderr);
+  assert.match(bad.stdout, /совпадают 0 из 2/);
+  assert.match(bad.stdout, /Отличаются \(1\):\n {2}bitrix\/templates\/t\/header\.php/);
+  assert.match(bad.stdout, /Нет на сервере \(1\):\n {2}bitrix\/templates\/t\/it's файл\.php/);
+  assert.match(bad.stdout, /Удалены локально, а на сервере есть \(1\):\n {2}b\.php/);
+  assert.doesNotMatch(bad.stdout, /DEPLOY Файлы:/);
+  assert.equal(fs.readFileSync(path.join(server, 'bitrix/templates/t/header.php'), 'utf8'), 'ещё новее');
+});
+
+test('--md5: не пустил — код 3; нечего сверять — код 0 без подключения', async () => {
+  const dir = project('denied:/srv/site');
+  writeFiles(dir, { 'a.php': '2' });
+  const r = await runScriptAsync('ssh-deploy.js', { cwd: dir, args: ['--md5'], env: env() });
+  assert.equal(r.code, 3, r.stdout + r.stderr);
+  const clean = project('down:/srv/site');
+  const n = await runScriptAsync('ssh-deploy.js', { cwd: clean, args: ['--md5'], env: env() });
+  assert.equal(n.code, 0, n.stdout + n.stderr);
+  assert.match(n.stdout, /Нечего заливать/);
 });
 
 test('нет папки сайта на сервере — код 1, ничего не записано', { skip: !SH }, async () => {
