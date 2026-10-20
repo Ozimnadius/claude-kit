@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { gitRepo, git, writeFiles, runScript, makeProject } = require('./helpers');
 const { cleanMessage, parseArgs, PUSH_TIMEOUT_MS } = require('../plugins/kit/scripts/kit-commit');
+const { paramsMd, WORK_GITIGNORE, WORK_RULE, WORK_FILES } = require('./fixtures');
 
 const ENV = {
   GIT_AUTHOR_NAME: 'kit', GIT_AUTHOR_EMAIL: 'kit@test.local',
@@ -64,6 +65,20 @@ test('запрещённый путь — код 1, ничего не добав
 
 // Пароль собран из частей: литерал в файле теста остановил бы проверку секретов при коммите.
 const SECRET = ['Qw3', 'rty!x9'].join('');
+
+test('путь-папка bitrix: рабочие папки под «кроме» — коммит только их файлов; запрещённый файл внутри — код 1, ничего не добавлено (с 3.2.0)', () => {
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd({ 'Не коммитить': WORK_RULE }), '.gitignore': WORK_GITIGNORE });
+  writeFiles(dir, WORK_FILES);
+  const r = commit(dir, ['bitrix'], '41.2: рабочие папки\n');
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(committed(dir), ['A\tbitrix/php_interface/init.php', 'A\tbitrix/templates/theme/a.php']);
+  writeFiles(dir, { 'bitrix/templates/theme/a.php': 'b', 'bitrix/templates/theme/_a.php.back1': 'старый' });
+  const bad = commit(dir, ['bitrix/'], '41.2: ещё\n');
+  assert.equal(bad.code, 1, bad.stdout + bad.stderr);
+  assert.match(bad.stdout, /_a\.php\.back1: запрещённый путь/);
+  assert.equal(staged(dir), '');
+  assert.equal(count(dir), 2);
+});
 
 test('секрет в содержимом — код 1, коммита нет, индекс как есть, значение замаскировано', () => {
   const dir = gitRepo({ 'x.txt': '' });

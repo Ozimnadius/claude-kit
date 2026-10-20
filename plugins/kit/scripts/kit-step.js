@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 // Подготовка шага к закрытию (с 3.0.0) — одной командой, только чтение, из корня проекта: node kit-step.js [<STEP>].
-// Печатает: файлы шага — готовые аргументы для kit-commit.js (в кавычках, при переименовании оба пути) и пути, которые
+// Печатает: файлы шага — готовые аргументы для kit-commit.js (в кавычках, при переименовании оба пути; длинный список —
+// свёрнутым в папки) и пути, которые
 // скрипт коммита не пропустит; входящие ответы — готовыми строками DECISIONS и NOTES; режим — выкладка (при «Claude по SSH»
 // итог сухого прогона ssh-deploy.js), «Документы на сервере», удалённый репозиторий; напоминание о закрытии этапа.
 // Коды: 0 — готово; 2 — не kit-проект, нет журнала, старый формат или при «Claude по SSH» не прошёл сухой прогон
@@ -17,8 +18,8 @@ const { INBOX, readInbox } = require('./decision-inbox');
 const SCAN = path.join(__dirname, 'secret-scan.js');
 const DEPLOY = path.join(__dirname, 'ssh-deploy.js');
 
-function run(cmd, args, cwd) {
-  const r = spawnSync(cmd, args, { cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+function run(cmd, args, cwd, input) {
+  const r = spawnSync(cmd, args, { cwd, input, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
   return { code: r.error ? 2 : r.status, stdout: r.stdout || '', stderr: (r.stderr || (r.error ? r.error.message : '')).trim() };
 }
 const git = (cwd, args) => run('git', ['-c', 'core.quotepath=false', ...args], cwd);
@@ -33,6 +34,31 @@ function stepFiles(cwd) {
     out.push(/[RC]/.test(parts[i].slice(0, 2)) ? [parts[++i], file] : [file]);
   }
   return out;
+}
+
+// Длинный список (копия папки с сервера — тысячи файлов) не влезает в командную строку Windows (~32 000 знаков; Git Bash —
+// «Argument list too long»): с 3.2.0 файлы сворачиваются в самые верхние папки, все изменения в которых идут в коммит —
+// без запрещённых путей и переименований. Папка для kit-commit.js — все её изменения: secret-scan.js проверит каждый файл.
+// → [{ args: [путь] | [старый, новый], n — сколько файлов }].
+const FOLD_CHARS = 8000;
+function foldFiles(pass, blocked) {
+  const list = pass.map((f) => ({ args: f, n: 1 }));
+  if (pass.flat().reduce((n, p) => n + p.length + 3, 0) <= FOLD_CHARS) return list;
+  const stop = new Set();
+  for (const p of [...blocked.keys(), ...pass.filter((f) => f.length > 1).flat()]) {
+    const segs = norm(p).split('/');
+    for (let i = 1; i < segs.length; i++) stop.add(segs.slice(0, i).join('/'));
+  }
+  const groups = new Map();
+  for (const f of pass) {
+    const segs = norm(f[0]).split('/');
+    let key = f.length > 1 ? null : segs.slice(0, -1).map((_, i) => segs.slice(0, i + 1).join('/')).find((d) => !stop.has(d));
+    if (!key) key = f.join('\0');
+    const g = groups.get(key) || { dir: key, files: [] };
+    g.files.push(f);
+    groups.set(key, g);
+  }
+  return [...groups.values()].map((g) => (g.files.length > 1 ? { args: [g.dir], n: g.files.length } : { args: g.files[0], n: 1 }));
 }
 
 const plain = (s) => String(s).replace(/\s*\(Рекомендую\)/g, '').trim();
@@ -110,16 +136,23 @@ function main(argv) {
   }
   const files = stepFiles(cwd);
   const blocked = new Map();
+  let scanFailed = null;
   if (files.length) {
-    const scan = run(process.execPath, [SCAN, '--paths', '--', ...files.flat()], cwd);
+    // Список — через stdin: тысячи путей аргументами не запустились бы, и запрещённые пути молча прошли бы проверку.
+    const scan = run(process.execPath, [SCAN, '--paths', '-'], cwd, files.flat().join('\n') + '\n');
+    if (scan.code !== 0 && scan.code !== 1) scanFailed = (scan.stderr || scan.stdout).split('\n')[0];
     for (const l of scan.stdout.split('\n')) {
       const m = /^\s+(.+): запрещённый путь \((.+)\)$/.exec(l);
       if (m) blocked.set(m[1], m[2]);
     }
   }
   const pass = files.filter((f) => !f.some((p) => blocked.has(norm(p))));
+  const folded = foldFiles(pass, blocked);
   const out = [argv[0] ? `Шаг ${argv[0]} — подготовка к закрытию` : 'Подготовка шага к закрытию', ''];
-  out.push(`Файлы шага (${pass.length}):`, ...(pass.length ? pass.map((f) => '  ' + f.map((p) => `"${p}"`).join(' ')) : ['  нет']));
+  const dirs = folded.filter((x) => x.n > 1).length;
+  out.push(`Файлы шага (${pass.length}${dirs ? `, свёрнуты в ${folded.length} пути — передай их kit-commit.js как есть: папка — все её изменения, скрипт проверит каждый файл в ней; тысячи путей по одному команда на Windows не примет` : ''}):`,
+    ...(folded.length ? folded.map((x) => '  ' + x.args.map((p) => `"${p}"`).join(' ') + (x.n > 1 ? ` — папка, файлов: ${x.n}` : '')) : ['  нет']));
+  if (scanFailed !== null) out.push('', `Проверка путей не отработала (secret-scan.js): ${scanFailed} — «Не пойдут в коммит» не определены, скрипт коммита проверит пути сам.`);
   if (blocked.size) out.push('', `Не пойдут в коммит (${blocked.size}):`, ...[...blocked].map(([p, why]) => `  ${p} — запрещённый путь (${why})`));
   const inbox = readInbox(path.join(cwd, INBOX));
   const { decisions, notes } = inboxAsDecisions(inbox);
@@ -137,4 +170,4 @@ function main(argv) {
 
 if (require.main === module) process.exitCode = main(process.argv.slice(2));
 
-module.exports = { inboxAsDecisions, stepFiles };
+module.exports = { inboxAsDecisions, stepFiles, foldFiles, FOLD_CHARS };

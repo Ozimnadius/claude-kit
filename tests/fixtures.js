@@ -74,4 +74,11 @@ function journalFiles(now = DEFAULT_NOW, docs = '.claude/docs') {
   };
 }
 
-module.exports = { paramsMd, ALPHA, GAMMA, ALPHA_CLAUDE_MD, GAMMA_CLAUDE_MD, progressMd, journalFiles };
+// Рабочие папки в bitrix/ (с 3.2.0): исключения .gitignore и «Не коммитить» по справке project-init/reference/bitrix.md;
+// файлы — две рабочие папки и два файла ядра (их .gitignore не пускает).
+const WORK_GITIGNORE = ['/bitrix/*', '!/bitrix/templates/', '/bitrix/templates/*', '!/bitrix/templates/theme/',
+  '!/bitrix/php_interface/', '/bitrix/php_interface/*', '!/bitrix/php_interface/init.php', ''].join('\n');
+const WORK_RULE = 'bitrix/ (кроме bitrix/templates/theme, bitrix/php_interface/init.php), *.back*';
+const WORK_FILES = { 'bitrix/templates/theme/a.php': 'a', 'bitrix/php_interface/init.php': '<?php', 'bitrix/php_interface/dbconn.php': '<?php', 'bitrix/modules/main/x.php': 'x' };
+
+module.exports = { paramsMd, ALPHA, GAMMA, ALPHA_CLAUDE_MD, GAMMA_CLAUDE_MD, progressMd, journalFiles, WORK_GITIGNORE, WORK_RULE, WORK_FILES };

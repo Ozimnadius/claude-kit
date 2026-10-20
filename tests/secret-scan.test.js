@@ -3,7 +3,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('path');
 const { gitRepo, git, writeFiles, runScript, makeProject } = require('./helpers');
-const { paramsMd, ALPHA } = require('./fixtures');
+const { paramsMd, ALPHA, WORK_GITIGNORE, WORK_RULE, WORK_FILES } = require('./fixtures');
 const { scanLine } = require('../plugins/kit/scripts/secret-scan');
 
 const scan = (dir, ...args) => runScript('secret-scan.js', { args, cwd: dir });
@@ -305,6 +305,24 @@ test('--paths: только запрещённые пути — файлы не 
   assert.equal(scan(dir, '--paths', 'cfg.php').code, 0);
   assert.equal(scan(dir, '--paths').code, 2, 'без путей — код 2');
   assert.equal(scan(dir, '--paths', '--').code, 2, 'только «--» — код 2');
+});
+
+test('--paths: папка — каждый файл, который из неё возьмёт git; «-» — пути из stdin (с 3.2.0)', () => {
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd({ 'Не коммитить': WORK_RULE }), '.gitignore': WORK_GITIGNORE });
+  writeFiles(dir, WORK_FILES);
+  const ok = scan(dir, '--paths', '--', 'bitrix');
+  assert.equal(ok.code, 0, ok.stdout);
+  assert.match(ok.stdout, /чисто \(файлов: 2\)/, 'ядро .gitignore не пускает — в проверке только рабочие файлы');
+  assert.equal(scan(dir, '--paths', 'bitrix/').code, 0, 'и со слешем');
+  writeFiles(dir, { 'bitrix/templates/theme/_a.php.back1': 'старый' });
+  const bad = scan(dir, '--paths', 'bitrix');
+  assert.equal(bad.code, 1, bad.stdout);
+  assert.match(bad.stdout, /^ {2}bitrix\/templates\/theme\/_a\.php\.back1: запрещённый путь \(\*\.back\*\)$/m);
+  assert.doesNotMatch(bad.stdout, /^ {2}bitrix: /m, 'сама папка не находка');
+  const stdin = runScript('secret-scan.js', { args: ['--paths', '-'], input: 'bitrix/templates/theme/a.php\r\n.idea/x.xml\n', cwd: dir });
+  assert.equal(stdin.code, 1, stdin.stdout);
+  assert.match(stdin.stdout, /^ {2}\.idea\/x\.xml: запрещённый путь/m);
+  assert.doesNotMatch(stdin.stdout, /theme\/a\.php/);
 });
 
 test('снимки docs/visual — базовый запрет (от корня проекта)', () => {

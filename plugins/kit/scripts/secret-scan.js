@@ -6,7 +6,10 @@
 //   node secret-scan.js --all                 всё, что попадёт в git (tracked + untracked без ignored)
 //   node secret-scan.js --files пути…         указанные файлы
 //   node secret-scan.js --paths [--] пути…    только запрещённые пути: файлы не читаются и могут не существовать
-//                                             (kit-commit.js проверяет пути до `git add`)
+//                                             (kit-commit.js проверяет пути до `git add`); папка (с 3.2.0) — каждый
+//                                             файл, который из неё возьмёт git (git status), а не сама папка: `bitrix`
+//                                             проходит, если всё в ней под «кроме»; путь «-» — список путей из stdin
+//                                             по строке (kit-step.js: тысячи путей не влезают в командную строку)
 //   node secret-scan.js --history             все коммиты текущей ветки (с 2.5.0, перед первой отправкой в удалённый
 //                                             репозиторий): добавленные строки каждого коммита и пути, бывшие в истории
 // Код 0 — чисто, 1 — есть находки, 2 — ошибка запуска.
@@ -130,6 +133,24 @@ function git(args, maxBuffer = 512 * 1024 * 1024) {
   return r.stdout;
 }
 
+// --paths: папка — пути, которые из неё возьмёт git: изменённые, удалённые и новые неигнорируемые (git status -uall),
+// у переименования — оба. Файлы и несуществующие пути — как есть.
+function expandDirs(root, list) {
+  const isDir = (p) => {
+    try { return fs.statSync(path.join(root, p)).isDirectory(); } catch { return false; }
+  };
+  const dirs = list.filter(isDir);
+  if (!dirs.length) return list;
+  const parts = git(['status', '--porcelain=v1', '-z', '-uall', '--', ...dirs]).split('\0');
+  const inside = [];
+  for (let i = 0; i < parts.length; i++) {
+    if (parts[i].length < 4) continue;
+    inside.push(norm(parts[i].slice(3)));
+    if (/[RC]/.test(parts[i].slice(0, 2))) inside.push(norm(parts[++i]));
+  }
+  return [...new Set([...list.filter((p) => !dirs.includes(p)), ...inside])];
+}
+
 function scanDiff(diff, extra, out) {
   let file = null;
   let lineNo = 0;
@@ -193,7 +214,9 @@ function main(argv) {
     files = argv.slice(1).map(norm);
     files.forEach((f) => scanFile(root, f, extra, findings));
   } else if (argv[0] === '--paths' && argv.slice(argv[1] === '--' ? 2 : 1).length) {
-    files = argv.slice(argv[1] === '--' ? 2 : 1).map(norm);
+    let list = argv.slice(argv[1] === '--' ? 2 : 1);
+    if (list.length === 1 && list[0] === '-') list = fs.readFileSync(0, 'utf8').split(/\r?\n/).filter(Boolean);
+    files = expandDirs(root, list.map(norm));
   } else if (argv[0] === '--history') {
     // По коммиту за раз: первый коммит проекта — копия сайта, одним `git log -p` он упёрся бы в память.
     commits = git(['rev-list', '--reverse', 'HEAD']).split(/\s+/).filter(Boolean);

@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { gitRepo, git, writeFiles, runScript, makeProject } = require('./helpers');
 const { paramsMd, journalFiles } = require('./fixtures');
+const { foldFiles } = require('../plugins/kit/scripts/kit-step');
 
 const FAKE = path.join(__dirname, 'fake-ssh.js');
 const INBOX = '.claude/kit-inbox.jsonl';
@@ -43,6 +44,35 @@ test('путь из «Не коммитить» и .idea — в «Не пойд�
   const skip = block(r.stdout, 'Не пойдут в коммит');
   assert.ok(skip.includes('secret/key.txt'), skip);
   assert.ok(skip.includes('.idea/workspace.xml'), skip);
+});
+
+test('700 файлов (больше 32 000 знаков): запрещённый путь найден, список свёрнут в папки, kit-commit.js принимает его как есть (с 3.2.0)', () => {
+  const dir = repo();
+  const many = {};
+  for (let i = 0; i < 700; i++) many[`copy/tpl/components/c${i}/template-${'x'.repeat(24)}.php`] = String(i);
+  writeFiles(dir, { ...many, 'a.php': '2', 'mix/ok.php': 'ok', 'mix/.idea/x.xml': '<x/>' });
+  const r = step(dir);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  const files = block(r.stdout, 'Файлы шага');
+  assert.match(files, /^Файлы шага \(702, свёрнуты в 3 пути/, files);
+  assert.match(files, /^ {2}"copy" — папка, файлов: 700$/m);
+  assert.match(files, /^ {2}"a\.php"$/m);
+  assert.match(files, /^ {2}"mix\/ok\.php"$/m, 'папка с запрещённым файлом не сворачивается');
+  assert.ok(block(r.stdout, 'Не пойдут в коммит').includes('mix/.idea/x.xml'));
+  const args = [...files.matchAll(/^ {2}"([^"]+)"/gm)].map((m) => m[1]);
+  const c = runScript('kit-commit.js', { args: ['--', ...args], input: '41.2: копия\n', cwd: dir,
+    env: { GIT_AUTHOR_NAME: 'kit', GIT_AUTHOR_EMAIL: 'kit@test.local', GIT_COMMITTER_NAME: 'kit', GIT_COMMITTER_EMAIL: 'kit@test.local' } });
+  assert.equal(c.code, 0, c.stdout + c.stderr);
+  assert.equal(git(dir, 'diff-tree', '--no-commit-id', '--name-only', '-r', 'HEAD').trim().split('\n').length, 702);
+  assert.match(git(dir, 'status', '--porcelain'), /^\?\? mix\/\.idea\/$/m, 'запрещённое осталось вне коммита');
+});
+
+test('foldFiles: короткий список — как есть; переименование не сворачивается и держит свою папку', () => {
+  const short = [['a/b.php'], ['a/c.php']];
+  assert.deepEqual(foldFiles(short, new Map()), short.map((f) => ({ args: f, n: 1 })));
+  const long = Array.from({ length: 400 }, (_, i) => [`d/e/f${i}-${'y'.repeat(20)}.php`]);
+  const res = foldFiles([...long, ['d/old.php', 'd/new.php'], ['z.php']], new Map());
+  assert.deepEqual(res, [{ args: ['d/e'], n: 400 }, { args: ['d/old.php', 'd/new.php'], n: 1 }, { args: ['z.php'], n: 1 }]);
 });
 
 test('входящие: выбранный вариант — «почему» из описания, «что отвергли» — другие через «; »; свой ответ; заметка — NOTES; входящих: 3', () => {
