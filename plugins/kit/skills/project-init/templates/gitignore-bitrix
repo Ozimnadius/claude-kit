@@ -19,7 +19,8 @@
 /kit-exec.php
 
 # Ядро и загрузки Битрикса (секреты — в bitrix/.settings_extra.php); материалы задачи — в upload/docs/
-/bitrix/
+# /bitrix/* (а не /bitrix/): рабочие папки в bitrix/ можно вернуть в git исключениями «!» — их пишет /kit:project-init
+/bitrix/*
 /upload/*
 !/upload/docs/
 

@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { runScript, writeFiles, tmpDir } = require('./helpers');
-const { domainsOf, probeScript, parseProbe } = require('../plugins/kit/scripts/ssh-probe');
+const { domainsOf, probeScript, parseProbe, workCandidates } = require('../plugins/kit/scripts/ssh-probe');
 
 const FAKE = path.join(__dirname, 'fake-ssh.js');
 
@@ -28,6 +28,7 @@ test('ssh-probe: вывод — папки без повторов, пометк
   assert.equal(r.stdout, [
     'Подключение: ок (user100, /var/www/user100/data)',
     'Папка: /var/www/user100/data/www/alpha.example.com [bitrix]',
+    '  где правят — кандидаты в bitrix/: нет',
     'PHP: /opt/php54/bin/php 5.4.45',
     'PHP: /opt/php74/bin/php 7.4.33 [совпадает]',
     'PHP: /usr/bin/php 5.4.45',
@@ -75,7 +76,40 @@ test('ssh-probe: parseProbe — версия без пометки, если X.Y
   assert.deepEqual(p.dirs, [{ path: '/a b/c', bitrix: false }]);
 });
 
+test('ssh-probe: где правят — шаблон без копии, компоненты и js/css решения, действующий bitrix/…/init.php (с 3.2.0)', () => {
+  const site = '/var/www/user100/data/www/alpha.example.com';
+  const has = (list) => list.map((p) => `HAS ${site} ${p}`);
+  const out = ['USER user100', 'HOME /var/www/user100/data', `DIR ${site} bitrix`, ...has([
+    'bitrix/templates/.default/', 'bitrix/templates/theme/', 'bitrix/templates/landing/', 'local/templates/landing/',
+    'bitrix/components/bitrix/', 'bitrix/components/vendor/', 'bitrix/js/vendor.theme/', 'bitrix/js/main.core/', 'bitrix/css/vendor.theme/',
+    'bitrix/php_interface/init.php',
+  ])].join('\n');
+  const r = runScript('ssh-probe.js', { args: ['ok'], env: { KIT_SSH: FAKE, FAKE_SSH_OUT: out } });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /^ {2}где правят — кандидаты в bitrix\/: bitrix\/templates\/theme, bitrix\/components\/vendor, bitrix\/js\/vendor\.theme, bitrix\/css\/vendor\.theme, bitrix\/php_interface\/init\.php$/m);
+  assert.match(r.stdout, /^ {2}шаблоны с копией в local\/templates \(правят копию\): landing$/m);
+  // есть local/php_interface/init.php — действует он, bitrix/…/init.php не кандидат
+  assert.deepEqual(workCandidates(['bitrix/php_interface/init.php', 'local/php_interface/init.php']).work, []);
+});
+
 const shOk = spawnSync('sh', ['-c', 'echo ok'], { encoding: 'utf8' }).stdout === 'ok\n';
+
+test('ssh-probe: в настоящем sh — строки HAS папки с Битриксом, пути от её корня', { skip: !shOk }, () => {
+  const home = writeFiles(tmpDir('kit-home3-'), {
+    'www/alpha.example.com/bitrix/.settings.php': '<?php', 'www/alpha.example.com/bitrix/templates/theme/header.php': '',
+    'www/alpha.example.com/bitrix/components/vendor/a/component.php': '', 'www/alpha.example.com/bitrix/js/vendor.theme/a.js': '',
+    'www/alpha.example.com/bitrix/php_interface/init.php': '<?php', 'public_html/bitrix/templates/x/a.php': '',
+  });
+  const r = spawnSync('sh', ['-s'], { input: probeScript(['alpha.example.com']), env: { ...process.env, HOME: home }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  const p = parseProbe(r.stdout, null);
+  const site = p.dirs.find((d) => /www\/alpha\.example\.com$/.test(d.path));
+  assert.ok(site, r.stdout);
+  assert.deepEqual(workCandidates(p.has[site.path]).work,
+    ['bitrix/templates/theme', 'bitrix/components/vendor', 'bitrix/js/vendor.theme', 'bitrix/php_interface/init.php'], r.stdout);
+  const plain = p.dirs.find((d) => /public_html$/.test(d.path));
+  assert.ok(plain && !p.has[plain.path], 'у папки без Битрикса строк HAS нет: ' + r.stdout);
+});
 
 test('ssh-probe: скрипт разведки в настоящем sh находит папки и пометку bitrix', { skip: !shOk }, () => {
   const home = writeFiles(tmpDir('kit-home-'), { 'www/alpha.example.com/bitrix/.settings.php': '<?php', 'public_html/index.php': '' });

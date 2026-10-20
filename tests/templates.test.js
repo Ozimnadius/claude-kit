@@ -35,6 +35,28 @@ test('gitignore-bitrix: служебное, ядро, снимки и секре
   for (const p of no) assert.ok(!set.has(p), 'не должен игнорироваться: ' + p);
 });
 
+test('рабочие папки в bitrix/ (с 3.2.0): пример справки bitrix.md поверх шаблона — папки в git, прочее ядро и бэкапы нет; «Не коммитить» с «кроме» их пропускает', () => {
+  const ref = fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', 'reference', 'bitrix.md'), 'utf8');
+  const block = /\*\*`\.gitignore`\.\*\*[\s\S]*?```\n([\s\S]*?)```/.exec(ref);
+  assert.ok(block, 'в справке нет примера исключений .gitignore');
+  const lines = block[1].replace(/<шаблон>/g, 'theme').replace(/<пространство>/g, 'vendor');
+  const tpl = read('gitignore-bitrix');
+  assert.ok(/^\/bitrix\/\*$/m.test(tpl) && !/^\/bitrix\/$/m.test(tpl), 'в шаблоне /bitrix/*, а не /bitrix/');
+  const gi = tpl.replace(/^\/bitrix\/\*$/m, lines.trimEnd());
+  const work = ['bitrix/templates/theme/header.php', 'bitrix/templates/theme/components/bitrix/menu/top/template.php',
+    'bitrix/components/vendor/catalog/component.php', 'bitrix/php_interface/init.php'];
+  const core = ['bitrix/.settings.php', 'bitrix/php_interface/dbconn.php', 'bitrix/templates/.default/a.php', 'bitrix/components/bitrix/news/component.php',
+    'bitrix/modules/main/include.php', 'bitrix/templates/theme/_header.php.back1.2.3', 'bitrix/components/vendor/_catalog.back1.2'];
+  const set = ignored(gi, [...work, ...core]);
+  for (const p of work) assert.ok(!set.has(p), 'рабочий файл не должен игнорироваться: ' + p);
+  for (const p of core) assert.ok(set.has(p), 'должен игнорироваться: ' + p);
+  const rule = /`(bitrix\/ \(кроме [^`]*\)), upload\/ \(кроме upload\/docs\/\), \*\.back\*`/.exec(ref);
+  assert.ok(rule, 'в справке нет примера «Не коммитить»');
+  const rules = parseRules([rule[1].replace(/<шаблон>/g, 'theme').replace(/<пространство>/g, 'vendor'), '*.back*']);
+  for (const p of work) assert.equal(matchRules(p, rules), null, '«Не коммитить» не должен ловить: ' + p);
+  for (const p of ['bitrix/.settings.php', 'bitrix/modules/main/include.php', 'bitrix/templates/theme/_header.php.back1.2.3']) assert.ok(matchRules(p, rules), p);
+});
+
 test('gitignore-general: служебное, снимки и секреты игнорируются; документы — в git', () => {
   const yes = ['.idea/workspace.xml', '.claude/settings.local.json', '.env', '.env.local', 'node_modules/a/b.js', 'x.php.back1', '.claude/docs/visual/links.json',
     '.superpowers/brainstorm/1/content/a.html', '.worktrees/feature/src/a.php'];
