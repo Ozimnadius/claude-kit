@@ -14,7 +14,7 @@ final class Tool
      * в поставке — integration/aspro_merge.php) знает свою версию (AsproMergeSite::VERSION): они выпускаются вместе и
      * должны совпадать — это проверяют version и status.
      */
-    public const VERSION = '1.1.0';
+    public const VERSION = '1.2.0';
     /** Сколько секунд предохранитель ждёт хранилище, занятое агентом или консолью */
     public const GUARD_LOCK_WAIT = 180;
 
