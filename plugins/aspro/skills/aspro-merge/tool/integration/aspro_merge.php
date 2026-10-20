@@ -42,7 +42,7 @@ if (!class_exists('AsproMergeSite', false)) {
     final class AsproMergeSite
     {
         /** Версия файла подключения — та же, что у инструмента (AsproMerge\Tool::VERSION) */
-        public const VERSION = '1.2.0';
+        public const VERSION = '1.2.1';
         public const AGENT = 'AsproMergeSite::agent();';
         /** Кеш проверки агента: время (unix), когда агент последний раз был найден в базе */
         public const OPTION_AGENT = 'aspro_merge_agent';
