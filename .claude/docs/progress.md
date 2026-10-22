@@ -4,8 +4,8 @@
 
 ## Сейчас
 
-- **Этап:** 45 — `.settings.php` модулей D7 в git: сужение запрета secret-scan (начат 2026-10-22); последний шаг 45.2 — выпуск kit 3.2.3 (не отправлен): version в plugins/kit/.claude-plugin/plugin.json и в marketplace.json — 3.2.3; README — строка kit-commit.js: с 3.2.3 `.settings.php` модуля D7 прямо в его папке коммитится и заливается, `.settings.php` ядра, `.settings_extra.php` и `dbconn.php` — нет; «Версия kit» в правилах репозитория и в примере README — 3.2.3; обзор work/overview не трогается — новых команд, агентов, хуков и скриптов нет
-- **Следующий шаг:** 45.3 — отправка master на GitHub, обновление маркетплейса и kit, проверка установленного и проверка в проекте eta (только чтение); закрытие этапа 45
+- **Этап:** 45 — `.settings.php` модулей D7 в git: сужение запрета secret-scan — закрыт 2026-10-22
+- **Следующий шаг:** нет — этап закрыт
 - **Блокеры и открытые вопросы:** отложено (решение 2026-10-16, подтверждено этапом 39): короткий контекст — /clear после каждого шага и порог автосжатия autoCompactWindow 400K; это следующее облегчение kit (вариант Г) — вернуться после работы с kit 3.x в нескольких проектах
 
 ## Этапы
@@ -58,7 +58,7 @@
 | 42 | исправления kit и aspro по второму прогону проверки на стенде (kit 3.2.0, aspro 1.2.0) | `journal/stages/stage-42.md` |
 | 43 | исправления aspro по третьему прогону проверки на стенде (aspro 1.2.1) | `journal/stages/stage-43.md` |
 | 44 | /kit:report: отчёт в задачу от имени пользователя, неформально, общими словами | `journal/stages/stage-44.md` |
-| 45 | `.settings.php` модулей D7 в git: сужение запрета secret-scan | ниже |
+| 45 | `.settings.php` модулей D7 в git: сужение запрета secret-scan | `journal/stages/stage-45.md` |
 
 ## Документы
 
@@ -86,11 +86,3 @@
 | archive/spec-aspro.md | спек этапа 37: плагин aspro (Т-1…Т-9) | готово, этап 37 (2026-10-18) |
 | archive/plan-aspro.md | план этапа 37 | готово, этап 37 (2026-10-18) |
 | archive/research-docs.md | исследование идеи №5: хранить документацию проекта или хватит git — лучшие практики 2025–2026, замер по записям сессий kit-проектов, варианты А–Г, решение пользователя (пока kit 3.1, в будущем короткий контекст) | готово, этап 39 (2026-10-19) |
-
-## Этап 45 — `.settings.php` модулей D7 в git: сужение запрета secret-scan
-
-| Шаг | Статус | Что сделано | Как проверено |
-|---|---|---|---|
-| 45.1 | ✅ | secret-scan: `.settings.php` под запретом везде, кроме `.settings.php` модуля D7 прямо в его папке (`bitrix/modules/*/.settings.php`, `local/modules/*/.settings.php` — контроллеры, консольные команды, секретов нет); `.settings_extra.php` и `dbconn.php` — по-прежнему везде, проверка строк на пароли и токены не тронута; справка project-init/reference/bitrix.md — разделы «Секреты» и «Рабочие папки в bitrix/» (модули в bitrix/modules); тесты lib.test.js и secret-scan.test.js; ssh-deploy.js (берёт файлы из коммитов — .settings.php ядра в них не попадает) и delete-list.php (защита от удаления) не меняются | npm test — 486 тестов: 483 пройдено, 0 упало, 3 пропущено; новые: lib.test.js — «кроме» с маской для .settings.php, secret-scan.test.js — --paths: .settings.php модулей — код 0, ядра, local/php_interface, вложенный install/ и .settings_extra.php модуля — код 1, вместе с «Не коммитить: bitrix/ (кроме bitrix/modules/vendor.*, …), upload/ (кроме upload/docs/), *.back*» — код 0; до правки новый тест secret-scan падал; claude plugin validate plugins/kit --strict и . --strict — пройдены; git diff --check, kit-denylist tree — чисто |
-| 45.2 | ✅ | выпуск kit 3.2.3 (не отправлен): version в plugins/kit/.claude-plugin/plugin.json и в marketplace.json — 3.2.3; README — строка kit-commit.js: с 3.2.3 `.settings.php` модуля D7 прямо в его папке коммитится и заливается, `.settings.php` ядра, `.settings_extra.php` и `dbconn.php` — нет; «Версия kit» в правилах репозитория и в примере README — 3.2.3; обзор work/overview не трогается — новых команд, агентов, хуков и скриптов нет | npm test — 486 тестов: 483 пройдено, 0 упало, 3 пропущено (версии plugin.json и marketplace.json совпадают); claude plugin validate plugins/kit --strict и . --strict — пройдены; git diff --check, kit-denylist tree — чисто |
-| 45.3 | ⏳ | отправка master на GitHub, обновление маркетплейса и kit, проверка установленного и проверка в проекте eta (только чтение); закрытие этапа 45 | |
