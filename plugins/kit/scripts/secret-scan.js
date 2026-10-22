@@ -19,8 +19,11 @@ const { spawnSync } = require('child_process');
 const { readParams } = require('./lib/params');
 const { parseRules, matchRules, norm } = require('./lib/paths');
 
+// .settings.php модуля D7 (контроллеры, консольные команды) получает каждый покупатель модуля — секретов в нём нет
+// (с 3.2.3); пароли ядра — в bitrix/.settings.php и local/.settings.php, они под запретом.
 const BASE_FORBIDDEN = [
-  '.idea', '*.back*', '.settings.php', '.settings_extra.php', 'dbconn.php', '.env', '.env.* (кроме .env.example)',
+  '.idea', '*.back*', '.settings.php (кроме bitrix/modules/*/.settings.php, local/modules/*/.settings.php)',
+  '.settings_extra.php', 'dbconn.php', '.env', '.env.* (кроме .env.example)',
   '*.pem', '*.key', '.claude/settings.local.json', '.claude/worktrees', 'docs/visual', '.claude/docs/visual',
   '.claude/kit-inbox.jsonl', // входящие ответы для /kit:step-done — только локально
   '/kit-exec.php', // файл-канал /kit:server (только корень): на сервере на время работы, в git не нужен

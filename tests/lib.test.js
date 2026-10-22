@@ -95,6 +95,14 @@ test('paths: правила папок, масок, имён и исключен
   assert.equal(norm('./a\\b'), 'a/b');
 });
 
+test('paths: «кроме» с маской — .settings.php модулей проходит, ядра и вложенный — нет (с 3.2.3)', () => {
+  const rules = parseRules(['.settings.php (кроме bitrix/modules/*/.settings.php, local/modules/*/.settings.php)']);
+  for (const p of ['bitrix/modules/vendor.shop/.settings.php', 'local/modules/vendor.mod/.settings.php']) assert.equal(matchRules(p, rules), null, p);
+  for (const p of ['bitrix/.settings.php', 'local/.settings.php', 'local/php_interface/.settings.php', 'bitrix/modules/x/install/.settings.php']) {
+    assert.ok(matchRules(p, rules), p);
+  }
+});
+
 test('paths: маска со слешем проверяет путь и папки-предки', () => {
   const rules = parseRules(['local/templates/*/css/*.map', '.claude/scripts']);
   assert.ok(matchRules('local/templates/aspro/css/a.css.map', rules));

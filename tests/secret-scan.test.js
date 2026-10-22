@@ -307,6 +307,22 @@ test('--paths: только запрещённые пути — файлы не 
   assert.equal(scan(dir, '--paths', '--').code, 2, 'только «--» — код 2');
 });
 
+test('--paths: .settings.php модулей коммитится, .settings.php ядра, вложенный и .settings_extra.php — нет (с 3.2.3)', () => {
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd({ 'Не коммитить': '—' }) });
+  const ok = scan(dir, '--paths', 'bitrix/modules/vendor.shop/.settings.php', 'local/modules/vendor.mod/.settings.php');
+  assert.equal(ok.code, 0, ok.stdout);
+  const bad = ['bitrix/.settings.php', 'local/.settings.php', 'local/php_interface/.settings.php', 'bitrix/modules/x/install/.settings.php',
+    'bitrix/modules/x/.settings_extra.php'];
+  const r = scan(dir, '--paths', ...bad);
+  assert.equal(r.code, 1, r.stdout);
+  for (const p of bad) assert.match(r.stdout, new RegExp('^ {2}' + p.replace(/[./]/g, '\\$&') + ': запрещённый путь', 'm'), p);
+  // рабочий модуль в bitrix/ — вместе с «Не коммитить» проекта (bitrix/ кроме модулей студии)
+  const work = gitRepo({ '.claude/CLAUDE.md': paramsMd({ 'Не коммитить': 'bitrix/ (кроме bitrix/modules/vendor.*, bitrix/components/vendor), upload/ (кроме upload/docs/), *.back*' }) });
+  const w = scan(work, '--paths', 'bitrix/modules/vendor.shop/.settings.php');
+  assert.equal(w.code, 0, w.stdout);
+  assert.equal(scan(work, '--paths', 'bitrix/.settings.php').code, 1);
+});
+
 test('--paths: папка — каждый файл, который из неё возьмёт git; «-» — пути из stdin (с 3.2.0)', () => {
   const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd({ 'Не коммитить': WORK_RULE }), '.gitignore': WORK_GITIGNORE });
   writeFiles(dir, WORK_FILES);
