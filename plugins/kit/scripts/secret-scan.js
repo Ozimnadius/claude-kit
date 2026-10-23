@@ -39,10 +39,20 @@ const PARAM_LINE = /^\s*[-*]\s+Секреты\s*:/i;
 // Литерал с `.` или `+` в начале (`+Ab3/xyz9` в base64) — не склейка: оператора в конце у него нет.
 const PLACEHOLDER = /^(?:\$|<\?|<%|\{\{|\{!!|\{\$)|^#[A-Z][A-Z0-9_]*#$|^[.+].*[.+([]$/;
 
-// Слова вроде «Пароль» или «password_field» — подписи, а не секреты; `%s`, `%PASSWORD%` — формат.
+// Номер версии или диапазон semver (с 3.2.4): в package.json и lock-файлах npm ключ бывает именем пакета —
+// `"@inquirer/password": "^5.2.4"`, `"node-token": "~1.0.0"`. Части диапазона — через пробел или `||` (`>=1.2.0 <2.0.0`),
+// псевдоним — `npm:pkg@^1.2.3`. Без оператора — хотя бы одна точка (`123456` — пароль); числа без ведущих нулей,
+// как в semver (`12.05.1987` — дата, а не версия).
+const VERSION_PART = /^(?:(?:[~^]|[<>]=?|=)v?(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*|[xX*])){0,2}|v?(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*|[xX*])){1,2})(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+function isVersion(v) {
+  const parts = v.replace(/^npm:(?:@[\w.-]+\/)?[\w.-]+@/, '').split(/\s+|\|\|/).filter((p) => p && p !== '-');
+  return parts.length > 0 && parts.every((p) => VERSION_PART.test(p));
+}
+
+// Слова вроде «Пароль» или «password_field» — подписи, а не секреты; `%s`, `%PASSWORD%` — формат; `^5.2.4` — версия.
 function looksSecret(v) {
   if (/^[\p{L}_ -]+$/u.test(v) && v.length < 16) return false;
-  if (PLACEHOLDER.test(v) || v.startsWith('%')) return false;
+  if (PLACEHOLDER.test(v) || v.startsWith('%') || isVersion(v)) return false;
   return true;
 }
 

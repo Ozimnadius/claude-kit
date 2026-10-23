@@ -70,3 +70,4 @@
 | К64 | aspro: внедрение создавало local/php_interface/init.php на сайте с bitrix/php_interface/init.php — прежний init.php молча отключался; инструмент искал строку подключения только в local/… | SKILL.md, tool/lib/Tool.php | ✅ 40.1 |
 | К65 | aspro: отставшая копия — слияние сохраняло старый код вендора поверх его исправлений | tool/lib/Planner.php, Snapshot.php | ✅ 40.1 |
 | К66 | aspro: новые фразы шаблонов вендора отсутствовали в языковых файлах копии — пустые подписи, verify их не видел | tool/lib/Verifier.php | ✅ 40.1 |
+| К67 | secret-scan: ложная находка «пароль или токен» на версии пакета в lock-файле npm — ключ — имя пакета (`"@inquirer/password": "^5.2.4"`), kit-commit.js не пропускал package-lock.json | secret-scan.js | ✅ 46.1 |

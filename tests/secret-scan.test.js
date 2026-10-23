@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { gitRepo, git, writeFiles, runScript, makeProject } = require('./helpers');
 const { paramsMd, ALPHA, WORK_GITIGNORE, WORK_RULE, WORK_FILES } = require('./fixtures');
-const { scanLine } = require('../plugins/kit/scripts/secret-scan');
+const { scanLine, looksSecret } = require('../plugins/kit/scripts/secret-scan');
 
 const scan = (dir, ...args) => runScript('secret-scan.js', { args, cwd: dir });
 
@@ -172,6 +172,31 @@ test('ключи SERVER_KEY, PRIVATE_KEY, SECRET_KEY и серверный кл�
   assert.deepEqual(scanLine('<div class="smart-captcha" data-sitekey="ysc1_' + 'AbC123dEf456GhI789jKl012MnO345pQr678StU9"></div>', []), []);
   assert.deepEqual(scanLine("$f = ['SERVER_KEY', 'PRIVATE_KEY'];", []), []);
   assert.deepEqual(scanLine('PRIVATE_KEY_FILE=/run/secrets/key', [], '.env.example'), []);
+});
+
+test('номер версии или диапазон semver — не секрет: в lock-файле npm ключ бывает именем пакета (с 3.2.4)', () => {
+  for (const v of ['^5.2.4', '~1.0.0', '2.0.2', '1.x', '>=1.2.0 <2.0.0', '5.2.4-beta.1', 'npm:pkg@^1.2.3', 'npm:@scope/pkg@~2.0.0', '^1.0.0||^2.0.0', '1.2.3 - 2.3.4']) {
+    assert.equal(looksSecret(v), false, v);
+  }
+  // Пароли и токены — находки; число без точки и дата с ведущим нулём — не версия.
+  for (const v of ['Qw3rty12', 'ghp_' + 'AbC123dEf456GhI789jKl012MnO345pQr678', '123456', '12.05.1987', '1.2.3.4']) {
+    assert.equal(looksSecret(v), true, v);
+  }
+  // Значения склеены, чтобы сам тест не был находкой secret-scan при коммите.
+  const lock = '{\n  "packages": {\n    "node_modules/x": {\n      "dependencies": {\n'
+    + '        "@inquirer/password": "^5.2.4",\n        "node-token": "~1.0.0"\n      }\n    }\n  }\n}\n';
+  const dir = gitRepo({ 'x.txt': '' });
+  writeFiles(dir, {
+    'tools/package-lock.json': lock,
+    'bad/package-lock.json': '{\n  "password": "Qw3' + 'rty12"\n}\n',
+    '.env.example': 'DB_PASSWORD=Sup3r' + 'S3cret9\n',
+  });
+  const ok = scan(dir, '--files', 'tools/package-lock.json');
+  assert.equal(ok.code, 0, ok.stdout);
+  const bad = scan(dir, '--files', 'bad/package-lock.json', '.env.example');
+  assert.equal(bad.code, 1, bad.stdout);
+  assert.match(bad.stdout, /bad\/package-lock\.json:2: пароль или токен — Qw3…\(8 симв\.\)/);
+  assert.match(bad.stdout, /\.env\.example:1: пароль или токен \(без кавычек\) — Sup…\(12 симв\.\)/);
 });
 
 test('--cached: шаблон sale.order.ajax с картами Яндекса — чисто; настоящий ключ в URL — находка', () => {
