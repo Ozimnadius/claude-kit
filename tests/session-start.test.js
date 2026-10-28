@@ -209,7 +209,7 @@ const MATT_PLUGIN = 'mattpocock-skills@claude-plugins-official';
 const MATT_PARAMS = { 'Выкладка': 'PhpStorm Always', 'Система Мэтта': 'да', 'Версия kit': VERSION };
 const MATT_RULE = /- Система Мэтта \(проект Мэтта\)/;
 const MATT_REMIND_CTX = '- Система Мэтта: да, но плагин mattpocock-skills на этот проект не поставлен или выключен — запустите /kit:project-init (поставит его и выключит superpowers в проекте).';
-const MATT_REMIND_USER = '[kit] Система Мэтта: плагин mattpocock-skills на этот проект не поставлен — запустите /kit:project-init.';
+const MATT_REMIND_USER = '[kit] Система Мэтта: плагин mattpocock-skills на этот проект не поставлен или выключен — запустите /kit:project-init.';
 
 // Подставной installed_plugins.json: запись плагина Мэтта на проект dir (поля поверх — over).
 function pluginsOn(dir, over = {}) {
@@ -239,8 +239,10 @@ test('проект Мэтта с плагином: правила Мэтта и 
   assert.ok(ctx.includes('- Файлы системы Мэтта — в .claude/docs/: карта, тикеты-решения и спек — work/<тема>/ (map.md, issues/NN-<slug>.md, spec.md), '
     + 'тикеты реализации — work/<тема>-build/ (issues/NN-<slug>.md, README.md), глоссарий — GLOSSARY.md, ADR — adr/NNNN-<slug>.md, '
     + 'исследования и прочие документы навыков — work/, прототипы prototype — HTML в work/<тема>/ (варианты экранов на сайте — только где правки не уходят на прод сами); '
-    + 'трекер задач — эти локальные файлы. В корень проекта (GLOSSARY.md, CONTEXT.md, docs/adr/, docs/agents/, .scratch/) не пиши.\n'), ctx);
+    + 'трекер задач — эти локальные файлы. В корень проекта (GLOSSARY.md, GLOSSARY-MAP.md, CONTEXT.md, CONTEXT-MAP.md, docs/adr/, docs/agents/, .scratch/) не пиши.\n'), ctx);
   assert.match(ctx, /implement-spec и setup-matt-pocock-skills не используются; вопросы грилинга — через AskUserQuestion\./);
+  // Строка шаблона про superpowers в правилах проекта (.claude/CLAUDE.md до 47.8а) здесь не действует.
+  assert.ok(ctx.includes('через AskUserQuestion. Строка «Крупная задача» в .claude/CLAUDE.md про superpowers в проекте Мэтта не действует.\n'), ctx);
   assert.match(ctx, /## Правила процесса \(плагин kit\)/, 'общие правила kit на месте');
 });
 

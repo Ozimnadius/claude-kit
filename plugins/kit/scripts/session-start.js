@@ -47,7 +47,7 @@ const RULE_WORKTREE ='- Сессия работает в git worktree — пра
 // Система Мэтта (с 3.3.0): путь к скрипту навыков — абсолютный, с «/», как у SPEC_TEMPLATE.
 const MATT_SKILL_SCRIPT = path.join(__dirname, 'matt-skill.js').replace(/\\/g, '/');
 const MATT_REMIND = '- Система Мэтта: да, но плагин mattpocock-skills на этот проект не поставлен или выключен — запустите /kit:project-init (поставит его и выключит superpowers в проекте).';
-const MATT_REMIND_USER = '[kit] Система Мэтта: плагин mattpocock-skills на этот проект не поставлен — запустите /kit:project-init.';
+const MATT_REMIND_USER = '[kit] Система Мэтта: плагин mattpocock-skills на этот проект не поставлен или выключен — запустите /kit:project-init.';
 
 // Установленная версия kit — из манифеста плагина, рядом со скриптом.
 function installedVersion() {
@@ -115,11 +115,13 @@ function mattRules(info) {
       + 'Большая работа (не влезет в одну-две сессии) — по навыку /kit:matt: общая сессия, исполнитель на каждый тикет, приёмка через /kit:step-done; '
       + 'без пользователя (он сам разрешил) — коммит без просмотра по /kit:matt, разбор потом. Мелкая задача — сделать и закрыть /kit:step-done. '
       + 'Навыки только по команде (wayfinder, to-spec, to-tickets, implement и др.) читай файлом: node "' + MATT_SKILL_SCRIPT + '" <имя>. '
-      + 'implement-spec и setup-matt-pocock-skills не используются; вопросы грилинга — через AskUserQuestion.',
+      + 'implement-spec и setup-matt-pocock-skills не используются; вопросы грилинга — через AskUserQuestion. '
+      // Правила проекта, собранные до 47.8а, ведут крупную задачу через superpowers — здесь он выключен.
+      + 'Строка «Крупная задача» в .claude/CLAUDE.md про superpowers в проекте Мэтта не действует.',
     '- Файлы системы Мэтта — в ' + docs + '/: карта, тикеты-решения и спек — work/<тема>/ (map.md, issues/NN-<slug>.md, spec.md), '
       + 'тикеты реализации — work/<тема>-build/ (issues/NN-<slug>.md, README.md), глоссарий — GLOSSARY.md, ADR — adr/NNNN-<slug>.md, '
       + 'исследования и прочие документы навыков — work/, прототипы prototype — HTML в work/<тема>/ (варианты экранов на сайте — только где правки не уходят на прод сами); '
-      + 'трекер задач — эти локальные файлы. В корень проекта (GLOSSARY.md, CONTEXT.md, docs/adr/, docs/agents/, .scratch/) не пиши.',
+      + 'трекер задач — эти локальные файлы. В корень проекта (GLOSSARY.md, GLOSSARY-MAP.md, CONTEXT.md, CONTEXT-MAP.md, docs/adr/, docs/agents/, .scratch/) не пиши.',
   ];
   // Версия плагина изменилась — правила kit проверены на другой; важно, пока идёт большая работа.
   if (plugin.version !== MATT_VERIFIED && bigWorkActive(info.dir, docs)) {

@@ -85,7 +85,13 @@ test('CLAUDE.md: документы — в .claude/docs, в «Не выклад�
   const tpl = read('CLAUDE.md');
   assert.ok(tpl.includes('`.claude/docs/visual/`'));
   assert.ok(tpl.includes('в `work/`') && tpl.includes('в `archive/`') && tpl.includes('раздел «Документы» журнала'));
-  assert.ok(tpl.includes('**Крупная задача** — `superpowers:brainstorming`') && tpl.includes('не в `docs/superpowers/`'), 'правило superpowers в «Как работаем»');
+  // «Крупная задача» — два варианта (47.8а): superpowers по правилам kit / по навыку /kit:matt при «Система Мэтта: да».
+  const big = /^- \*\*Крупная задача\*\* — \{\{([^}]*)\}\}/m.exec(tpl);
+  assert.ok(big, 'строка «Крупная задача» с вариантами');
+  const [sp, matt, ...more] = big[1].split(' | ');
+  assert.equal(more.length, 0, 'вариантов два');
+  assert.ok(sp.startsWith('`superpowers:brainstorming`') && sp.includes('не в `docs/superpowers/`'), 'правило superpowers в «Как работаем»: ' + sp);
+  assert.ok(matt.startsWith('по навыку `/kit:matt` (система Мэтта)') && matt.includes('не пишутся') && !matt.includes('superpowers:'), 'вариант для системы Мэтта: ' + matt);
   assert.ok(tpl.includes('с разделом «Чек-лист» в начале: строка на задачу `- [ ] N.M — …`'), 'чек-лист задач в плане');
   const rest = tpl.split('.claude/docs/').join('').split('upload/docs/').join('').split('docs/superpowers/').join('');
   assert.ok(!rest.includes('docs/'), 'старых путей docs/ в шаблоне нет');

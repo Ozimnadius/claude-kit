@@ -481,6 +481,14 @@ test('matt: общая сессия, папки, задание исполнит
     'git show --stat', 'implement-spec']) {
     assert.ok(body.includes(s), s);
   }
+  // 47.8а: только в проекте Мэтта; исполнитель не закрывает шаг; поле session — в файле входящих; без пользователя — без отправки.
+  assert.match(body.trimStart(), /^# [^\n]+\n\n[^\n]*«Система Мэтта: да»[^\n]*не применяй/, 'первая строка тела — только при «Система Мэтта: да»');
+  assert.ok(/^Нельзя: коммитить и вызывать \/kit:step-done;/m.test(body), 'исполнителю — без /kit:step-done');
+  assert.ok(body.includes('полю `session` в `.claude/kit-inbox.jsonl`: `--list` его не печатает'), 'где смотреть поле session');
+  const solo = body.slice(body.indexOf('## 7. Без пользователя'), body.indexOf('## 8.'));
+  const review = body.slice(body.indexOf('## 8.'), body.indexOf('## 9.'));
+  assert.ok(solo.includes('без `--push`'), '§7: без отправки');
+  assert.ok(review.includes('`--push`'), '§8: отправка после разбора');
 });
 
 test('project-init: система Мэтта — вопрос, параметр, плагин на проект и выключение superpowers (п. 4.6а)', () => {
@@ -491,7 +499,9 @@ test('project-init: система Мэтта — вопрос, параметр
     'claude plugin enable mattpocock-skills@claude-plugins-official --scope project',
     'claude plugin disable superpowers@claude-plugins-official --scope project',
     'claude plugin disable mattpocock-skills@claude-plugins-official --scope project',
-    'claude plugin enable superpowers@claude-plugins-official --scope project', 'перезапустите сессию']) {
+    'claude plugin enable superpowers@claude-plugins-official --scope project', 'перезапустите сессию',
+    // 47.8а: строка «Крупная задача» правил проекта — по ответу (шаблон и смена ответа в существующем файле).
+    'вариант строки «Крупная задача» по `/kit:matt`', 'строку «Крупная задача» в `.claude/CLAUDE.md` — на вариант по ответу']) {
     assert.ok(init.includes(s), 'project-init: ' + s);
   }
   assert.match(read('templates', 'CLAUDE.md'), /^- Система Мэтта: \{\{да \| нет\}\}$/m);
