@@ -1,6 +1,6 @@
 'use strict';
-// Хук guard-matt.js (kit 3.3): в проекте Мэтта — файлы системы Мэтта не в корень проекта, а при автозаливке
-// PhpStorm Always — субагенты и подчинённые сессии не в отдельном worktree.
+// Хук guard-matt.js (kit 3.3): в проекте Мэтта — файлы системы Мэтта не в корень проекта, субагенты, подчинённые
+// сессии и сама сессия не в отдельном worktree (при любой выкладке), при автозаливке PhpStorm Always — и не в облачной копии.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -19,7 +19,8 @@ const CASES = [ // корень C:\proj; [инструмент, ввод, авт
   ['Write', { file_path: 'C:\\Temp\\GLOSSARY.md' }, false, null],
   ['Agent', { isolation: 'worktree', prompt: 'x' }, true, 'worktree'],
   ['mcp__ccd_session__start_session', { use_worktree: true }, true, 'worktree'],
-  ['mcp__ccd_session__start_session', { use_worktree: true }, false, null],
+  // До 47.8б вне автозаливки worktree проходил — теперь отказ с причиной про порядок Мэтта (решение пользователя 2026-10-28).
+  ['mcp__ccd_session__start_session', { use_worktree: true }, false, 'worktree-matt'],
   ['Agent', { prompt: 'x' }, true, null],
   // Остальные имена из списка файлов, остальные инструменты записи.
   ['Write', { file_path: 'C:\\proj\\glossary-map.md' }, false, 'files'],
@@ -47,15 +48,50 @@ const CASES = [ // корень C:\proj; [инструмент, ввод, авт
   ['Bash', { command: 'echo x > GLOSSARY.md' }, false, null],
   // Worktree: Task, ложные значения, автозаливка без isolation.
   ['Task', { isolation: 'worktree', prompt: 'x' }, true, 'worktree'],
-  ['Task', { isolation: 'worktree', prompt: 'x' }, false, null],
+  ['Task', { isolation: 'worktree', prompt: 'x' }, false, 'worktree-matt'],
+  ['Agent', { isolation: 'worktree', prompt: 'x' }, false, 'worktree-matt'],
   ['Agent', { isolation: 'none', prompt: 'x' }, true, null],
   ['mcp__ccd_session__start_session', { use_worktree: false }, true, null],
   ['mcp__ccd_session__start_session', { use_worktree: 'true' }, true, null],
+  ['mcp__ccd_session__start_session', { use_worktree: 'true' }, false, null],
   ['mcp__ccd_session__start_session', { prompt: 'x' }, true, null],
   ['Agent', undefined, true, null],
+  // 47.8б: EnterWorktree — при любой выкладке; облачная копия (isolation: remote) — только при автозаливке.
+  ['EnterWorktree', {}, true, 'worktree'],
+  ['EnterWorktree', { name: 'x' }, false, 'worktree-matt'],
+  ['EnterWorktree', undefined, false, 'worktree-matt'],
+  ['ExitWorktree', {}, true, null],
+  ['Agent', { isolation: 'remote', prompt: 'x' }, true, 'worktree'],
+  ['Task', { isolation: 'remote', prompt: 'x' }, true, 'worktree'],
+  ['Agent', { isolation: 'remote', prompt: 'x' }, false, null],
+  ['Task', { isolation: 'remote' }, false, null],
+  // 47.8б: файлы навыков to-questionnaire, teach и triage в корне — отказ; в документах, в подпапках и похожие — пропуск.
+  ['Write', { file_path: 'C:\\proj\\to-questionnaire-hosting.md' }, false, 'files'],
+  ['Write', { file_path: 'C:\\proj\\TO-QUESTIONNAIRE-Hosting.MD' }, false, 'files'],
+  ['Write', { file_path: 'to-questionnaire-x.md' }, false, 'files'],
+  ['Write', { file_path: 'C:\\proj\\MISSION.md' }, false, 'files'],
+  ['Write', { file_path: 'c:\\proj\\resources.md' }, false, 'files'],
+  ['Write', { file_path: 'C:\\proj\\lessons\\01-intro.html' }, false, 'files'],
+  ['Write', { file_path: 'C:\\proj\\learning-records\\0001-x.md' }, false, 'files'],
+  ['Write', { file_path: 'C:\\proj\\.out-of-scope\\dark-mode.md' }, false, 'files'],
+  ['Edit', { file_path: '.out-of-scope/dark-mode.md' }, true, 'files'],
+  ['Write', { file_path: 'C:\\proj\\.claude\\docs\\work\\x\\to-questionnaire-hosting.md' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\.claude\\docs\\work\\x\\MISSION.md' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\.claude\\docs\\work\\x\\lessons\\01-intro.html' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\sub\\to-questionnaire-x.md' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\sub\\MISSION.md' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\local\\lessons\\a.php' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\to-questionnaire-x.txt' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\questionnaire-x.md' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\lessons.md' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\.out-of-scope-old\\a.md' }, false, null],
 ];
 
-const WANT = { files: /\.claude\/docs\/: глоссарий/, worktree: /worktree\) не годится/ };
+const WANT = {
+  files: /\.claude\/docs\/: глоссарий/,
+  worktree: /^При автозаливке PhpStorm отдельная копия \(worktree\) не годится/,
+  'worktree-matt': /^В проекте Мэтта worktree не используем/,
+};
 
 test('checkTool: файлы Мэтта в корне и worktree при автозаливке', () => {
   for (const [tool, toolInput, always, want] of CASES) {
@@ -68,10 +104,14 @@ test('checkTool: файлы Мэтта в корне и worktree при авто
 
 test('checkTool: тексты причин и папка документов из ctx.docsRel', () => {
   const files = checkTool({ tool_name: 'Write', tool_input: { file_path: 'C:\\proj\\GLOSSARY.md' } }, { root: 'C:\\proj', docsRel: '.claude/docs', always: false });
-  assert.equal(files, 'Файлы системы Мэтта — в .claude/docs/: глоссарий — GLOSSARY.md, ADR — adr/, карта, спек и тикеты — work/<тема>/ и work/<тема>-build/. '
+  // С 47.8б тикеты карты и тикеты реализации названы раздельно (research-A М-5), добавлены прочие документы навыков.
+  assert.equal(files, 'Файлы системы Мэтта — в .claude/docs/: глоссарий — GLOSSARY.md, ADR — adr/, карта и спек — work/<тема>/, '
+    + 'тикеты карты — work/<тема>/issues/, тикеты реализации — work/<тема>-build/issues/, прочие документы навыков — work/. '
     + 'В корень проекта (на сайте это корень сайта) их не кладём.');
   const wt = checkTool({ tool_name: 'Agent', tool_input: { isolation: 'worktree' } }, { root: 'C:\\proj', docsRel: '.claude/docs', always: true });
   assert.equal(wt, 'При автозаливке PhpStorm отдельная копия (worktree) не годится: правки из неё не дойдут до сервера и разойдутся с основной папкой. Запускай без worktree.');
+  const wtMatt = checkTool({ tool_name: 'EnterWorktree', tool_input: {} }, { root: 'C:\\proj', docsRel: '.claude/docs', always: false });
+  assert.equal(wtMatt, 'В проекте Мэтта worktree не используем: исполнители работают в основной папке, шаг коммитит общая сессия через /kit:step-done.');
   // Другая папка документов — другая подсказка.
   assert.match(checkTool({ tool_name: 'Write', tool_input: { file_path: 'C:\\proj\\GLOSSARY.md' } }, { root: 'C:\\proj', docsRel: 'notes', always: false }), /в notes\/: глоссарий/);
   // Корень проекта — путь POSIX: тоже работает.
@@ -91,8 +131,8 @@ test('checkTool: файлы внутри самой папки документ�
 const withParams = (params) => makeProject({ '.claude/CLAUDE.md': paramsMd(params), '.claude/docs/progress.md': progressMd() });
 const matt = (extra = {}) => withParams({ 'Выкладка': 'вручную', 'Система Мэтта': 'да', ...extra });
 
-function hook(dir, tool, toolInput) {
-  const r = runScript('guard-matt.js', { input: { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput, cwd: dir } });
+function hook(dir, tool, toolInput, env = {}) {
+  const r = runScript('guard-matt.js', { input: { hook_event_name: 'PreToolUse', tool_name: tool, tool_input: toolInput, cwd: dir }, env });
   assert.equal(r.code, 0);
   assert.equal(r.stderr, '');
   return r.stdout;
@@ -130,21 +170,33 @@ test('guard-matt: чужой и обычный kit-проект — пропус
   assert.equal(hook(makeProject({ 'a.txt': '' }), 'Write', w), '');
 });
 
-test('guard-matt: субагент и подчинённая сессия в worktree запрещены только при PhpStorm Always в проекте Мэтта', () => {
+test('guard-matt: worktree в проекте Мэтта запрещён при любой выкладке (причина — по автозаливке), облачная копия — при PhpStorm Always', () => {
   const always = matt({ 'Выкладка': 'PhpStorm Always' });
   const r1 = reasonOf(hook(always, 'Agent', { isolation: 'worktree', prompt: 'x' }));
   assert.match(r1, /^\[kit\] При автозаливке PhpStorm отдельная копия \(worktree\) не годится/);
   assert.match(reasonOf(hook(always, 'Task', { isolation: 'worktree', prompt: 'x' })), /^\[kit\]/);
   assert.match(reasonOf(hook(always, 'mcp__ccd_session__start_session', { use_worktree: true, prompt: 'x' })), /worktree\) не годится/);
+  assert.match(reasonOf(hook(always, 'EnterWorktree', {})), /^\[kit\] При автозаливке PhpStorm отдельная копия \(worktree\) не годится/);
+  assert.match(reasonOf(hook(always, 'Agent', { isolation: 'remote', prompt: 'x' })), /^\[kit\] При автозаливке PhpStorm отдельная копия/);
   assert.equal(hook(always, 'Agent', { prompt: 'x' }), '');
   assert.equal(hook(always, 'mcp__ccd_session__start_session', { prompt: 'x' }), '');
   // Файлы системы Мэтта при автозаливке тоже запрещены.
   assert.match(reasonOf(hook(always, 'Write', { file_path: 'glossary.md' })), /Файлы системы Мэтта/);
-  // Мэтт без автозаливки, «PhpStorm on-demand», автозаливка без Мэтта — worktree разрешён.
-  assert.equal(hook(matt(), 'Agent', { isolation: 'worktree', prompt: 'x' }), '');
-  assert.equal(hook(matt({ 'Выкладка': 'PhpStorm on-demand' }), 'Agent', { isolation: 'worktree', prompt: 'x' }), '');
+  // Мэтт без автозаливки и «PhpStorm on-demand» — worktree тоже отказ (до 47.8б — пропуск), облачная копия — пропуск.
+  const MATT_WT = /^\[kit\] В проекте Мэтта worktree не используем/;
+  assert.match(reasonOf(hook(matt(), 'Agent', { isolation: 'worktree', prompt: 'x' })), MATT_WT);
+  assert.match(reasonOf(hook(matt(), 'EnterWorktree', { name: 'x' })), MATT_WT);
+  assert.match(reasonOf(hook(matt(), 'mcp__ccd_session__start_session', { use_worktree: true, prompt: 'x' })), MATT_WT);
+  assert.match(reasonOf(hook(matt({ 'Выкладка': 'PhpStorm on-demand' }), 'Agent', { isolation: 'worktree', prompt: 'x' })), MATT_WT);
+  assert.equal(hook(matt(), 'Agent', { isolation: 'remote', prompt: 'x' }), '');
+  assert.equal(hook(matt(), 'mcp__ccd_session__start_session', { use_worktree: false, prompt: 'x' }), '');
+  // Автозаливка без Мэтта, обычный kit-проект — как раньше: всё разрешено.
   assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always' }), 'Agent', { isolation: 'worktree', prompt: 'x' }), '');
   assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always', 'Система Мэтта': 'нет' }), 'mcp__ccd_session__start_session', { use_worktree: true }), '');
+  assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always' }), 'EnterWorktree', {}), '');
+  assert.equal(hook(withParams({ 'Выкладка': 'вручную' }), 'EnterWorktree', {}), '');
+  assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always' }), 'Agent', { isolation: 'remote', prompt: 'x' }), '');
+  assert.equal(hook(makeProject({ 'a.txt': '' }), 'EnterWorktree', {}), '');
 });
 
 test('guard-matt: сессия в worktree приложения — корень и папка сессии проверяются обе', () => {
@@ -163,6 +215,48 @@ test('guard-matt: сессия в worktree приложения — корень
   assert.equal(hook(wt, 'Write', { file_path: path.join(wt, 'src', 'index.php') }), '');
 });
 
+test('guard-matt: worktree-сессия приложения — CLAUDE_PROJECT_DIR основной папки, путь worktree только в cwd ввода: корень worktree проверяется', () => {
+  const dir = matt();
+  const wt = path.join(dir, '.claude', 'worktrees', 'w1');
+  fs.mkdirSync(path.join(wt, 'src'), { recursive: true });
+  const run = (toolInput) => hook(wt, 'Write', toolInput, { CLAUDE_PROJECT_DIR: dir });
+  assert.match(reasonOf(run({ file_path: path.join(wt, 'GLOSSARY.md') })), /^\[kit\] Файлы системы Мэтта/);
+  assert.match(reasonOf(run({ file_path: path.join(wt, '.out-of-scope', 'x.md') })), /^\[kit\] Файлы системы Мэтта/);
+  assert.match(reasonOf(run({ file_path: path.join(wt, 'to-questionnaire-x.md') })), /^\[kit\] Файлы системы Мэтта/);
+  assert.match(reasonOf(run({ file_path: path.join(dir, 'GLOSSARY.md') })), /^\[kit\] Файлы системы Мэтта/);
+  assert.match(reasonOf(run({ file_path: 'docs/adr/0001-x.md' })), /^\[kit\]/);
+  // Документы worktree и основной папки, код — пропуск.
+  assert.equal(run({ file_path: path.join(wt, '.claude', 'docs', 'GLOSSARY.md') }), '');
+  assert.equal(run({ file_path: path.join(dir, '.claude', 'docs', 'GLOSSARY.md') }), '');
+  assert.equal(run({ file_path: path.join(wt, 'src', 'index.php') }), '');
+  // cwd — подпапка worktree: корень — сам worktree, а не подпапка (раунд 1).
+  const sub = (toolInput) => hook(path.join(wt, 'src'), 'Write', toolInput, { CLAUDE_PROJECT_DIR: dir });
+  assert.match(reasonOf(sub({ file_path: path.join(wt, 'GLOSSARY.md') })), /^\[kit\] Файлы системы Мэтта/);
+  assert.equal(sub({ file_path: path.join(wt, 'src', 'GLOSSARY.md') }), '');
+  // cwd ввода не строка — проверка по основной папке, без сбоя.
+  const r = runScript('guard-matt.js', {
+    input: { tool_name: 'Write', tool_input: { file_path: path.join(dir, 'GLOSSARY.md') }, cwd: 42 }, env: { CLAUDE_PROJECT_DIR: dir },
+  });
+  assert.equal(r.code, 0);
+  assert.match(reasonOf(r.stdout), /^\[kit\] Файлы системы Мэтта/);
+});
+
+test('guard-matt: cwd — подпапка основной папки — корнем не становится; cwd вне проекта — становится (раунд 1)', () => {
+  const dir = matt();
+  const docs = path.join(dir, '.claude', 'docs');
+  const inDocs = (toolInput) => hook(docs, 'Write', toolInput, { CLAUDE_PROJECT_DIR: dir });
+  // Ложный отказ до раунда 1: cwd=.claude/docs становился корнем, и GLOSSARY.md в документах — «в корне».
+  assert.equal(inDocs({ file_path: path.join(docs, 'GLOSSARY.md') }), '');
+  assert.equal(inDocs({ file_path: path.join(docs, 'adr', '0001-x.md') }), '');
+  assert.equal(hook(path.join(dir, 'local'), 'Write', { file_path: path.join(dir, 'local', 'MISSION.md') }, { CLAUDE_PROJECT_DIR: dir }), '');
+  // Корень основной папки по-прежнему проверяется.
+  assert.match(reasonOf(inDocs({ file_path: path.join(dir, 'GLOSSARY.md') })), /^\[kit\] Файлы системы Мэтта/);
+  // cwd вне проекта — его корень тоже проверяется.
+  const other = makeProject({ 'a.txt': '' });
+  assert.match(reasonOf(hook(other, 'Write', { file_path: path.join(other, 'GLOSSARY.md') }, { CLAUDE_PROJECT_DIR: dir })), /^\[kit\] Файлы системы Мэтта/);
+  assert.equal(hook(other, 'Write', { file_path: path.join(other, 'sub', 'GLOSSARY.md') }, { CLAUDE_PROJECT_DIR: dir }), '');
+});
+
 test('guard-matt: пустой, битый или неполный ввод — тишина и код 0', () => {
   for (const input of ['', 'не json', '{}', '{"tool_name":"Write"}', '{"tool_name":"Write","tool_input":null}', 'null']) {
     const r = runScript('guard-matt.js', { input });
@@ -176,9 +270,9 @@ test('guard-matt: пустой, битый или неполный ввод — 
   assert.equal(hook(dir, 'Agent', 'isolation'), '');
 });
 
-test('hooks.json: guard-matt.js в PreToolUse на Write|Edit|MultiEdit|NotebookEdit|Agent|Task|mcp__ccd_session__start_session', () => {
+test('hooks.json: guard-matt.js в PreToolUse на Write|Edit|MultiEdit|NotebookEdit|Agent|Task|EnterWorktree|mcp__ccd_session__start_session', () => {
   const pre = JSON.parse(fs.readFileSync(path.join(PLUGIN, 'hooks', 'hooks.json'), 'utf8')).hooks.PreToolUse;
-  const entry = pre.find((h) => h.matcher === 'Write|Edit|MultiEdit|NotebookEdit|Agent|Task|mcp__ccd_session__start_session');
+  const entry = pre.find((h) => h.matcher === 'Write|Edit|MultiEdit|NotebookEdit|Agent|Task|EnterWorktree|mcp__ccd_session__start_session');
   assert.ok(entry, 'нет записи с нужным matcher');
   assert.deepEqual(entry.hooks, [
     { type: 'command', command: 'node', args: ['${CLAUDE_PLUGIN_ROOT}/scripts/guard-matt.js'], timeout: 10 },

@@ -1,8 +1,10 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
+const path = require('path');
 const { checkCommand, checkGit } = require('../plugins/kit/scripts/guard-bash');
-const { makeProject, runScript } = require('./helpers');
+const { makeProject, writeFiles, runScript, git } = require('./helpers');
 const { progressMd, paramsMd } = require('./fixtures');
 
 const CASES = [
@@ -80,7 +82,8 @@ test('хук: в kit-проекте — JSON deny, в чужом и для бе�
   assert.equal(r3.stdout, '');
 });
 
-// Система Мэтта (с 3.3.0): git commit в обход /kit:step-done и (при автозаливке PhpStorm) ветки и worktree — отказ.
+// Система Мэтта (с 3.3.0): git commit в обход /kit:step-done, ветки и worktree — отказ; при автозаливке PhpStorm Always
+// причина про автозаливку, иначе — про порядок работы Мэтта (с 47.8б ветки запрещены при любой выкладке).
 const GIT = [ // [оболочка, команда, автозаливка, ожидание]
   ['bash', 'git commit -m "x"', false, 'commit'],
   ['bash', 'git add a.php && git commit -m x', false, 'commit'],
@@ -93,7 +96,8 @@ const GIT = [ // [оболочка, команда, автозаливка, ож
   ['bash', 'git switch -c feature', true, 'branch'],
   ['bash', 'git branch feature', true, 'branch'],
   ['bash', 'git worktree add ../w', true, 'branch'],
-  ['bash', 'git checkout -b feature', false, null],
+  // До 47.8б вне автозаливки ветка проходила (Р-8: коммиты шагов уходили в неё) — теперь отказ.
+  ['bash', 'git checkout -b feature', false, 'matt-branch'],
   ['bash', 'git branch', true, null],
   ['bash', 'git branch -d old', true, null],
   ['bash', 'git checkout -- a.php', true, null],
@@ -112,7 +116,8 @@ const GIT_MORE = [
   ['bash', 'git commit-tree HEAD^{tree}', false, null],
   ['bash', 'git status', false, null],
   ['bash', 'git switch --create x', true, 'branch'],
-  ['bash', 'git switch main', true, null],
+  // До 47.8б переход на ветку при автозаливке проходил (Р-2: файлы другой ветки уезжали на сервер) — теперь отказ.
+  ['bash', 'git switch main', true, 'rewrite'],
   ['bash', 'git checkout --orphan x', true, 'branch'],
   ['bash', 'git -C /c/x branch feature', true, 'branch'],
   ['bash', 'git branch -m a b', true, null],
@@ -121,9 +126,10 @@ const GIT_MORE = [
   ['bash', 'git branch --list "f*"', true, null],
   ['bash', 'git worktree list', true, null],
   ['bash', 'git worktree remove ../w', true, null],
-  ['bash', 'git checkout main', true, null],
-  ['bash', 'git branch feature', false, null],
-  ['bash', 'git worktree add ../w', false, null],
+  // До 47.8б: checkout ветки при автозаливке и ветки/worktree вне её проходили (Р-2, Р-8) — теперь отказ.
+  ['bash', 'git checkout main', true, 'rewrite'],
+  ['bash', 'git branch feature', false, 'matt-branch'],
+  ['bash', 'git worktree add ../w', false, 'matt-branch'],
   // Блоки и условия: команда после «{» и «else», условие в скобках не мешает.
   ['powershell', 'if ($x) { git commit -m x }', false, 'commit'],
   ['powershell', 'git add .; if ($?) { git commit -m x }', false, 'commit'],
@@ -159,13 +165,239 @@ const GIT_MORE = [
   ['bash', 'git branch --track x origin/x', true, 'branch'],
 ];
 
-for (const [shell, cmd, always, want] of [...GIT, ...GIT_MORE]) {
+// 47.8б: ветки и worktree при любой выкладке (Р-8), перезапись рабочей копии при автозаливке (Р-2),
+// коммиты без подкоманды commit (Р-19).
+const GIT_478B = [
+  // Ветки и worktree вне автозаливки — отказ с причиной про порядок Мэтта; просмотр и удаление — пропуск.
+  ['bash', 'git switch -c x', false, 'matt-branch'],
+  ['bash', 'git switch -C x', false, 'matt-branch'],
+  ['bash', 'git switch --create x', false, 'matt-branch'],
+  ['bash', 'git switch --force-create x', false, 'matt-branch'],
+  ['bash', 'git switch --orphan x', false, 'matt-branch'],
+  ['bash', 'git checkout -B x', false, 'matt-branch'],
+  ['bash', 'git checkout --orphan x', false, 'matt-branch'],
+  ['bash', 'git checkout -b prototype/menu && git add -A', false, 'matt-branch'],
+  ['bash', 'git -C /c/x branch research/a', false, 'matt-branch'],
+  ['powershell', 'git worktree add ..\\w -b x', false, 'matt-branch'],
+  ['powershell', 'if ($?) { git switch -c x }', false, 'matt-branch'],
+  ['bash', 'git switch -C x', true, 'branch'],
+  ['bash', 'git branch', false, null],
+  ['bash', 'git branch -d old', false, null],
+  ['bash', 'git branch --show-current', false, null],
+  ['bash', 'git worktree list', false, null],
+  ['bash', 'git worktree remove ../w', false, null],
+  // Вне автозаливки перезапись рабочей копии не трогаем.
+  ['bash', 'git checkout master', false, null],
+  ['bash', 'git checkout 1a2b3c4', false, null],
+  ['bash', 'git switch main', false, null],
+  ['bash', 'git stash', false, null],
+  ['bash', 'git bisect start', false, null],
+  ['bash', 'git reset --hard', false, null],
+  ['bash', 'git restore --source HEAD~1 a.php', false, null],
+  // Автозаливка: bisect — кроме reset, log, view/visualize.
+  ['bash', 'git bisect start', true, 'rewrite'],
+  ['bash', 'git bisect start HEAD 1a2b3c4 && git bisect run npm test', true, 'rewrite'],
+  ['bash', 'git bisect good', true, 'rewrite'],
+  ['bash', 'git bisect bad 1a2b3c4', true, 'rewrite'],
+  ['bash', 'git bisect skip', true, 'rewrite'],
+  ['powershell', 'git bisect run php test.php', true, 'rewrite'],
+  ['bash', 'git bisect reset', true, null],
+  ['bash', 'git bisect log', true, null],
+  ['bash', 'git bisect view', true, null],
+  ['bash', 'git bisect visualize', true, null],
+  // stash — кроме list и show.
+  ['bash', 'git stash', true, 'rewrite'],
+  ['bash', 'git stash -u', true, 'rewrite'],
+  ['bash', 'git stash push -m x', true, 'rewrite'],
+  ['bash', 'git stash pop', true, 'rewrite'],
+  ['bash', 'git stash apply stash@{0}', true, 'rewrite'],
+  ['powershell', 'git stash; git pull --ff-only; git stash pop', true, 'rewrite'],
+  ['bash', 'git stash list', true, null],
+  ['bash', 'git stash show -p stash@{0}', true, null],
+  // checkout без «--» — отказ; «-- <пути>» и «HEAD -- <пути>» (ssh.md) — пропуск, другая ревизия перед «--» — отказ.
+  ['bash', 'git checkout master', true, 'rewrite'],
+  ['bash', 'git checkout 1a2b3c4', true, 'rewrite'],
+  ['bash', 'git checkout file.php', true, 'rewrite'],
+  ['bash', 'git checkout .', true, 'rewrite'],
+  ['bash', 'git checkout HEAD~5 -- .', true, 'rewrite'],
+  ['bash', 'git checkout 1a2b3c4 -- a.php', true, 'rewrite'],
+  ['bash', 'git checkout master -- a.php b.php', true, 'rewrite'],
+  ['powershell', 'git checkout origin/master -- local/a.php', true, 'rewrite'],
+  ['bash', 'git checkout -- a.php "b c.php"', true, null],
+  ['bash', 'git checkout HEAD -- a.php', true, null],
+  ['bash', 'git checkout -q HEAD -- a.php', true, null],
+  ['bash', 'git -C /c/x checkout -- a.php', true, null],
+  ['powershell', 'git checkout HEAD -- "local/a b.php"', true, null],
+  // switch без создания — отказ.
+  ['bash', 'git switch -', true, 'rewrite'],
+  ['bash', 'git switch --detach 1a2b3c4', true, 'rewrite'],
+  // reset: --hard, --merge, --keep — отказ; остальное (индекс, --soft) — пропуск.
+  ['bash', 'git reset --hard', true, 'rewrite'],
+  ['bash', 'git reset --hard HEAD~1', true, 'rewrite'],
+  ['bash', 'git reset --merge', true, 'rewrite'],
+  ['bash', 'git reset --keep HEAD~1', true, 'rewrite'],
+  ['bash', 'git reset', true, null],
+  ['bash', 'git reset -- a.php', true, null],
+  ['bash', 'git reset HEAD a.php', true, null],
+  ['bash', 'git reset --soft HEAD~1', true, null],
+  ['bash', 'git reset --mixed', true, null],
+  // restore: источник не HEAD — отказ; из индекса, --staged, источник HEAD — пропуск.
+  ['bash', 'git restore --source HEAD~3 .', true, 'rewrite'],
+  ['bash', 'git restore --source=1a2b3c4 a.php', true, 'rewrite'],
+  ['bash', 'git restore -s master -- a.php', true, 'rewrite'],
+  ['bash', 'git restore -s1a2b3c4 a.php', true, 'rewrite'],
+  ['powershell', 'git restore --source HEAD~1 -- a.php', true, 'rewrite'],
+  ['bash', 'git restore a.php', true, null],
+  ['bash', 'git restore .', true, null],
+  ['bash', 'git restore --staged a.php', true, null],
+  ['bash', 'git restore --source HEAD a.php', true, null],
+  ['bash', 'git restore --source=HEAD a.php', true, null],
+  ['bash', 'git restore -s HEAD -- a.php', true, null],
+  // Коммиты без подкоманды commit — при любой выкладке; выход из начатой операции и без коммита — пропуск.
+  ['bash', 'git merge feature', false, 'commit'],
+  ['bash', 'git merge --no-ff feature', false, 'commit'],
+  ['bash', 'git merge --continue', false, 'commit'],
+  ['bash', 'git merge feature', true, 'commit'],
+  // Раунд 1: слияние удалённой ветки — поток kit «ветка разошлась с удалённой» (remote-check.js, push.md) — пропуск.
+  ['powershell', 'git fetch; git merge origin/master', false, null],
+  ['bash', 'git merge origin/master', false, null],
+  ['bash', 'git merge origin/master', true, null],
+  ['bash', 'git merge --no-ff origin/master', false, null],
+  ['bash', 'git merge -m "Слияние с удалённой" origin/master', false, null],
+  ['bash', 'git merge -s ort -X ours origin/master', false, null],
+  ['bash', 'git merge @{u}', false, null],
+  ['bash', 'git merge @{upstream}', false, null],
+  ['powershell', "git merge '@{u}'", false, null],
+  ['bash', 'git merge master@{u}', false, null],
+  ['bash', 'git merge FETCH_HEAD', false, null],
+  ['bash', 'git merge refs/remotes/origin/master', false, null],
+  ['bash', 'git merge', false, null],
+  // Локальная ветка (в том числе среди удалённых, refs/heads/…, значение опции с «/») — по-прежнему коммит.
+  ['bash', 'git merge refs/heads/feature', false, 'commit'],
+  ['bash', 'git merge origin/master feature', false, 'commit'],
+  ['bash', 'git merge -m "origin/master" feature', false, 'commit'],
+  ['bash', 'git merge -X ours feature', false, 'commit'],
+  ['bash', 'git merge --continue', true, 'commit'],
+  ['bash', 'git merge --abort', false, null],
+  ['bash', 'git merge --quit', false, null],
+  ['bash', 'git merge --ff-only origin/master', false, null],
+  ['bash', 'git merge-base HEAD origin/master', false, null],
+  ['bash', 'git merge-file a.php base.php b.php', false, null],
+  ['bash', 'git revert HEAD', false, 'commit'],
+  ['bash', 'git revert --no-edit HEAD', false, 'commit'],
+  ['bash', 'git revert --continue', false, 'commit'],
+  ['bash', 'git revert --abort', false, null],
+  ['bash', 'git revert --quit', false, null],
+  ['bash', 'git revert --skip', false, null],
+  ['bash', 'git revert -n HEAD', false, null],
+  ['bash', 'git revert --no-commit HEAD~2..HEAD', false, null],
+  ['bash', 'git cherry-pick 1a2b3c4', false, 'commit'],
+  ['bash', 'git cherry-pick --continue', false, 'commit'],
+  ['bash', 'git cherry-pick 1a2b3c4', true, 'commit'],
+  ['bash', 'git cherry-pick --abort', false, null],
+  ['bash', 'git cherry-pick --quit', false, null],
+  ['bash', 'git cherry-pick --skip', false, null],
+  ['bash', 'git cherry-pick -n 1a2b3c4', false, null],
+  ['bash', 'git cherry-pick --no-commit a..b', false, null],
+  ['bash', 'git am 0001-x.patch', false, 'commit'],
+  ['bash', 'git am --continue', false, 'commit'],
+  ['powershell', 'Get-Content x.patch | git am', false, 'commit'],
+  ['bash', 'git am --abort', false, null],
+  ['bash', 'git am --quit', false, null],
+  ['bash', 'git am --skip', false, null],
+  // pull и push не трогаем (remote-check велит git pull --ff-only, отправка — kit-commit.js --push).
+  ['bash', 'git pull --ff-only', true, null],
+  ['bash', 'git pull', false, null],
+  ['bash', 'git push', false, null],
+  // Раунд 1: rebase и pull --rebase при автозаливке — перезапись (переключение на upstream, маркеры конфликта на диске);
+  // выход из начатого rebase — пропуск; вне автозаливки rebase не трогаем (kit разрешает его с согласия пользователя).
+  ['bash', 'git rebase origin/master', true, 'rewrite'],
+  ['bash', 'git rebase -i HEAD~3', true, 'rewrite'],
+  ['bash', 'git rebase --continue', true, 'rewrite'],
+  ['bash', 'git rebase --skip', true, 'rewrite'],
+  ['powershell', 'git -C "C:\\x" rebase origin/master', true, 'rewrite'],
+  ['bash', 'git rebase --abort', true, null],
+  ['bash', 'git rebase --quit', true, null],
+  ['bash', 'git rebase --show-current-patch', true, null],
+  ['bash', 'git rebase origin/master', false, null],
+  ['bash', 'git rebase --continue', false, null],
+  ['bash', 'git pull --rebase', true, 'rewrite'],
+  ['bash', 'git pull -r origin master', true, 'rewrite'],
+  ['bash', 'git pull --rebase=merges origin master', true, 'rewrite'],
+  ['powershell', 'git pull --rebase origin master', true, 'rewrite'],
+  ['bash', 'git pull --rebase=false', true, null],
+  ['bash', 'git pull --no-rebase', true, null],
+  ['bash', 'git pull --ff-only origin master', true, null],
+  ['bash', 'git pull --rebase', false, null],
+  ['bash', 'git pull -r', false, null],
+  // Раунд 1: git stash branch создаёт ветку — при любой выкладке; соседние подкоманды stash — как раньше.
+  ['bash', 'git stash branch x', false, 'matt-branch'],
+  ['bash', 'git stash branch x stash@{1}', true, 'branch'],
+  ['bash', 'git stash list', false, null],
+  ['bash', 'git stash pop', false, null],
+];
+
+// Команды kit и aspro (step-done, ssh.md, push.md, project-init, remote-check, report, aspro-merge) — пропуск
+// при любой выкладке; в теле heredoc слова git-команд не считаются.
+const KIT_CMDS = [
+  ['bash', 'git checkout -- a.php'],
+  ['bash', 'git checkout HEAD -- local/a.php'],
+  ['bash', 'git push -u origin HEAD'],
+  ['bash', 'git pull --ff-only'],
+  ['bash', 'git merge origin/master'],
+  ['bash', 'git tag pre-aspro-1.7.21'],
+  ['bash', 'git diff -w --ignore-cr-at-eol pre-aspro-1.7.21 -- local/'],
+  ['bash', 'git diff HEAD -- a.php'],
+  ['bash', 'git -c core.quotepath=false diff --stat -- "a.php" "b.php"'],
+  ['bash', 'git log --reverse --format="%ad %s" --date=short'],
+  ['bash', 'git log --format="%h %s"'],
+  ['bash', 'git show --stat 1a2b3c4'],
+  ['bash', 'git -c core.quotepath=false show --stat -M HEAD'],
+  ['bash', 'git status'],
+  ['bash', 'git -c core.quotepath=false status --porcelain'],
+  ['bash', 'git add -A -- .claude/docs/archive/x.md'],
+  ['bash', 'git ls-files .claude/docs/work/x'],
+  ['bash', 'git hash-object local/a.php'],
+  ['bash', 'git check-ignore -q .claude/docs/progress.md'],
+  ['bash', 'git rev-list --count HEAD'],
+  ['bash', 'git remote -v'],
+  ['bash', 'git ls-remote --heads origin'],
+  ['bash', 'git init'],
+  ['bash', 'git config core.autocrlf input'],
+  ['powershell', 'git -C "C:\\Users\\user\\site" status'],
+  ['bash', "node \"/c/k/scripts/kit-journal.js\" <<'KIT_BLOCKS'\nSTEP: 2.1\nSUMMARY: git stash, git checkout master, git merge feature, git reset --hard\nKIT_BLOCKS"],
+  ['bash', "node \"/c/k/scripts/kit-commit.js\" --inbox 2 --push origin -- \"a.php\" <<'KIT_MSG'\n2.1: git bisect start, git switch -c x\n\ngit cherry-pick 1a2b3c4\nKIT_MSG"],
+];
+
+const WANT_GIT = {
+  commit: /^Коммит — только через \/kit:step-done/,
+  branch: /^При автозаливке PhpStorm ветки и worktree нельзя/,
+  'matt-branch': /^В проекте Мэтта ветки и worktree не используем/,
+  rewrite: /^При автозаливке PhpStorm нельзя переписывать рабочую копию/,
+};
+
+const KIT_ROWS = KIT_CMDS.flatMap(([shell, cmd]) => [[shell, cmd, false, null], [shell, cmd, true, null]]);
+for (const [shell, cmd, always, want] of [...GIT, ...GIT_MORE, ...GIT_478B, ...KIT_ROWS]) {
   test(`checkGit ${shell}${always ? ' (автозаливка)' : ''}: ${JSON.stringify(cmd)} → ${want || 'разрешено'}`, () => {
     const reason = checkGit(cmd, shell, { always });
     if (want === null) assert.equal(reason, null);
-    else assert.match(reason, want === 'commit' ? /\/kit:step-done/ : /ветки и worktree нельзя/);
+    else assert.match(reason, WANT_GIT[want]);
   });
 }
+
+test('checkGit: тексты причин 47.8б', () => {
+  assert.equal(checkGit('git switch -c x', 'bash', { always: false }),
+    'В проекте Мэтта ветки и worktree не используем: шаг коммитится в текущую ветку основной папки через /kit:step-done; '
+    + 'прототип и исследования — в тикет и папку документов (work/<тема>/).');
+  assert.equal(checkGit('git switch -c x', 'bash', { always: true }),
+    'При автозаливке PhpStorm ветки и worktree нельзя: файлы с диска уезжают на сервер. Работай в текущей ветке основной папки.');
+  assert.equal(checkGit('git bisect start', 'bash', { always: true }),
+    'При автозаливке PhpStorm нельзя переписывать рабочую копию старыми версиями (bisect, stash, переход на другой коммит или ветку, '
+    + 'reset --hard): файлы с диска сразу уезжают на сервер. Бисекцию и опыты со старыми версиями — в отдельной копии: '
+    + 'git clone во временную папку.');
+  assert.equal(checkGit('git merge feature', 'bash', { always: false }),
+    'Коммит — только через /kit:step-done (kit-commit.js): в проекте Мэтта исполнитель не коммитит, тикет принимает общая сессия.');
+});
 
 // Хук целиком: ответ на команду в проектах разных видов.
 function hook(dir, command, tool = 'Bash') {
@@ -195,17 +427,129 @@ test('guard-bash: в проекте Мэтта git commit — отказ с [kit
   assert.match(JSON.parse(hook(matt, 'cd /c/x && ls')).hookSpecificOutput.permissionDecisionReason, /каталог/);
 });
 
-test('guard-bash: ветки и worktree запрещены только при автозаливке PhpStorm Always в проекте Мэтта', () => {
+const reasonOf = (stdout) => JSON.parse(stdout).hookSpecificOutput.permissionDecisionReason;
+
+test('guard-bash: ветки и worktree в проекте Мэтта запрещены при любой выкладке; причина — по автозаливке', () => {
   const always = withParams({ 'Выкладка': 'PhpStorm Always', 'Система Мэтта': 'да' });
-  const reason = JSON.parse(hook(always, 'git worktree add ../w')).hookSpecificOutput.permissionDecisionReason;
-  assert.match(reason, /^\[kit\] При автозаливке PhpStorm ветки и worktree нельзя/);
-  assert.match(JSON.parse(hook(always, 'git checkout -b feature')).hookSpecificOutput.permissionDecisionReason, /ветки и worktree нельзя/);
+  assert.match(reasonOf(hook(always, 'git worktree add ../w')), /^\[kit\] При автозаливке PhpStorm ветки и worktree нельзя/);
+  assert.match(reasonOf(hook(always, 'git checkout -b feature')), /ветки и worktree нельзя/);
   assert.equal(hook(always, 'git branch'), '');
   assert.equal(hook(always, 'git worktree list'), '');
-  assert.match(JSON.parse(hook(always, 'git commit -m x')).hookSpecificOutput.permissionDecisionReason, /\/kit:step-done/);
-  // Автозаливка без Мэтта — ветки как раньше разрешены; Мэтт без автозаливки — разрешены.
+  assert.match(reasonOf(hook(always, 'git commit -m x')), /\/kit:step-done/);
+  // Мэтт без автозаливки (вручную, «PhpStorm on-demand» — не Always) — тоже отказ, причина про порядок Мэтта (до 47.8б — пропуск).
+  const manual = withParams({ 'Выкладка': 'вручную', 'Система Мэтта': 'да' });
+  assert.match(reasonOf(hook(manual, 'git checkout -b feature')), /^\[kit\] В проекте Мэтта ветки и worktree не используем/);
+  assert.match(reasonOf(hook(manual, 'git switch -c x', 'PowerShell')), /^\[kit\] В проекте Мэтта ветки и worktree не используем/);
+  assert.match(reasonOf(hook(withParams({ 'Выкладка': 'PhpStorm on-demand', 'Система Мэтта': 'да' }), 'git worktree add ../w')),
+    /^\[kit\] В проекте Мэтта ветки и worktree не используем/);
+  assert.equal(hook(manual, 'git branch -d old'), '');
+  // Автозаливка без Мэтта, обычный kit-проект — ветки как раньше разрешены.
   assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always' }), 'git checkout -b feature'), '');
-  assert.equal(hook(withParams({ 'Выкладка': 'вручную', 'Система Мэтта': 'да' }), 'git checkout -b feature'), '');
-  // «PhpStorm on-demand» — не Always.
-  assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm on-demand', 'Система Мэтта': 'да' }), 'git worktree add ../w'), '');
+  assert.equal(hook(withParams({ 'Выкладка': 'вручную' }), 'git switch -c x'), '');
+  assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always', 'Система Мэтта': 'нет' }), 'git worktree add ../w'), '');
+});
+
+test('guard-bash: при автозаливке в проекте Мэтта — отказ на перезапись рабочей копии; вне автозаливки и вне Мэтта — пропуск', () => {
+  const always = withParams({ 'Выкладка': 'PhpStorm Always', 'Система Мэтта': 'да' });
+  assert.match(reasonOf(hook(always, 'git bisect start && git bisect run npm test')), /^\[kit\] При автозаливке PhpStorm нельзя переписывать рабочую копию/);
+  assert.match(reasonOf(hook(always, 'git checkout master')), /^\[kit\] При автозаливке PhpStorm нельзя переписывать/);
+  assert.match(reasonOf(hook(always, 'git stash; git stash pop', 'PowerShell')), /^\[kit\] При автозаливке PhpStorm нельзя переписывать/);
+  assert.equal(hook(always, 'git checkout -- a.php'), '');
+  assert.equal(hook(always, 'git checkout HEAD -- a.php'), '');
+  assert.equal(hook(always, 'git stash list'), '');
+  assert.equal(hook(always, 'git bisect reset'), '');
+  // Мэтт без автозаливки, автозаливка без Мэтта — как раньше.
+  assert.equal(hook(withParams({ 'Выкладка': 'вручную', 'Система Мэтта': 'да' }), 'git checkout master'), '');
+  assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always' }), 'git reset --hard'), '');
+  assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always' }), 'git bisect start'), '');
+});
+
+test('guard-bash: merge, revert, cherry-pick, am в проекте Мэтта — причина коммита; в обычном kit-проекте — пропуск', () => {
+  const manual = withParams({ 'Выкладка': 'вручную', 'Система Мэтта': 'да' });
+  assert.match(reasonOf(hook(manual, 'git merge feature')), /^\[kit\] Коммит — только через \/kit:step-done/);
+  assert.match(reasonOf(hook(manual, 'git revert --no-edit HEAD', 'PowerShell')), /^\[kit\] Коммит — только через/);
+  assert.match(reasonOf(hook(manual, 'git cherry-pick --continue')), /^\[kit\] Коммит — только через/);
+  assert.equal(hook(manual, 'git merge --abort'), '');
+  assert.equal(hook(manual, 'git merge origin/master'), '', 'слияние удалённой ветки — поток kit с согласия пользователя');
+  assert.equal(hook(manual, 'git rebase origin/master'), '', 'rebase вне автозаливки не трогаем');
+  assert.match(reasonOf(hook(withParams({ 'Выкладка': 'PhpStorm Always', 'Система Мэтта': 'да' }), 'git pull --rebase')),
+    /^\[kit\] При автозаливке PhpStorm нельзя переписывать/);
+  assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always' }), 'git rebase origin/master'), '', 'без Мэтта — как раньше');
+  assert.equal(hook(manual, 'git pull --ff-only'), '');
+  assert.equal(hook(manual, 'git push -u origin HEAD'), '');
+  for (const cmd of ['git merge feature', 'git revert HEAD', 'git cherry-pick 1a2b3c4', 'git am x.patch']) {
+    assert.equal(hook(withParams({ 'Выкладка': 'вручную' }), cmd), '', cmd);
+    assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always' }), cmd), '', cmd);
+  }
+});
+
+// Раунд 2: идёт слияние (MERGE_HEAD) — завершение начатого слияния (git merge --continue, git commit без путей) проходит:
+// иначе слияние удалённой ветки, на которое согласился пользователь, при конфликте нечем завершить.
+test('checkGit: при слиянии (ctx.inMerge) — git merge --continue и git commit без путей проходят, остальное — как раньше', () => {
+  let calls = 0;
+  const merging = { always: false, inMerge: () => { calls++; return true; } };
+  for (const cmd of ['git merge --continue', 'git commit --no-edit', 'git commit', 'git commit -m "Слияние с origin/master"',
+    'git commit -q -F -', 'git commit --message=x', 'git -c core.quotepath=false commit --no-edit', 'git add a.php && git commit --no-edit']) {
+    assert.equal(checkGit(cmd, 'bash', merging), null, cmd);
+    assert.equal(checkGit(cmd, 'bash', { ...merging, always: true }), null, cmd + ' (автозаливка)');
+  }
+  assert.equal(checkGit('git commit --no-edit', 'powershell', merging), null);
+  // Пути, «--», другие опции (-a заберёт и чужие правки), другие коммиты — отказ и при слиянии.
+  for (const cmd of ['git commit -- a.php', 'git commit a.php', 'git commit --no-edit -- a.php', 'git commit -a', 'git commit --amend',
+    'git commit --no-verify -m x', 'git merge feature', 'git merge --continue feature', 'git cherry-pick 1a2b3c4', 'git revert HEAD']) {
+    assert.match(checkGit(cmd, 'bash', merging), /^Коммит — только через \/kit:step-done/, cmd);
+  }
+  // Слияния нет, проверка упала, ctx без inMerge — отказ.
+  for (const ctx of [{ inMerge: () => false }, { inMerge: () => { throw new Error('x'); } }, { always: true }, undefined]) {
+    assert.match(checkGit('git commit --no-edit', 'bash', ctx), /^Коммит — только через/);
+    assert.match(checkGit('git merge --continue', 'bash', ctx), /^Коммит — только через/);
+  }
+  // Каталог git проверяется только для команды, которая и так получила бы отказ.
+  calls = 0;
+  for (const cmd of ['git status', 'git merge origin/master', 'git checkout -- a.php', 'git log', 'git switch -c x', 'git commit -- a.php']) {
+    checkGit(cmd, 'bash', merging);
+  }
+  assert.equal(calls, 0);
+});
+
+test('guard-bash: временный репозиторий с MERGE_HEAD — завершение слияния проходит; без MERGE_HEAD и с путями — отказ', () => {
+  const params = { 'Выкладка': 'вручную', 'Система Мэтта': 'да' };
+  const dir = withParams(params);
+  git(dir, 'init', '-q');
+  const head = path.join(dir, '.git', 'MERGE_HEAD');
+  // Без MERGE_HEAD — как раньше.
+  assert.match(reasonOf(hook(dir, 'git commit --no-edit')), /^\[kit\] Коммит — только через/);
+  assert.match(reasonOf(hook(dir, 'git merge --continue')), /^\[kit\] Коммит — только через/);
+  fs.writeFileSync(head, '1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d\n');
+  assert.equal(hook(dir, 'git commit --no-edit'), '');
+  assert.equal(hook(dir, 'git merge --continue'), '');
+  assert.equal(hook(dir, 'git commit -m x', 'PowerShell'), '');
+  assert.match(reasonOf(hook(dir, 'git commit -- a.php')), /^\[kit\] Коммит — только через/);
+  assert.match(reasonOf(hook(dir, 'git commit -a')), /^\[kit\] Коммит — только через/);
+  assert.match(reasonOf(hook(dir, 'git merge feature')), /^\[kit\] Коммит — только через/);
+  // При автозаливке — так же.
+  const always = withParams({ ...params, 'Выкладка': 'PhpStorm Always' });
+  writeFiles(always, { '.git/MERGE_HEAD': '1a2b3c4\n' });
+  assert.equal(hook(always, 'git commit --no-edit'), '');
+  // .git — файл «gitdir: …» (worktree): MERGE_HEAD — в каталоге из него, относительный путь — от корня.
+  const wt = withParams(params);
+  const gitdir = makeProject({ 'HEAD': 'ref: refs/heads/master\n' });
+  fs.writeFileSync(path.join(wt, '.git'), 'gitdir: ' + gitdir + '\n');
+  assert.match(reasonOf(hook(wt, 'git commit --no-edit')), /^\[kit\] Коммит/);
+  fs.writeFileSync(path.join(gitdir, 'MERGE_HEAD'), '1a2b3c4\n');
+  assert.equal(hook(wt, 'git commit --no-edit'), '');
+  const rel = withParams(params);
+  writeFiles(rel, { '.gitdata/MERGE_HEAD': '1a2b3c4\n', '.git': 'gitdir: .gitdata\n' });
+  assert.equal(hook(rel, 'git merge --continue'), '');
+  // Битый .git-файл, MERGE_HEAD — папка, а не файл — как «слияния нет».
+  const broken = withParams(params);
+  writeFiles(broken, { '.git': 'не gitdir\n', 'MERGE_HEAD': 'x' });
+  assert.match(reasonOf(hook(broken, 'git commit --no-edit')), /^\[kit\] Коммит/);
+  const dirHead = withParams(params);
+  fs.mkdirSync(path.join(dirHead, '.git', 'MERGE_HEAD'), { recursive: true });
+  assert.match(reasonOf(hook(dirHead, 'git commit --no-edit')), /^\[kit\] Коммит/);
+  // Обычный kit-проект с MERGE_HEAD — как раньше: пропуск всего.
+  const plain = withParams({ 'Выкладка': 'вручную' });
+  writeFiles(plain, { '.git/MERGE_HEAD': '1a2b3c4\n' });
+  assert.equal(hook(plain, 'git commit -- a.php'), '');
 });

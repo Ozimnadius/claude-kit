@@ -3,8 +3,13 @@
 // Хук PreToolUse (Bash|PowerShell) в kit-проектах:
 // - cd вне подоболочки меняет рабочий каталог всей сессии → запрет;
 // - sed -i по PHP портит обратные слеши неймспейсов → запрет;
-// - только в проекте Мэтта («Система Мэтта: да»): git commit в обход /kit:step-done → запрет, а при автозаливке
-//   PhpStorm Always ещё и создание веток и worktree (файлы с диска уезжают на сервер).
+// - только в проекте Мэтта («Система Мэтта: да»): коммит в обход /kit:step-done (commit, merge локальной ветки, revert,
+//   cherry-pick, am; завершение начатого слияния при MERGE_HEAD — пропуск), создание веток и worktree → запрет
+//   при любой выкладке; при автозаливке PhpStorm Always ещё и перезапись рабочей копии (bisect, stash, checkout
+//   и switch на другой коммит или ветку, reset --hard, restore --source, rebase, pull --rebase): файлы с диска уезжают
+//   на сервер.
+const fs = require('fs');
+const path = require('path');
 const { readStdinJson, resolveProjectDir, kitInfo } = require('./lib/project');
 const { isMattProject } = require('./lib/matt');
 
@@ -17,6 +22,11 @@ const REASON_CD_PS = 'cd/Set-Location в PowerShell меняет рабочий 
 const REASON_SED = 'sed -i по PHP портит обратные слеши неймспейсов. Правь PHP через Edit (или скриптом на node/python).';
 const REASON_COMMIT = 'Коммит — только через /kit:step-done (kit-commit.js): в проекте Мэтта исполнитель не коммитит, тикет принимает общая сессия.';
 const REASON_BRANCH = 'При автозаливке PhpStorm ветки и worktree нельзя: файлы с диска уезжают на сервер. Работай в текущей ветке основной папки.';
+const REASON_BRANCH_MATT = 'В проекте Мэтта ветки и worktree не используем: шаг коммитится в текущую ветку основной папки через /kit:step-done; '
+  + 'прототип и исследования — в тикет и папку документов (work/<тема>/).';
+const REASON_REWRITE = 'При автозаливке PhpStorm нельзя переписывать рабочую копию старыми версиями (bisect, stash, переход на другой коммит '
+  + 'или ветку, reset --hard): файлы с диска сразу уезжают на сервер. Бисекцию и опыты со старыми версиями — в отдельной копии: '
+  + 'git clone во временную папку.';
 
 function stripHeredocs(cmd) {
   return cmd.replace(/<<-?\s*(['"]?)([A-Za-z_][\w-]*)\1([^\n]*)\n[\s\S]*?\n[ \t]*\2[ \t]*(?=\n|$)/g, ' $3');
@@ -291,21 +301,140 @@ function gitCalls(seg, shell) {
   return lists.map((l) => gitCallOf(l, shell)).filter(Boolean);
 }
 
-// Система Мэтта: git commit — всегда запрет; при ctx.always (PhpStorm Always) — ещё создание веток и worktree.
-// Идёт по тем же сегментам, что checkCommand; слово commit не в подкоманде (git log --grep commit, echo "git commit",
-// тело heredoc) не считается. Алиасы git (git ci) не разворачиваются.
+// Подкоманды, которые создают коммит без git commit, и слова, при которых коммита нет: выход из начатой операции,
+// --no-commit, fast-forward. --continue сюда не входит — он и создаёт коммит. git pull и git push коммитом не считаем.
+const COMMIT_LIKE = new Map([
+  ['merge', new Set(['--abort', '--quit', '--ff-only'])],
+  ['revert', new Set(['--abort', '--quit', '--skip', '--no-commit', '-n'])],
+  ['cherry-pick', new Set(['--abort', '--quit', '--skip', '--no-commit', '-n'])],
+  ['am', new Set(['--abort', '--quit', '--skip'])],
+]);
+// Удалённая ветка в git merge: <remote>/<ветка>, refs/remotes/…, @{u}/@{upstream}/@{push} (и <ветка>@{u}), FETCH_HEAD.
+// Локальные ветки в проекте Мэтта не создаются, поэтому «x/y» (кроме refs/heads/… и прочих refs/) считаем удалённой.
+// «}» на конце слова gitCallOf срезает — отсюда «\}?».
+const REMOTE_REF = /^(FETCH_HEAD|refs\/remotes\/\S+|(?!refs\/)[^\s/@-][^\s@]*\/\S+|[^\s@]*@\{(u|upstream|push)\}?)$/i;
+// Опции git merge со значением отдельным словом: значение — не ветка.
+const MERGE_OPT_ARG = new Set(['-m', '-F', '-s', '-X', '--message', '--file', '--strategy', '--strategy-option', '--into-name', '--cleanup']);
+// Подкоманды bisect и stash, которые рабочую копию не трогают (bisect reset возвращает её, если бисекция уже начата).
+const BISECT_OK = new Set(['reset', 'log', 'view', 'visualize']);
+const STASH_OK = new Set(['list', 'show']);
+// Выход из начатого rebase рабочую копию к старым версиям не ведёт.
+const REBASE_OK = new Set(['--abort', '--quit', '--show-current-patch']);
+
+// git merge только удалённых веток (без веток — upstream): поток kit «ветка разошлась с удалённой — слияние с согласия
+// пользователя» (remote-check.js, step-done/reference/push.md). --continue — коммит при любых ветках.
+function mergesRemote(rest) {
+  if (rest.includes('--continue')) return false;
+  const refs = [];
+  for (let k = 0; k < rest.length; k++) {
+    if (MERGE_OPT_ARG.has(rest[k])) k++;
+    else if (!rest[k].startsWith('-')) refs.push(rest[k]);
+  }
+  return refs.every((r) => REMOTE_REF.test(r));
+}
+
+// Завершение начатого слияния: git merge --continue или git commit без путей и без «--» (допустимы -m, -F, --no-edit, -q).
+// -a, --amend и прочие опции не допускаются: -a забрал бы в коммит слияния и чужие правки.
+const FINISH_OPT_ARG = new Set(['-m', '--message', '-F', '--file']);
+const FINISH_FLAGS = new Set(['--no-edit', '-q', '--quiet']);
+function finishesMerge(call) {
+  if (call.sub === 'merge') return call.rest.includes('--continue') && call.rest.every((a) => a === '--continue' || FINISH_FLAGS.has(a));
+  if (call.sub !== 'commit') return false;
+  for (let k = 0; k < call.rest.length; k++) {
+    const a = call.rest[k];
+    if (FINISH_OPT_ARG.has(a)) k++;
+    else if (!FINISH_FLAGS.has(a) && !/^(-[mF].|--(message|file)=)/.test(a)) return false;
+  }
+  return true;
+}
+
+// Идёт слияние: в каталоге git проекта есть файл MERGE_HEAD. Каталог — <корень>/.git или путь из файла .git («gitdir: …»,
+// относительный — от корня). Любой сбой — «слияния нет».
+function mergeInProgress(dir) {
+  try {
+    let gitDir = path.join(dir, '.git');
+    if (fs.statSync(gitDir).isFile()) {
+      const m = /^gitdir:[ \t]*(.+?)[ \t]*$/m.exec(fs.readFileSync(gitDir, 'utf8'));
+      if (!m) return false;
+      gitDir = path.resolve(dir, m[1]);
+    }
+    return fs.statSync(path.join(gitDir, 'MERGE_HEAD')).isFile();
+  } catch (e) {
+    return false;
+  }
+}
+
+// Вызов создаёт коммит в обход kit-commit.js.
+function makesCommit(call) {
+  if (call.sub === 'commit') return true;
+  const noCommit = COMMIT_LIKE.get(call.sub);
+  if (!noCommit || call.rest.some((a) => noCommit.has(a))) return false;
+  return !(call.sub === 'merge' && mergesRemote(call.rest));
+}
+
+// Вызов создаёт ветку или worktree; opts — слова до «--».
+function createsBranch(call, opts) {
+  if (call.sub === 'checkout') return opts.some((a) => /^(-[bB]|--orphan(=|$))/.test(a));
+  if (call.sub === 'switch') return opts.some((a) => /^(-[cC]|--create(=|$)|--force-create(=|$)|--orphan(=|$))/.test(a));
+  if (call.sub === 'branch') return !call.rest.some((a) => BRANCH_VIEW.test(a)) && call.rest.some((a) => !a.startsWith('-'));
+  if (call.sub === 'stash') return call.rest[0] === 'branch';
+  return call.sub === 'worktree' && call.rest[0] === 'add';
+}
+
+// Источник git restore (--source X, --source=X, -s X, -sX) — не HEAD.
+function restoreFromOther(opts) {
+  for (let k = 0; k < opts.length; k++) {
+    const a = opts[k];
+    let v = null;
+    if (a === '--source' || a === '-s') v = opts[k + 1];
+    else if (a.startsWith('--source=')) v = a.slice('--source='.length);
+    else if (/^-s./.test(a)) v = a.slice(2);
+    if (v !== null && v !== 'HEAD') return true;
+  }
+  return false;
+}
+
+// Вызов переписывает рабочую копию другой версией (создание ветки разобрано раньше); hasDd — есть «--», opts — слова до него.
+function rewritesTree(call, hasDd, opts) {
+  switch (call.sub) {
+    case 'bisect': return !BISECT_OK.has(call.rest[0]);
+    case 'stash': return !STASH_OK.has(call.rest[0]);
+    case 'switch': return true;
+    // Без «--» — ветка, коммит или файлы из индекса; с «--» — ревизия перед ним, если она не HEAD (ssh.md: checkout HEAD -- <путь>).
+    case 'checkout': return !hasDd || opts.some((a) => !a.startsWith('-') && a !== 'HEAD');
+    case 'reset': return opts.some((a) => /^--(hard|merge|keep)$/.test(a));
+    case 'restore': return restoreFromOther(opts);
+    // rebase переключает рабочую копию на upstream и при конфликте оставляет файлы с маркерами; pull --rebase — так же.
+    case 'rebase': return !call.rest.some((a) => REBASE_OK.has(a));
+    case 'pull': return opts.some((a) => a === '-r' || a === '--rebase' || (a.startsWith('--rebase=') && a !== '--rebase=false'));
+    default: return false;
+  }
+}
+
+// Система Мэтта: коммит в обход /kit:step-done, ветки и worktree — запрет при любой выкладке (причина ветки — по ctx.always);
+// при ctx.always (PhpStorm Always) — ещё перезапись рабочей копии. Идёт по тем же сегментам, что checkCommand; слово
+// commit не в подкоманде (git log --grep commit, echo "git commit", тело heredoc) не считается. Алиасы git (git ci) не разворачиваются.
+// ctx.inMerge() — идёт ли слияние (MERGE_HEAD); зовётся только для завершения слияния, которое иначе получило бы отказ.
 function checkGit(cmd, shell, ctx) {
   const always = Boolean(ctx && ctx.always);
+  const inMerge = () => {
+    try {
+      return Boolean(ctx && typeof ctx.inMerge === 'function' && ctx.inMerge() === true);
+    } catch (e) {
+      return false;
+    }
+  };
   for (const call of segmentsOf(cmd, shell).flatMap((seg) => gitCalls(seg, shell))) {
-    if (call.sub === 'commit') return REASON_COMMIT;
-    if (!always) continue;
-    // Опции checkout и switch читаем до «--»: дальше идут пути.
+    if (makesCommit(call)) {
+      // Слияние удалённой ветки с согласия пользователя упёрлось в конфликт — завершить его больше нечем.
+      if (finishesMerge(call) && inMerge()) continue;
+      return REASON_COMMIT;
+    }
+    // Опции читаем до «--»: дальше идут пути.
     const dd = call.rest.indexOf('--');
     const opts = dd === -1 ? call.rest : call.rest.slice(0, dd);
-    if (call.sub === 'checkout' && opts.some((a) => /^(-[bB]|--orphan(=|$))/.test(a))) return REASON_BRANCH;
-    if (call.sub === 'switch' && opts.some((a) => /^(-[cC]|--create(=|$)|--force-create(=|$)|--orphan(=|$))/.test(a))) return REASON_BRANCH;
-    if (call.sub === 'branch' && !call.rest.some((a) => BRANCH_VIEW.test(a)) && call.rest.some((a) => !a.startsWith('-'))) return REASON_BRANCH;
-    if (call.sub === 'worktree' && call.rest[0] === 'add') return REASON_BRANCH;
+    if (createsBranch(call, opts)) return always ? REASON_BRANCH : REASON_BRANCH_MATT;
+    if (always && rewritesTree(call, dd !== -1, opts)) return REASON_REWRITE;
   }
   return null;
 }
@@ -316,13 +445,13 @@ function main() {
     const tool = input.tool_name;
     const cmd = input.tool_input && input.tool_input.command;
     if (!cmd || (tool !== 'Bash' && tool !== 'PowerShell')) return;
-    const info = kitInfo(resolveProjectDir(input));
+    const dir = resolveProjectDir(input);
+    const info = kitInfo(dir);
     if (!info.isKit) return;
     const shell = tool === 'PowerShell' ? 'powershell' : 'bash';
+    const always = /^phpstorm always/i.test(String(info.params.get('Выкладка', '')).trim());
     const reason = checkCommand(cmd, shell)
-      || (isMattProject(info.params)
-        ? checkGit(cmd, shell, { always: /^phpstorm always/i.test(String(info.params.get('Выкладка', '')).trim()) })
-        : null);
+      || (isMattProject(info.params) ? checkGit(cmd, shell, { always, inMerge: () => mergeInProgress(dir) }) : null);
     if (!reason) return;
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: {

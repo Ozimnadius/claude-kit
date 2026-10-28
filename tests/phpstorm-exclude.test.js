@@ -21,7 +21,8 @@ const TOOLS = ['.superpowers', '.worktrees', 'docs/superpowers'];
 
 test('hooks.json: SessionStart запускает phpstorm-exclude.js --hook рядом с session-start.js', () => {
   const hooks = JSON.parse(fs.readFileSync(path.join(PLUGIN, 'hooks', 'hooks.json'), 'utf8')).hooks.SessionStart[0];
-  assert.equal(hooks.matcher, 'startup|resume|clear|compact');
+  // fork — ответвлённая сессия (/fork, start_session с context: fork), с 47.8б.
+  assert.equal(hooks.matcher, 'startup|resume|clear|compact|fork');
   const args = hooks.hooks.map((h) => h.args.join(' '));
   assert.deepEqual(args, ['${CLAUDE_PLUGIN_ROOT}/scripts/phpstorm-exclude.js --hook', '${CLAUDE_PLUGIN_ROOT}/scripts/session-start.js', '${CLAUDE_PLUGIN_ROOT}/scripts/remote-check.js']);
 });
@@ -119,7 +120,8 @@ const docsProject = (extra = {}) => ({
   '.claude/agents/x.md': '',
   '.claude/settings.local.json': '{}',
 });
-const OPENED = ['.claude/agents', '.claude/settings.local.json', '.claude/worktrees', '.claude/skills', '.claude/kit-inbox.jsonl', '.claude/docs/visual'];
+// .claude/settings.json — заранее с 47.8б: его пишет установка плагина на проект посреди /kit:project-init.
+const OPENED = ['.claude/agents', '.claude/settings.local.json', '.claude/worktrees', '.claude/settings.json', '.claude/skills', '.claude/kit-inbox.jsonl', '.claude/docs/visual'];
 
 test('--hook, «Документы на сервере: да»: .claude убрана, исключено всё в ней, кроме docs, CLAUDE.md и .htaccess, плюс worktrees, скиллы и снимки; повтор — тишина', () => {
   const dir = makeProject({ ...docsProject(), [XML]: GAMMA });
@@ -134,6 +136,17 @@ test('--hook, «Документы на сервере: да»: .claude убра
   assert.equal(fs.readFileSync(path.join(dir, '.claude/.htaccess'), 'utf8'), OWN_DENY, 'свой .htaccess не перезаписан');
   assert.equal(hook(dir).stdout, '', 'второй запуск — менять нечего');
   assert.equal(cli(dir, '--check').code, 0);
+});
+
+test('«Документы на сервере: да»: .claude/settings.json исключён заранее — появился посреди сессии (установка плагина на проект), --check по-прежнему 0', () => {
+  const dir = makeProject({ ...docsProject(), [XML]: GAMMA });
+  assert.equal(fs.existsSync(path.join(dir, '.claude/settings.json')), false);
+  hook(dir);
+  assert.equal(isExcluded(excluded(dir), '.claude/settings.json'), true);
+  fs.writeFileSync(path.join(dir, '.claude/settings.json'), '{ "enabledPlugins": {} }\n');
+  const c = cli(dir, '--check');
+  assert.equal(c.code, 0, c.stdout);
+  assert.equal(hook(dir).stdout, '', 'на следующем старте добавлять нечего');
 });
 
 test('«Документы на сервере: да», нет .claude/.htaccess — хук создаёт его из шаблона project-init; --check не создаёт и называет', () => {

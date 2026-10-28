@@ -20,10 +20,11 @@ const { isSsh } = require('./lib/deploy');
 
 const MUST = ['.idea', '.git', '.claude'];
 const RELOAD = 'Если PhpStorm открыт и не подхватил — File → Reload All from Disk.';
-// «Документы на сервере: да»: что из .claude уезжает; worktrees, settings.local.json и скиллы (bitrix-skills.js)
-// исключаются заранее — они появляются посреди сессии, а хук увидит их только на следующем старте.
+// «Документы на сервере: да»: что из .claude уезжает; worktrees, settings.json (установка плагина на проект посреди
+// /kit:project-init), settings.local.json и скиллы (bitrix-skills.js) исключаются заранее — они появляются посреди сессии,
+// а хук увидит их только на следующем старте.
 const KEEP = DOCS_KEEP;
-const EARLY = ['.claude/worktrees', '.claude/settings.local.json', '.claude/skills', '.claude/kit-inbox.jsonl'];
+const EARLY = ['.claude/worktrees', '.claude/settings.json', '.claude/settings.local.json', '.claude/skills', '.claude/kit-inbox.jsonl'];
 // Служебные папки superpowers (визуальный помощник, git worktree, спеки и планы по умолчанию) — тоже заранее:
 // появляются посреди сессии. specs и .specify не исключаем — так может называться папка сайта.
 const TOOLS = ['.superpowers', '.worktrees', 'docs/superpowers'];
