@@ -254,12 +254,18 @@ function mattFilesLine(docs, onProd) {
     + (onProd ? '' : ' (варианты на страницах сайта — только где правки не уходят на прод сами, после выбора — убрать)')
     + '. В корень проекта (GLOSSARY*.md, CONTEXT*.md, docs/adr/, docs/agents/, .scratch/) не пиши.\n';
 }
+// 47.8ж: и как запускать команды в копии (guard-bash пропускает перезапись с целью -C вне проекта).
 const MATT_ALWAYS_LINE = '- При PhpStorm Always файлы с диска уезжают на сервер: без веток и worktree; рабочую копию старыми версиями не переписывай '
-  + '(git bisect, stash, переход на другой коммит или ветку, reset --hard, rebase) — бисекция и опыты в копии: git clone во временную папку.\n';
+  + '(git bisect, stash, переход на другой коммит или ветку, reset --hard, rebase) — бисекция и опыты в копии: git clone во временную папку, '
+  + 'команды — git -C <копия>.\n';
 const mattProdLine = (docs) => '- Здесь правки сразу на проде: prototype — только HTML-файл в ' + docs + '/work/<тема>/, без вариантов на страницах сайта '
   + 'и маршрута /prototype/. Без пользователя здесь не работай.\n';
-// Любая из новых строк 47.8д — признак правил Мэтта в выводе.
-const MATT_NEW = /платформа откажет|tracker\.md|Шаг закрывает только общая сессия|без git push и --push до разбора|TDD \(tdd, implement\)|уезжают на сервер: без веток|git clone во временную папку|маршрута \/prototype\//;
+// 47.8ж: сессия в worktree приложения в проекте Мэтта; номер шага вне тикета в этапе Мэтта.
+const MATT_WT_LINE = '- Сессия в worktree — в проекте Мэтта так не работаем: скажи пользователю открыть сессию в основной папке; '
+  + '/kit:step-done и коммиты здесь не делай.\n';
+const MATT_SMALL = 'Мелкая задача — сделать и закрыть /kit:step-done; пока в «Сейчас» этап «(система Мэтта», шаг вне тикета — N.0а, N.0б… ';
+// Любая из новых строк 47.8д и 47.8ж — признак правил Мэтта в выводе.
+const MATT_NEW = /платформа откажет|tracker\.md|Шаг закрывает только общая сессия|без git push и --push до разбора|TDD \(tdd, implement\)|уезжают на сервер: без веток|git clone во временную папку|маршрута \/prototype\/|N\.0а|так не работаем/;
 
 // Проект Мэтта с плагином на проекте (параметры поверх MATT_PARAMS — over) → контекст.
 function mattCtx(over = {}) {
@@ -279,6 +285,8 @@ test('проект Мэтта (47.8д): навыки по команде — ф�
       'Шаг закрывает только общая сессия: исполнитель тикета (задание «Тикет … Только этот тикет») /kit:step-done не вызывает и не коммитит.',
       'без пользователя (только по /kit:matt) — коммит без просмотра, без git push и --push до разбора, даже если хук пишет «отправь».',
       ', /setup-matt-pocock-skills не предлагай; вопросы грилинга — через AskUserQuestion; TDD (tdd, implement) — только где в проекте есть тесты.\n',
+      // 47.8ж: при мелкой задаче /kit:matt не грузится — номер шага вне тикета (номера без буквы заняты тикетами) — здесь.
+      MATT_SMALL + 'Шаг закрывает только общая сессия',
     ]) assert.ok(ctx.includes(s), deploy + ': нет «' + s + '»\n' + ctx);
     // Режим без пользователя включается только по /kit:matt (вопрос о режиме разрешений, запрет при Always на прод), не «сам разрешил».
     assert.doesNotMatch(ctx, /он сам разрешил/, deploy);
@@ -321,6 +329,41 @@ test('проект Мэтта (47.8д): при Always и «Окружение» 
   assert.doesNotMatch(mattCtx({ 'Выкладка': 'вручную' }), /При PhpStorm Always файлы с диска/, '«вручную» — без строки Always');
 });
 
+// 47.8ж: сессию в worktree приложения в проекте Мэтта ничто не останавливало, а строка RULE_WORKTREE при Always разрешала
+// работу в нём. Приложение: CLAUDE_PROJECT_DIR — основная папка, путь worktree — только в cwd входа; CLI — папка проекта сама worktree.
+test('проект Мэтта (47.8ж): сессия в worktree — сказать открыть основную папку, при любой выкладке; основная папка и обычный проект — как раньше', () => {
+  for (const deploy of ['PhpStorm Always', 'вручную', 'Claude по SSH']) {
+    const params = { ...MATT_PARAMS, 'Выкладка': deploy, 'Прод': 'https://shop.example.com' };
+    const main = makeProject(mattFiles(params));
+    const wt = path.join(main, '.claude', 'worktrees', 'brave-turing-1a2b3c');
+    fs.mkdirSync(wt, { recursive: true });
+    const app = runEnv(wt, { ...pluginsOn(main), CLAUDE_PROJECT_DIR: main });
+    assert.equal(app.code, 0);
+    assert.match(app.stdout, MATT_RULE, deploy);
+    assert.ok(app.stdout.includes(MATT_WT_LINE), deploy + '\n' + app.stdout);
+    assert.doesNotMatch(app.stdout, /Сессия работает в git worktree/, deploy + ': строки «правки не попадут на сервер, пока не сольют» нет');
+    // Место — как у прежней строки: после правил выкладки и проверки на сервере, до правила просмотра.
+    assert.ok(app.stdout.indexOf('- Сессия в worktree') > app.stdout.indexOf('- Код пишет Claude'), deploy);
+    assert.ok(app.stdout.indexOf('- Сессия в worktree') < app.stdout.indexOf('- Коммит — после просмотра'), deploy);
+    const cli = writeFiles(path.join(main, '.claude', 'worktrees', 'cli'), mattFiles(params));
+    assert.ok(runEnv(cli, pluginsOn(main)).stdout.includes(MATT_WT_LINE), deploy + ': CLI');
+    // Основная папка (и cwd в её подпапке) — строки нет.
+    assert.doesNotMatch(runEnv(main, pluginsOn(main)).stdout, /Сессия в worktree|Сессия работает в git worktree/, deploy);
+    assert.doesNotMatch(runEnv(path.join(main, '.claude'), { ...pluginsOn(main), CLAUDE_PROJECT_DIR: main }).stdout, /Сессия в worktree/, deploy);
+  }
+  // Проект Мэтта без плагина и обычный kit-проект — как раньше: при Always из worktree — RULE_WORKTREE, строки Мэтта нет.
+  for (const files of [mattFiles(), mattFiles({ 'Выкладка': 'PhpStorm Always', 'Версия kit': VERSION })]) {
+    const main = makeProject();
+    const out = runEnv(writeFiles(path.join(main, '.claude', 'worktrees', 'x'), files)).stdout;
+    assert.match(out, /Сессия работает в git worktree — правки здесь не попадут на сервер/);
+    assert.doesNotMatch(out, /так не работаем/);
+    const plain = makeProject(files);
+    const wt = path.join(plain, '.claude', 'worktrees', 'y');
+    fs.mkdirSync(wt, { recursive: true });
+    assert.doesNotMatch(runEnv(wt, { CLAUDE_PROJECT_DIR: plain }).stdout, /так не работаем/);
+  }
+});
+
 // Худший случай проекта Мэтта: всё, что удлиняет вывод, — сразу. Предел платформы — 10 000 символов на хук (больше —
 // вывод уходит в файл, в контексте — превью 2 000 символов без правил); держим не больше 9 000.
 test('проект Мэтта (47.8д): худший случай — additionalContext не больше 9 000 символов', () => {
@@ -342,9 +385,13 @@ test('проект Мэтта (47.8д): худший случай — additional
   const wt = writeFiles(path.join(main, '.claude', 'worktrees', 'brave-turing-1a2b3c'),
     { '.claude/CLAUDE.md': paramsMd({ ...params, 'Выкладка': 'PhpStorm Always' }), ...journal });
   const ssh = makeProject({ '.claude/CLAUDE.md': paramsMd({ ...params, 'Выкладка': 'Claude по SSH' }), ...journal, '.idea/deployment.xml': XML });
+  // 47.8ж: строка о сессии в worktree проекта Мэтта — при любой выкладке, так что и SSH — из worktree приложения.
+  const sshWt = path.join(ssh, '.claude', 'worktrees', 'brave-turing-1a2b3c');
+  fs.mkdirSync(sshWt, { recursive: true });
   const cases = [
-    ['Always на прод из worktree', runEnv(wt, pluginsOn(main, { version: '9.9.9' })).stdout, /Сессия работает в git worktree[\s\S]*- Здесь правки сразу на проде/],
-    ['Claude по SSH с автозаливкой', runEnv(ssh, pluginsOn(ssh, { version: '9.9.9' })).stdout, /уедут на сервер дважды/],
+    ['Always на прод из worktree', runEnv(wt, pluginsOn(main, { version: '9.9.9' })).stdout, /так не работаем[\s\S]*- Здесь правки сразу на проде/],
+    ['Claude по SSH с автозаливкой из worktree', runEnv(sshWt, { ...pluginsOn(ssh, { version: '9.9.9' }), CLAUDE_PROJECT_DIR: ssh }).stdout,
+      /уедут на сервер дважды[\s\S]*так не работаем/],
   ];
   for (const [name, ctx, own] of cases) {
     // Случай и правда худший: все длинные строки на месте.

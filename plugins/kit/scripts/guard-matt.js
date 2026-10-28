@@ -2,7 +2,7 @@
 'use strict';
 // Хук PreToolUse (Write|Edit|MultiEdit|NotebookEdit|Agent|Task|EnterWorktree|mcp__ccd_session__start_session) — только
 // в kit-проекте с параметром «Система Мэтта: да»:
-// - файлы системы Мэтта (глоссарий, ADR, .scratch/, опросники, папки teach и triage и т. п.) в корень проекта (на сайте
+// - файлы системы Мэтта (глоссарий, ADR, .scratch/, опросники, уроки и папки teach, triage и т. п.) в корень проекта (на сайте
 //   это корень сайта) → запрет: их место — папка документов (<docs>/GLOSSARY.md, <docs>/adr/, <docs>/work/…);
 // - сессия, субагент и подчинённая сессия в отдельном worktree → запрет при любой выкладке (исполнители работают
 //   в основной папке; при автозаливке PhpStorm Always правки из копии ещё и не дойдут до сервера); облачная копия
@@ -14,11 +14,12 @@ const { isMattProject, projectRoot } = require('./lib/matt');
 const WRITE_TOOLS = new Set(['Write', 'Edit', 'MultiEdit', 'NotebookEdit']);
 // Файлы корня проекта и начала путей, которые система Мэтта кладёт «по умолчанию» (сравнение без регистра, косые вперёд):
 // глоссарий и карта контекстов, ADR, трекер и .scratch/; to-questionnaire — to-questionnaire-<slug>.md в текущей папке;
-// teach — MISSION.md, RESOURCES.md, lessons/, learning-records/; triage — .out-of-scope/. Общие имена teach (NOTES.md,
+// teach — MISSION.md, RESOURCES.md, уроки lessons/*.html (сам teach: lessons/0001-<имя>.html), learning-records/; triage —
+// .out-of-scope/. Остальное в lessons/ (раздел сайта /lessons/: index.php, подпапки) и общие имена teach (NOTES.md,
 // reference/, assets/) не берём: так называются и папки сайта.
 const ROOT_FILES = new Set(['glossary.md', 'glossary-map.md', 'context.md', 'context-map.md', 'mission.md', 'resources.md']);
-const ROOT_MASKS = [/^to-questionnaire-[^/]*\.md$/];
-const ROOT_DIRS = ['docs/adr/', 'docs/agents/', '.scratch/', 'lessons/', 'learning-records/', '.out-of-scope/'];
+const ROOT_MASKS = [/^to-questionnaire-[^/]*\.md$/, /^lessons\/[^/]*\.html$/];
+const ROOT_DIRS = ['docs/adr/', 'docs/agents/', '.scratch/', 'learning-records/', '.out-of-scope/'];
 
 const reasonFiles = (docsRel) => 'Файлы системы Мэтта — в ' + docsRel + '/: глоссарий — GLOSSARY.md, ADR — adr/, карта и спек — work/<тема>/, '
   + 'тикеты карты — work/<тема>/issues/, тикеты реализации — work/<тема>-build/issues/, прочие документы навыков — work/. '

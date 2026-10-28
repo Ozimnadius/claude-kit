@@ -543,6 +543,12 @@ test('matt: ядро ≤ 12 КБ и справки tracker.md, autonomous.md —
     assert.ok(solo.includes(s), 'autonomous.md §1: ' + s);
   }
   assert.ok(review.includes('`--push`') && review.includes('git show --stat'), 'autonomous.md §2: отправка после разбора');
+  // 47.8ж: /kit:step-done сам добавляет --push при «Удалённом репозитории» — шаги разбора без него, отправка — когда разобраны все.
+  assert.match(review, /^1\. [^\n]*шагом с буквой[^\n]*без `--push`/m, 'autonomous.md §2 п. 1: шаг исправления — без --push');
+  assert.match(review, /^4\. [^\n]*разобраны все[^\n]*`--push`/m, 'autonomous.md §2 п. 4: отправка — когда разобраны все');
+  assert.ok(solo.includes('до конца разбора'), 'autonomous.md §1: без отправки до конца разбора');
+  // 47.8ж: фронт — как в tracker.md: блокеры resolved или wontfix, метки needs-* — не во фронте.
+  assert.match(body, /\*\*Фронт\*\*[^\n]*все из `Blocked by` — `resolved` или `wontfix`[^\n]*не `needs-\*`/, '47.8ж: фронт в ядре');
   // Р-13: справка трекера — источник и лицензия, места kit, поля, ответ, вопрос и «готово».
   assert.match(tracker.split('\n').slice(0, 4).join('\n'), /mattpocock-skills 1\.3\.1[^\n]*MIT/, 'tracker.md: строка об источнике в начале');
   for (const s of ['map.md', '<тема>-build/issues/NN-<slug>.md', 'README.md', 'Type:', 'research', 'prototype', 'grilling', 'task',
@@ -581,4 +587,20 @@ test('project-init: исправления по глубокому исслед�
   // Р-10: шаг не по тикету в этапе Мэтта — N.0а, N.0б: номера без буквы заняты тикетами.
   const s48 = init.slice(init.indexOf('### 4.8 Закрыть шаг'));
   assert.ok(s48.includes('`N.0а`'), 'project-init п. 4.8: N.0а');
+});
+
+test('README (47.8ж): раздел Мэтта — по коду: окружение режима без пользователя, бисекция в копии, сессия в worktree, lessons/*.html', () => {
+  const readme = readmeNow();
+  const matt = readme.slice(readme.indexOf('## Система Мэтта Покока'), readme.indexOf('## Параметры проекта'));
+  // serverEnv: «дев» — дев, остальное (и пустое) — прод.
+  assert.ok(!matt.includes('с окружением «прод» режим не включается'), 'README: окружение «прод» вместо «не дев»');
+  assert.ok(matt.includes('окружение не «дев» (пустое — тоже прод)'), 'README: окружение как в коде');
+  // guard-bash: перезапись с целью вне проекта проходит — совет README исполним.
+  assert.ok(matt.includes('`git clone <проект> <временная папка>`, затем `git -C <копия> bisect …`'), 'README: бисекция в копии');
+  // session-start: сессия в worktree приложения — просьба открыть основную папку.
+  assert.ok(matt.includes('сессии, открытой в worktree'), 'README: сессия в worktree');
+  // guard-matt: из lessons/ — только уроки HTML.
+  for (const s of [readme, matt]) {
+    assert.ok(s.includes('`lessons/*.html`') && !s.includes('`lessons/`'), 'README: lessons/*.html');
+  }
 });

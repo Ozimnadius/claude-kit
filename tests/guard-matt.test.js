@@ -85,6 +85,13 @@ const CASES = [ // корень C:\proj; [инструмент, ввод, авт
   ['Write', { file_path: 'C:\\proj\\questionnaire-x.md' }, false, null],
   ['Write', { file_path: 'C:\\proj\\lessons.md' }, false, null],
   ['Write', { file_path: 'C:\\proj\\.out-of-scope-old\\a.md' }, false, null],
+  // 47.8ж: teach пишет в lessons/ только уроки HTML (lessons/0001-<имя>.html) — раздел сайта /lessons/ с PHP и подпапками проходит.
+  ['Write', { file_path: 'C:\\proj\\LESSONS\\0002-Next.HTML' }, true, 'files'],
+  ['Write', { file_path: 'C:\\proj\\lessons\\index.php' }, false, null],
+  ['Edit', { file_path: 'lessons/index.php' }, true, null],
+  ['Write', { file_path: 'C:\\proj\\lessons\\2024\\a.html' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\lessons\\style.css' }, false, null],
+  ['Write', { file_path: 'C:\\proj\\learning-records\\index.php' }, false, 'files'],
 ];
 
 const WANT = {

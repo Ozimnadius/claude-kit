@@ -50,8 +50,14 @@ const RULE_WORKTREE ='- Сессия работает в git worktree — пра
 const MATT_SKILL_SCRIPT = path.join(__dirname, 'matt-skill.js').replace(/\\/g, '/');
 const MATT_TRACKER = path.join(__dirname, '..', 'skills', 'matt', 'reference', 'tracker.md').replace(/\\/g, '/');
 // При «PhpStorm Always» (с 47.8д; запреты — guard-bash.js checkGit, guard-matt.js): ветки и старые версии файлов уехали бы на сервер.
+// Копию вне проекта (git -C <копия>) guard-bash пропускает (47.8ж).
 const MATT_ALWAYS = '- При PhpStorm Always файлы с диска уезжают на сервер: без веток и worktree; рабочую копию старыми версиями не переписывай '
-  + '(git bisect, stash, переход на другой коммит или ветку, reset --hard, rebase) — бисекция и опыты в копии: git clone во временную папку.';
+  + '(git bisect, stash, переход на другой коммит или ветку, reset --hard, rebase) — бисекция и опыты в копии: git clone во временную папку, '
+  + 'команды — git -C <копия>.';
+// Сессия в worktree приложения в проекте Мэтта (47.8ж) — вместо RULE_WORKTREE: worktree здесь не используем при любой выкладке,
+// а уход в него guard-matt.js отклоняет только инструментами — сессию, открытую в worktree пользователем, останавливает эта строка.
+const MATT_WORKTREE = '- Сессия в worktree — в проекте Мэтта так не работаем: скажи пользователю открыть сессию в основной папке; '
+  + '/kit:step-done и коммиты здесь не делай.';
 const MATT_REMIND = '- Система Мэтта: да, но плагин mattpocock-skills на этот проект не поставлен или выключен — запустите /kit:project-init (поставит его и выключит superpowers в проекте).';
 const MATT_REMIND_USER = '[kit] Система Мэтта: плагин mattpocock-skills на этот проект не поставлен или выключен — запустите /kit:project-init.';
 
@@ -128,7 +134,8 @@ function mattRules(info) {
       // Режим без пользователя — только по /kit:matt (вопрос о режиме разрешений; при Always на прод — нельзя, строка ниже).
       // Без пользователя хук remote-check.js после сжатия пишет «отправь» — непросмотренные коммиты не отправляем.
       + 'без пользователя (только по /kit:matt) — коммит без просмотра, без git push и --push до разбора, даже если хук пишет «отправь». '
-      + 'Мелкая задача — сделать и закрыть /kit:step-done. '
+      // При мелкой задаче /kit:matt не грузится: номер шага вне тикета — здесь (номера без буквы заняты тикетами, 47.8ж).
+      + 'Мелкая задача — сделать и закрыть /kit:step-done; пока в «Сейчас» этап «(система Мэтта», шаг вне тикета — N.0а, N.0б… '
       // Общие правила kit велят звать /kit:step-done самому — исполнителю тикета нельзя: журнал пишут две сессии сразу.
       + 'Шаг закрывает только общая сессия: исполнитель тикета (задание «Тикет … Только этот тикет») /kit:step-done не вызывает и не коммитит.'
       // При Always то же — в строке MATT_ALWAYS, с причиной.
@@ -175,8 +182,9 @@ function inWorktree(dir) {
   return String(dir || '').replace(/\\/g, '/').toLowerCase().includes('/.claude/worktrees/');
 }
 
-// matt — уже посчитанные mattRules(info) (main считает один раз и для текста, и для напоминания пользователю).
-function buildContext(info, matt = mattRules(info)) {
+// matt — уже посчитанные mattRules(info) (main считает один раз и для текста, и для напоминания пользователю);
+// cwd — папка сессии из входа хука (в worktree-сессии приложения CLAUDE_PROJECT_DIR — основная папка, worktree — только в cwd).
+function buildContext(info, matt = mattRules(info), cwd = '') {
   if (!info.isKit) return '';
   const out = ['[kit] Проект ведётся по журналу ' + info.journalRel + '.'];
   if (info.hasJournal) {
@@ -203,8 +211,10 @@ function buildContext(info, matt = mattRules(info)) {
   }
   // Проверка на сервере — только если у окружения есть адрес («Прод» при «Окружение: прод», «Дев» при «дев»).
   if (p.get(serverEnv(p) === 'дев' ? 'Дев' : 'Прод', '')) out.push(ssh ? RULE_CLAUDE_SSH : RULE_CLAUDE);
-  // После правил автозаливки и проверки на сервере — уточняет их для worktree.
-  if (always && inWorktree(info.dir)) out.push(RULE_WORKTREE);
+  // После правил автозаливки и проверки на сервере — уточняет их для worktree. Проект Мэтта с плагином — при любой выкладке
+  // и по папке сессии тоже; остальные — как раньше (по папке проекта, при Always).
+  if (matt.on && (inWorktree(info.dir) || inWorktree(cwd))) out.push(MATT_WORKTREE);
+  else if (always && inWorktree(info.dir)) out.push(RULE_WORKTREE);
   out.push(RULE_REVIEW);
   const signs = oldFormat(info);
   if (signs.length) out.push('- ' + oldFormatText(signs));
@@ -229,9 +239,10 @@ function buildContext(info, matt = mattRules(info)) {
 
 function main() {
   try {
-    const info = kitInfo(resolveProjectDir(readStdinJson()));
+    const input = readStdinJson();
+    const info = kitInfo(resolveProjectDir(input));
     const matt = mattRules(info);
-    const text = buildContext(info, matt);
+    const text = buildContext(info, matt, input && typeof input.cwd === 'string' ? input.cwd : '');
     if (text) {
       const o = { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } };
       // Пользователю: напоминание о версии kit и напоминание о Мэтте — через перевод строки.

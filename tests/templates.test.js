@@ -92,6 +92,8 @@ test('CLAUDE.md: документы — в .claude/docs, в «Не выклад�
   assert.equal(more.length, 0, 'вариантов два');
   assert.ok(sp.startsWith('`superpowers:brainstorming`') && sp.includes('не в `docs/superpowers/`'), 'правило superpowers в «Как работаем»: ' + sp);
   assert.ok(matt.startsWith('по навыку `/kit:matt` (система Мэтта)') && matt.includes('не пишутся') && !matt.includes('superpowers:'), 'вариант для системы Мэтта: ' + matt);
+  // 47.8ж: в проекте Мэтта ветки и worktree запрещены при любой выкладке — в самом варианте, хвост про автозаливку — отдельно.
+  assert.ok(matt.includes('без веток и worktree при любой выкладке'), 'вариант Мэтта: без веток и worktree');
   assert.ok(tpl.includes('с разделом «Чек-лист» в начале: строка на задачу `- [ ] N.M — …`'), 'чек-лист задач в плане');
   const rest = tpl.split('.claude/docs/').join('').split('upload/docs/').join('').split('docs/superpowers/').join('');
   assert.ok(!rest.includes('docs/'), 'старых путей docs/ в шаблоне нет');

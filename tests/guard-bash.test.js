@@ -335,6 +335,11 @@ const GIT_478B = [
   ['bash', 'git stash branch x stash@{1}', true, 'branch'],
   ['bash', 'git stash list', false, null],
   ['bash', 'git stash pop', false, null],
+  // 47.8ж: git am --show-current-patch (и =diff, =raw) только показывает патч — как у rebase, не коммит.
+  ['bash', 'git am --show-current-patch', false, null],
+  ['bash', 'git am --show-current-patch=diff', true, null],
+  ['powershell', 'git am --show-current-patch=raw', false, null],
+  ['bash', 'git am --continue --show-current-patch-x', false, 'commit'],
 ];
 
 // Команды kit и aspro (step-done, ssh.md, push.md, project-init, remote-check, report, aspro-merge) — пропуск
@@ -391,12 +396,94 @@ test('checkGit: тексты причин 47.8б', () => {
     + 'прототип и исследования — в тикет и папку документов (work/<тема>/).');
   assert.equal(checkGit('git switch -c x', 'bash', { always: true }),
     'При автозаливке PhpStorm ветки и worktree нельзя: файлы с диска уезжают на сервер. Работай в текущей ветке основной папки.');
+  // 47.8ж: совет — прямой, и страж его пропускает (цель -C вне проекта, см. ниже).
   assert.equal(checkGit('git bisect start', 'bash', { always: true }),
     'При автозаливке PhpStorm нельзя переписывать рабочую копию старыми версиями (bisect, stash, переход на другой коммит или ветку, '
-    + 'reset --hard): файлы с диска сразу уезжают на сервер. Бисекцию и опыты со старыми версиями — в отдельной копии: '
-    + 'git clone во временную папку.');
+    + 'reset --hard): файлы с диска сразу уезжают на сервер. Бисекцию и опыты со старыми версиями — в копии вне проекта: '
+    + 'git clone <проект> <временная папка>, затем git -C <копия> bisect … (путь — абсолютный, без переменных).');
   assert.equal(checkGit('git merge feature', 'bash', { always: false }),
     'Коммит — только через /kit:step-done (kit-commit.js): в проекте Мэтта исполнитель не коммитит, тикет принимает общая сессия.');
+});
+
+// 47.8ж: совет «бисекция — в копии» страж больше не запрещает. Цель вызова — папка запуска (папка сессии, cd в подоболочке
+// bash, затем -C по порядку), --git-dir и --work-tree (-c core.worktree): и репозиторий, и рабочая копия вне проекта
+// (не в .claude/worktrees/) — перезапись не проверяется; коммит и ветки — при любой цели. Корень C:/proj, сессия в нём, автозаливка.
+const GIT_478ZH = [ // [оболочка, команда, ожидание]
+  ['bash', 'git clone C:/proj C:/Users/user/AppData/Local/Temp/bis', null],
+  ['bash', 'git -C C:/Users/user/AppData/Local/Temp/bis bisect start HEAD v1', null],
+  ['bash', 'git -C "C:/Users/user/AppData/Local/Temp/bis" bisect good && git -C C:/Users/user/AppData/Local/Temp/bis bisect bad', null],
+  ['powershell', 'git -C "C:\\Temp\\bis" checkout 1a2b3c4', null],
+  ['powershell', "git -C 'C:\\Temp\\bis' stash; git -C 'C:\\Temp\\bis' stash pop", null],
+  ['bash', 'git -C /c/Temp/bis checkout 1a2b3c4', null],
+  ['bash', 'git -C /cygdrive/c/Temp/bis switch master', null],
+  ['bash', 'git -C D:/bis reset --hard v1', null],
+  ['bash', 'git -C ../bis bisect start', null],
+  ['bash', 'git -C C:/Temp -C bis bisect start', null],
+  ['bash', '( cd C:/Users/user/AppData/Local/Temp/bis && git bisect start HEAD v1 && git bisect run npm test )', null],
+  ['bash', '(cd /c/Temp/bis; git checkout 1a2b3c4)', null],
+  ['bash', '( cd C:/Temp && cd bis && git bisect good )', null],
+  ['bash', '( cd "C:/Temp/my bis" && ( git bisect good ) )', null],
+  ['bash', '( cd C:/Temp/bis && git -C sub rebase origin/master )', null],
+  ['bash', 'git --git-dir=C:/Temp/bis/.git --work-tree=C:/Temp/bis checkout 1a2b3c4', null],
+  ['bash', 'git --git-dir C:/Temp/bis/.git --work-tree C:/Temp/bis checkout 1a2b3c4', null],
+  // Своя цель: проект, его подпапка, worktree приложения, тот же путь в форме Git Bash, другим регистром, через «..».
+  ['bash', 'git -C C:/proj bisect start', 'rewrite'],
+  ['bash', 'git -C C:/PROJ/local checkout 1a2b3c4', 'rewrite'],
+  ['bash', 'git -C /c/proj checkout 1a2b3c4', 'rewrite'],
+  ['powershell', 'git -C "C:\\proj\\.claude\\worktrees\\w1" checkout 1a2b3c4', 'rewrite'],
+  ['bash', 'git -C . bisect start', 'rewrite'],
+  ['bash', 'git -C C:/Temp/bis -C C:/proj checkout 1a2b3c4', 'rewrite'],
+  ['bash', 'git -C C:/Temp/../proj checkout 1a2b3c4', 'rewrite'],
+  ['bash', 'git -C "" bisect start', 'rewrite'],
+  // Не разобрать (переменные, ~user, cd -) — как своя.
+  ['bash', 'git -C $TMP/bis bisect start', 'rewrite'],
+  ['bash', 'git -C "${TEMP}/bis" bisect start', 'rewrite'],
+  ['powershell', 'git -C $env:TEMP\\bis bisect start', 'rewrite'],
+  ['powershell', 'git -C "%TEMP%\\bis" bisect start', 'rewrite'],
+  ['bash', 'git -C ~other/bis bisect start', 'rewrite'],
+  ['bash', '( cd - && git bisect start )', 'rewrite'],
+  ['bash', '( cd $TMP/bis && git bisect start )', 'rewrite'],
+  ['bash', '( pushd C:/Temp/bis && popd && git bisect start )', 'rewrite'],
+  // Репозиторий или рабочая копия — в проекте: переписывается проект.
+  ['bash', 'git -C C:/Temp/bis --work-tree=C:/proj checkout 1a2b3c4', 'rewrite'],
+  ['bash', 'git --work-tree=C:/Temp/bis checkout 1a2b3c4', 'rewrite'],
+  ['bash', 'git --git-dir=C:/Temp/bis/.git checkout 1a2b3c4', 'rewrite'],
+  ['bash', 'git --git-dir=C:/proj/.git --work-tree=C:/Temp/bis checkout 1a2b3c4', 'rewrite'],
+  ['bash', 'git -C C:/Temp/bis -c core.worktree=C:/proj checkout 1a2b3c4', 'rewrite'],
+  // cd действует только до конца своей подоболочки.
+  ['bash', '( cd C:/Temp/bis && git bisect good ) && git bisect good', 'rewrite'],
+  ['bash', '( cd C:/Temp/bis ); git bisect start', 'rewrite'],
+  ['bash', '( cd C:/Temp/bis && git log ) && ( git checkout 1a2b3c4 )', 'rewrite'],
+  ['bash', '( cd C:/Temp/bis && git -C C:/proj checkout 1a2b3c4 )', 'rewrite'],
+  ['bash', '( cd C:/Temp/bis && cd C:/proj && git checkout 1a2b3c4 )', 'rewrite'],
+  ['bash', '( cd C:/Temp/bis && ( cd C:/proj ) && git checkout 1a2b3c4 )', null],
+  // Коммит и ветки — при любой цели: папка вне проекта может оказаться worktree этого же репозитория.
+  ['bash', 'git -C C:/Temp/bis commit -m x', 'commit'],
+  ['bash', '( cd C:/Temp/bis && git merge feature )', 'commit'],
+  ['bash', 'git -C C:/Temp/bis checkout -b try', 'branch'],
+  ['bash', 'git -C C:/Temp/bis worktree add ../w', 'branch'],
+];
+for (const [shell, cmd, want] of GIT_478ZH) {
+  test(`checkGit 47.8ж ${shell}: ${JSON.stringify(cmd)} → ${want || 'разрешено'}`, () => {
+    const reason = checkGit(cmd, shell, { always: true, root: 'C:/proj', cwd: 'C:/proj' });
+    if (want === null) assert.equal(reason, null);
+    else assert.match(reason, WANT_GIT[want]);
+  });
+}
+
+test('checkGit 47.8ж: цель вне проекта без автозаливки — как раньше; без ctx.root и при сессии вне проекта', () => {
+  const ctx = { root: 'C:/proj', cwd: 'C:/proj' };
+  assert.equal(checkGit('git -C C:/Temp/bis bisect start', 'bash', { ...ctx, always: false }), null);
+  assert.match(checkGit('git -C C:/Temp/bis switch -c x', 'bash', { ...ctx, always: false }), WANT_GIT['matt-branch']);
+  // Без корня (прежние вызовы) — цель не разбирается: отказ, как до 47.8ж.
+  assert.match(checkGit('git -C C:/Temp/bis bisect start', 'bash', { always: true }), WANT_GIT.rewrite);
+  // Папка сессии — worktree приложения: относительный путь — от неё; без cwd — от корня.
+  assert.match(checkGit('git bisect start', 'bash', { always: true, root: 'C:/proj', cwd: 'C:/proj/.claude/worktrees/w1' }), WANT_GIT.rewrite);
+  assert.equal(checkGit('git -C ../../../../bis bisect start', 'bash', { always: true, root: 'C:/proj', cwd: 'C:/proj/.claude/worktrees/w1' }), null);
+  assert.match(checkGit('git -C ../../bis bisect start', 'bash', { always: true, root: 'C:/proj', cwd: 'C:/proj/.claude/worktrees/w1' }), WANT_GIT.rewrite);
+  assert.equal(checkGit('git -C ../bis bisect start', 'bash', { always: true, root: 'C:/proj' }), null);
+  // ~ — домашняя папка (вне проекта).
+  assert.equal(checkGit('git -C ~/bis bisect start', 'bash', { always: true, root: 'C:/proj', cwd: 'C:/proj' }), null);
 });
 
 // Хук целиком: ответ на команду в проектах разных видов.
@@ -462,6 +549,31 @@ test('guard-bash: при автозаливке в проекте Мэтта —
   assert.equal(hook(withParams({ 'Выкладка': 'вручную', 'Система Мэтта': 'да' }), 'git checkout master'), '');
   assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always' }), 'git reset --hard'), '');
   assert.equal(hook(withParams({ 'Выкладка': 'PhpStorm Always' }), 'git bisect start'), '');
+});
+
+test('guard-bash (47.8ж): при автозаливке в проекте Мэтта бисекция в копии вне проекта проходит; в проекте и его worktree — отказ', () => {
+  const always = withParams({ 'Выкладка': 'PhpStorm Always', 'Система Мэтта': 'да' });
+  const copy = makeProject();
+  const fwd = (p) => p.replace(/\\/g, '/');
+  // Совет причины — прямой.
+  assert.match(reasonOf(hook(always, 'git bisect start')), /в копии вне проекта: git clone <проект> <временная папка>, затем git -C <копия> bisect …/);
+  assert.equal(hook(always, 'git clone "' + fwd(always) + '" "' + fwd(copy) + '"'), '');
+  assert.equal(hook(always, 'git -C "' + fwd(copy) + '" bisect start HEAD 1a2b3c4'), '');
+  assert.equal(hook(always, '( cd "' + fwd(copy) + '" && git bisect good && git bisect bad )'), '');
+  assert.equal(hook(always, 'git -C "' + copy + '" checkout 1a2b3c4', 'PowerShell'), '');
+  // Относительный путь — от папки сессии (cwd ввода): соседняя временная папка — вне проекта.
+  assert.equal(hook(always, 'git -C ../' + path.basename(copy) + ' bisect start'), '');
+  assert.match(reasonOf(hook(always, 'git -C "' + fwd(always) + '" bisect start')), /^\[kit\] При автозаливке PhpStorm нельзя переписывать/);
+  assert.match(reasonOf(hook(always, 'git -C "' + fwd(path.join(always, '.claude', 'worktrees', 'w1')) + '" checkout 1a2b3c4')), /нельзя переписывать/);
+  assert.match(reasonOf(hook(always, '( cd "' + fwd(copy) + '" && git bisect good ) && git bisect good')), /нельзя переписывать/);
+  // Коммит в копии — как везде.
+  assert.match(reasonOf(hook(always, 'git -C "' + fwd(copy) + '" commit -m x')), /^\[kit\] Коммит — только через/);
+  // Worktree-сессия приложения: CLAUDE_PROJECT_DIR — основная папка, cwd — worktree: своя цель, отказ.
+  const wt = path.join(always, '.claude', 'worktrees', 'w1');
+  fs.mkdirSync(wt, { recursive: true });
+  const r = runScript('guard-bash.js', { input: { hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: 'git checkout 1a2b3c4' }, cwd: wt },
+    env: { CLAUDE_PROJECT_DIR: always } });
+  assert.match(reasonOf(r.stdout), /нельзя переписывать/);
 });
 
 test('guard-bash: merge, revert, cherry-pick, am в проекте Мэтта — причина коммита; в обычном kit-проекте — пропуск', () => {
