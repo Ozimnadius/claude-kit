@@ -235,15 +235,127 @@ test('проект Мэтта с плагином: правила Мэтта и 
   const script = /node "([^"]+matt-skill\.js)" <имя>/.exec(ctx)[1];
   assert.ok(!script.includes('\\'), script);
   assert.ok(path.isAbsolute(script) && fs.existsSync(script), 'скрипт есть: ' + script);
-  // Места файлов — по папке документов проекта.
-  assert.ok(ctx.includes('- Файлы системы Мэтта — в .claude/docs/: карта, тикеты-решения и спек — work/<тема>/ (map.md, issues/NN-<slug>.md, spec.md), '
-    + 'тикеты реализации — work/<тема>-build/ (issues/NN-<slug>.md, README.md), глоссарий — GLOSSARY.md, ADR — adr/NNNN-<slug>.md, '
-    + 'исследования и прочие документы навыков — work/, прототипы prototype — HTML в work/<тема>/ (варианты экранов на сайте — только где правки не уходят на прод сами); '
-    + 'трекер задач — эти локальные файлы. В корень проекта (GLOSSARY.md, GLOSSARY-MAP.md, CONTEXT.md, CONTEXT-MAP.md, docs/adr/, docs/agents/, .scratch/) не пиши.\n'), ctx);
-  assert.match(ctx, /implement-spec и setup-matt-pocock-skills не используются; вопросы грилинга — через AskUserQuestion\./);
+  // Места файлов — по папке документов проекта. MATT_PARAMS — Always без «Окружение» (это прод): оговорки про варианты
+  // на страницах сайта нет, её место заняла строка «Здесь правки сразу на проде» (47.8д); трекер — в строке навыков.
+  assert.ok(ctx.includes(mattFilesLine('.claude/docs', true)), ctx);
+  assert.ok(ctx.includes('implement-spec не используется; трекер — локальные файлы по '), ctx);
+  assert.doesNotMatch(ctx, /трекер задач — эти локальные файлы|setup-matt-pocock-skills не используются/, 'старый текст 3.3.0 до 47.8д');
   // Строка шаблона про superpowers в правилах проекта (.claude/CLAUDE.md до 47.8а) здесь не действует.
-  assert.ok(ctx.includes('через AskUserQuestion. Строка «Крупная задача» в .claude/CLAUDE.md про superpowers в проекте Мэтта не действует.\n'), ctx);
+  assert.ok(ctx.includes('superpowers в проекте выключен (строка «Крупная задача» в .claude/CLAUDE.md про него не действует).'), ctx);
   assert.match(ctx, /## Правила процесса \(плагин kit\)/, 'общие правила kit на месте');
+});
+
+// Строки Мэтта из 47.8д (по глубокому исследованию перед 3.3.0).
+// Строка мест файлов: при Always на прод — без оговорки про варианты на страницах сайта.
+function mattFilesLine(docs, onProd) {
+  return '- Файлы системы Мэтта — в ' + docs + '/: карта, тикеты-решения и спек — work/<тема>/ (map.md, issues/NN-<slug>.md, spec.md), '
+    + 'тикеты реализации — work/<тема>-build/ (issues/NN-<slug>.md, README.md), глоссарий — GLOSSARY.md, ADR — adr/NNNN-<slug>.md, '
+    + 'исследования, to-questionnaire, teach и прочие документы навыков — work/, прототипы prototype — HTML в work/<тема>/'
+    + (onProd ? '' : ' (варианты на страницах сайта — только где правки не уходят на прод сами, после выбора — убрать)')
+    + '. В корень проекта (GLOSSARY*.md, CONTEXT*.md, docs/adr/, docs/agents/, .scratch/) не пиши.\n';
+}
+const MATT_ALWAYS_LINE = '- При PhpStorm Always файлы с диска уезжают на сервер: без веток и worktree; рабочую копию старыми версиями не переписывай '
+  + '(git bisect, stash, переход на другой коммит или ветку, reset --hard, rebase) — бисекция и опыты в копии: git clone во временную папку.\n';
+const mattProdLine = (docs) => '- Здесь правки сразу на проде: prototype — только HTML-файл в ' + docs + '/work/<тема>/, без вариантов на страницах сайта '
+  + 'и маршрута /prototype/. Без пользователя здесь не работай.\n';
+// Любая из новых строк 47.8д — признак правил Мэтта в выводе.
+const MATT_NEW = /платформа откажет|tracker\.md|Шаг закрывает только общая сессия|без git push и --push до разбора|TDD \(tdd, implement\)|уезжают на сервер: без веток|git clone во временную папку|маршрута \/prototype\//;
+
+// Проект Мэтта с плагином на проекте (параметры поверх MATT_PARAMS — over) → контекст.
+function mattCtx(over = {}) {
+  const dir = makeProject(mattFiles({ ...MATT_PARAMS, ...over }));
+  const r = runEnv(dir, pluginsOn(dir));
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, MATT_RULE);
+  return r.stdout;
+}
+
+test('проект Мэтта (47.8д): навыки по команде — файлом, не Skill; шаг закрывает общая сессия; без пользователя — без отправки; трекер; TDD', () => {
+  for (const deploy of ['PhpStorm Always', 'вручную', 'Claude по SSH']) {
+    const ctx = mattCtx({ 'Выкладка': deploy });
+    for (const s of [
+      '- Навыки только по команде (wayfinder, to-spec, to-tickets, implement и др.) инструментом Skill не вызывай (платформа откажет) — сразу читай файл: node "',
+      '" <имя>; отказ всё же пришёл — попроси пользователя ввести /mattpocock-skills:<имя>. ',
+      'Шаг закрывает только общая сессия: исполнитель тикета (задание «Тикет … Только этот тикет») /kit:step-done не вызывает и не коммитит.',
+      'без пользователя (только по /kit:matt) — коммит без просмотра, без git push и --push до разбора, даже если хук пишет «отправь».',
+      ', /setup-matt-pocock-skills не предлагай; вопросы грилинга — через AskUserQuestion; TDD (tdd, implement) — только где в проекте есть тесты.\n',
+    ]) assert.ok(ctx.includes(s), deploy + ': нет «' + s + '»\n' + ctx);
+    // Режим без пользователя включается только по /kit:matt (вопрос о режиме разрешений, запрет при Always на прод), не «сам разрешил».
+    assert.doesNotMatch(ctx, /он сам разрешил/, deploy);
+    // Трекер — абсолютный путь с «/» к справке рядом с matt-skill.js (тот же корень плагина), файл есть.
+    const script = /node "([^"]+)\/scripts\/matt-skill\.js" <имя>/.exec(ctx)[1];
+    const tracker = /трекер — локальные файлы по (\S+), \/setup-matt-pocock-skills/.exec(ctx)[1];
+    assert.equal(tracker, script + '/skills/matt/reference/tracker.md', deploy);
+    assert.ok(!tracker.includes('\\') && path.isAbsolute(tracker) && fs.existsSync(tracker), 'справка трекера есть: ' + tracker);
+  }
+});
+
+test('проект Мэтта (47.8д): без веток и worktree при любой выкладке; при Always — причина и запрет переписывать рабочую копию старыми версиями', () => {
+  const always = mattCtx();
+  assert.ok(always.includes(MATT_ALWAYS_LINE), always);
+  assert.ok(!always.includes('не коммитит. Без веток и worktree.'), 'при Always — одна строка с причиной');
+  assert.doesNotMatch(always, /Superpowers при автозаливке/);
+  for (const deploy of ['вручную', 'Claude по SSH']) {
+    const ctx = mattCtx({ 'Выкладка': deploy });
+    assert.ok(ctx.includes('/kit:step-done не вызывает и не коммитит. Без веток и worktree.\n'), deploy + '\n' + ctx);
+    assert.doesNotMatch(ctx, /уезжают на сервер: без веток|git bisect|git clone во временную папку/, deploy);
+  }
+  // «Окружение: дев» при Always — запрет тот же: сохранение уходит на дев-сервер.
+  assert.ok(mattCtx({ 'Окружение': 'дев' }).includes(MATT_ALWAYS_LINE));
+});
+
+test('проект Мэтта (47.8д): при Always и «Окружение» не «дев» — prototype только HTML-файл в work/; иначе — оговорка в строке мест файлов', () => {
+  for (const env of [undefined, 'прод', 'Прод ', 'дев+прод']) {
+    const ctx = mattCtx(env === undefined ? {} : { 'Окружение': env });
+    assert.ok(ctx.includes(mattProdLine('.claude/docs')), String(env) + '\n' + ctx);
+    assert.ok(ctx.includes('Без пользователя здесь не работай.'), String(env));
+    assert.ok(ctx.includes(mattFilesLine('.claude/docs', true)), String(env));
+    assert.ok(ctx.indexOf('- Здесь правки сразу на проде') > ctx.indexOf('- Файлы системы Мэтта'), 'после строки мест файлов');
+  }
+  for (const over of [{ 'Окружение': 'дев' }, { 'Выкладка': 'вручную' }, { 'Выкладка': 'Claude по SSH' }, { 'Выкладка': 'вручную', 'Окружение': 'прод' }]) {
+    const ctx = mattCtx(over);
+    const what = JSON.stringify(over);
+    assert.doesNotMatch(ctx, /Здесь правки сразу на проде|маршрута \/prototype\/|Без пользователя здесь не работай/, what);
+    assert.ok(ctx.includes(mattFilesLine('.claude/docs', false)), what + '\n' + ctx);
+  }
+  assert.doesNotMatch(mattCtx({ 'Выкладка': 'вручную' }), /При PhpStorm Always файлы с диска/, '«вручную» — без строки Always');
+});
+
+// Худший случай проекта Мэтта: всё, что удлиняет вывод, — сразу. Предел платформы — 10 000 символов на хук (больше —
+// вывод уходит в файл, в контексте — превью 2 000 символов без правил); держим не больше 9 000.
+test('проект Мэтта (47.8д): худший случай — additionalContext не больше 9 000 символов', () => {
+  // Путь к плагину в выводе — как у установленного из кэша при длинном имени пользователя, а не как у этого checkout.
+  const here = path.join(__dirname, '..', 'plugins', 'kit').replace(/\\/g, '/');
+  const cache = 'C:/Users/' + 'u'.repeat(20) + '/.claude/plugins/cache/claude-kit/kit/' + VERSION;
+  // «Сейчас» длиннее предела (обрезается до 4 000), старые таблицы журнала по частям, версия kit не отмечена,
+  // большая работа и плагин Мэтта не той версии; «Окружение: дев+прод» (старый формат, по serverEnv — прод: ещё признак);
+  // выкладка — Always на прод из worktree или «Claude по SSH» с автозаливкой.
+  const now = '- **Этап:** ' + 'вопрос к заказчику о выгрузке остатков; '.repeat(150);
+  const journal = {
+    '.claude/docs/progress.md': ['# Журнал работ — тест', '', '## Сейчас', '', now, '', '## Этап 1 — изучение', '',
+      '| Шаг | Статус | Что сделано |', '|---|---|---|', '| 1.1 | ✅ | тест |', ''].join('\n'),
+    '.claude/docs/journal/decisions.md': '# Решения\n\n| Дата | Решение |\n|---|---|\n| 2026-10-01 | тест |\n',
+    '.claude/docs/work/catalog-build/issues/07-price-filter.md': '# тикет\n',
+  };
+  const params = { 'Система Мэтта': 'да', 'Окружение': 'дев+прод', 'Прод': 'https://shop.example.com' };
+  const main = makeProject();
+  const wt = writeFiles(path.join(main, '.claude', 'worktrees', 'brave-turing-1a2b3c'),
+    { '.claude/CLAUDE.md': paramsMd({ ...params, 'Выкладка': 'PhpStorm Always' }), ...journal });
+  const ssh = makeProject({ '.claude/CLAUDE.md': paramsMd({ ...params, 'Выкладка': 'Claude по SSH' }), ...journal, '.idea/deployment.xml': XML });
+  const cases = [
+    ['Always на прод из worktree', runEnv(wt, pluginsOn(main, { version: '9.9.9' })).stdout, /Сессия работает в git worktree[\s\S]*- Здесь правки сразу на проде/],
+    ['Claude по SSH с автозаливкой', runEnv(ssh, pluginsOn(ssh, { version: '9.9.9' })).stdout, /уедут на сервер дважды/],
+  ];
+  for (const [name, ctx, own] of cases) {
+    // Случай и правда худший: все длинные строки на месте.
+    for (const re of [own, /обрезано — полностью в/, /Версия kit в проекте не отмечена/, /Код пишет Claude/, /Журнал по частям/,
+      /в старом формате \(нет столбца «Как проверено»; старая таблица решений; Окружение: дев\+прод\)/, MATT_RULE, /Плагин Мэтта обновился/]) {
+      assert.match(ctx, re, name);
+    }
+    assert.ok(ctx.includes(here + '/scripts/matt-skill.js'), name + ': путь к плагину в выводе');
+    const len = ctx.split(here).join(cache).length;
+    assert.ok(len <= 9000, name + ': ' + len + ' символов');
+  }
 });
 
 test('проект Мэтта без плагина на проекте: напоминание о /kit:project-init в контексте и пользователю, правила superpowers на месте', () => {
@@ -256,6 +368,7 @@ test('проект Мэтта без плагина на проекте: нап�
   assert.match(ctx, /Superpowers при автозаливке/);
   assert.doesNotMatch(ctx, MATT_RULE);
   assert.doesNotMatch(ctx, /Файлы системы Мэтта/);
+  assert.doesNotMatch(ctx, MATT_NEW, 'без плагина — строк Мэтта 47.8д нет');
   // Нет installed_plugins.json вовсе — то же самое, без сбоя.
   const none = runEnv(makeProject(mattFiles()));
   assert.equal(none.code, 0);
@@ -301,6 +414,7 @@ test('обычный kit-проект: строк Мэтта нет, superpowers
   assert.match(plain.stdout, /Superpowers по правилам kit/);
   assert.match(plain.stdout, /Superpowers при автозаливке/);
   assert.doesNotMatch(plain.stdout, /Система Мэтта|Мэтт/);
+  assert.doesNotMatch(plain.stdout, MATT_NEW, 'строк Мэтта 47.8д нет');
   assert.equal(plain.user, '');
   // «нет» — как обычный проект, даже если плагин на проекте стоит.
   const dir = makeProject(mattFiles({ ...MATT_PARAMS, 'Система Мэтта': 'нет' }));
@@ -333,7 +447,13 @@ test('mattRules: не проект Мэтта — пусто; плагин на 
     const on = mattRules(kitInfo(dir));
     assert.equal(on.on, true);
     assert.equal(on.user, '');
-    assert.equal(on.lines.length, 2, 'правило и места файлов; версия плагина проверена — строки о версии нет');
+    // С 47.8д: правило, навыки, места файлов, Always и «правки сразу на проде» (MATT_PARAMS — Always без «Окружение»);
+    // версия плагина проверена — строки о версии нет.
+    assert.equal(on.lines.length, 5, on.lines.join('\n'));
+    const manual = makeProject(mattFiles({ ...MATT_PARAMS, 'Выкладка': 'вручную' }));
+    process.env.KIT_PLUGINS_FILE = pluginsOn(manual).KIT_PLUGINS_FILE;
+    assert.equal(mattRules(kitInfo(manual)).lines.length, 3, '«вручную» — правило, навыки, места файлов');
+    process.env.KIT_PLUGINS_FILE = pluginsOn(dir).KIT_PLUGINS_FILE;
     process.env.KIT_PLUGINS_FILE = NO_FILE;
     const off = mattRules(kitInfo(dir));
     assert.equal(off.on, false);

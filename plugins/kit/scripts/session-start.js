@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 'use strict';
-// Хук SessionStart (startup|resume|clear|compact): раздел «Сейчас» из журнала и правила процесса в контекст.
+// Хук SessionStart (startup|resume|clear|compact|fork): раздел «Сейчас» из журнала и правила процесса в контекст.
 // С 3.1.0 — JSON: контекст — в hookSpecificOutput.additionalContext, напоминание о версии kit — пользователю (systemMessage).
 // С 3.3.0 в проекте с «Система Мэтта: да» и плагином mattpocock-skills на проекте — правила Мэтта вместо правил superpowers;
 // плагина нет — правила superpowers и напоминание о /kit:project-init (в контекст и пользователю).
@@ -44,8 +44,14 @@ const RULE_NO_PARAMS = '- В .claude/CLAUDE.md нет раздела «Пара�
 const SPEC_TEMPLATE = path.join(__dirname, '..', 'skills', 'project-init', 'templates', 'spec.md');
 const RULE_SP_ALWAYS = '- Superpowers при автозаливке: без отдельных веток и worktree (.worktrees, using-git-worktrees) — правки из них не дойдут до сервера.';
 const RULE_WORKTREE ='- Сессия работает в git worktree — правки здесь не попадут на сервер автозаливкой основной папки, пока их не сольют в основную ветку; не проверяй результат на сервере сразу после записи.';
-// Система Мэтта (с 3.3.0): путь к скрипту навыков — абсолютный, с «/», как у SPEC_TEMPLATE.
+// Система Мэтта (с 3.3.0): пути к скрипту навыков и к справке трекера — абсолютные, с «/», как у SPEC_TEMPLATE.
+// Вывод хука ограничен 10 000 символов (больше — платформа выносит его в файл с превью 2 000, правила Мэтта туда не попадут):
+// худший случай проекта Мэтта держим не больше 9 000 — тест в tests/session-start.test.js.
 const MATT_SKILL_SCRIPT = path.join(__dirname, 'matt-skill.js').replace(/\\/g, '/');
+const MATT_TRACKER = path.join(__dirname, '..', 'skills', 'matt', 'reference', 'tracker.md').replace(/\\/g, '/');
+// При «PhpStorm Always» (с 47.8д; запреты — guard-bash.js checkGit, guard-matt.js): ветки и старые версии файлов уехали бы на сервер.
+const MATT_ALWAYS = '- При PhpStorm Always файлы с диска уезжают на сервер: без веток и worktree; рабочую копию старыми версиями не переписывай '
+  + '(git bisect, stash, переход на другой коммит или ветку, reset --hard, rebase) — бисекция и опыты в копии: git clone во временную папку.';
 const MATT_REMIND = '- Система Мэтта: да, но плагин mattpocock-skills на этот проект не поставлен или выключен — запустите /kit:project-init (поставит его и выключит superpowers в проекте).';
 const MATT_REMIND_USER = '[kit] Система Мэтта: плагин mattpocock-skills на этот проект не поставлен или выключен — запустите /kit:project-init.';
 
@@ -96,7 +102,8 @@ function superpowersRule(docsRel) {
 }
 
 // Правила проекта с «Система Мэтта: да» (вместо правил superpowers) → { on, lines, user }.
-// on — плагин mattpocock-skills на проекте и включён: lines — правила Мэтта; иначе lines — напоминание о /kit:project-init,
+// on — плагин mattpocock-skills на проекте и включён: lines — правила Мэтта (при «PhpStorm Always» — ещё запреты автозаливки,
+// при Always на прод — места файлов прототипа и прочих навыков); иначе lines — напоминание о /kit:project-init,
 // user — то же пользователю (systemMessage). Не проект Мэтта — всё пусто, installed_plugins.json не читается.
 function mattRules(info) {
   const off = { on: false, lines: [], user: '' };
@@ -110,19 +117,41 @@ function mattRules(info) {
   }
   if (!plugin.installed || !plugin.enabled) return { on: false, lines: [MATT_REMIND], user: MATT_REMIND_USER };
   const docs = info.docsRel;
+  // Автозаливка — как в buildContext; на прод — при «Окружение» не «дев» (пустое — прод, serverEnv).
+  const always = /^phpstorm always/i.test(String(info.params.get('Выкладка', '')).trim());
+  const onProd = always && serverEnv(info.params) !== 'дев';
   const lines = [
-    '- Система Мэтта (проект Мэтта): навыки mattpocock-skills — всегда с префиксом mattpocock-skills:, superpowers в проекте выключен. '
-      + 'Большая работа (не влезет в одну-две сессии) — по навыку /kit:matt: общая сессия, исполнитель на каждый тикет, приёмка через /kit:step-done; '
-      + 'без пользователя (он сам разрешил) — коммит без просмотра по /kit:matt, разбор потом. Мелкая задача — сделать и закрыть /kit:step-done. '
-      + 'Навыки только по команде (wayfinder, to-spec, to-tickets, implement и др.) читай файлом: node "' + MATT_SKILL_SCRIPT + '" <имя>. '
-      + 'implement-spec и setup-matt-pocock-skills не используются; вопросы грилинга — через AskUserQuestion. '
+    '- Система Мэтта (проект Мэтта): навыки Мэтта — с префиксом mattpocock-skills:, superpowers в проекте выключен '
       // Правила проекта, собранные до 47.8а, ведут крупную задачу через superpowers — здесь он выключен.
-      + 'Строка «Крупная задача» в .claude/CLAUDE.md про superpowers в проекте Мэтта не действует.',
+      + '(строка «Крупная задача» в .claude/CLAUDE.md про него не действует). '
+      + 'Большая работа (больше одной-двух сессий) — по /kit:matt: общая сессия, исполнитель на тикет, приёмка через /kit:step-done; '
+      // Режим без пользователя — только по /kit:matt (вопрос о режиме разрешений; при Always на прод — нельзя, строка ниже).
+      // Без пользователя хук remote-check.js после сжатия пишет «отправь» — непросмотренные коммиты не отправляем.
+      + 'без пользователя (только по /kit:matt) — коммит без просмотра, без git push и --push до разбора, даже если хук пишет «отправь». '
+      + 'Мелкая задача — сделать и закрыть /kit:step-done. '
+      // Общие правила kit велят звать /kit:step-done самому — исполнителю тикета нельзя: журнал пишут две сессии сразу.
+      + 'Шаг закрывает только общая сессия: исполнитель тикета (задание «Тикет … Только этот тикет») /kit:step-done не вызывает и не коммитит.'
+      // При Always то же — в строке MATT_ALWAYS, с причиной.
+      + (always ? '' : ' Без веток и worktree.'),
+    // Навык «только по команде» инструментом Skill платформа не даёт и велит не повторять его другими средствами.
+    '- Навыки только по команде (wayfinder, to-spec, to-tickets, implement и др.) инструментом Skill не вызывай (платформа откажет) — '
+      + 'сразу читай файл: node "' + MATT_SKILL_SCRIPT + '" <имя>; отказ всё же пришёл — попроси пользователя ввести /mattpocock-skills:<имя>. '
+      + 'implement-spec не используется; трекер — локальные файлы по ' + MATT_TRACKER + ', /setup-matt-pocock-skills не предлагай; '
+      + 'вопросы грилинга — через AskUserQuestion; TDD (tdd, implement) — только где в проекте есть тесты.',
+    // Оговорка про варианты на страницах сайта — только где правки не уходят на прод сами; иначе — строка «сразу на проде» ниже.
     '- Файлы системы Мэтта — в ' + docs + '/: карта, тикеты-решения и спек — work/<тема>/ (map.md, issues/NN-<slug>.md, spec.md), '
       + 'тикеты реализации — work/<тема>-build/ (issues/NN-<slug>.md, README.md), глоссарий — GLOSSARY.md, ADR — adr/NNNN-<slug>.md, '
-      + 'исследования и прочие документы навыков — work/, прототипы prototype — HTML в work/<тема>/ (варианты экранов на сайте — только где правки не уходят на прод сами); '
-      + 'трекер задач — эти локальные файлы. В корень проекта (GLOSSARY.md, GLOSSARY-MAP.md, CONTEXT.md, CONTEXT-MAP.md, docs/adr/, docs/agents/, .scratch/) не пиши.',
+      + 'исследования, to-questionnaire, teach и прочие документы навыков — work/, прототипы prototype — HTML в work/<тема>/'
+      + (onProd ? '' : ' (варианты на страницах сайта — только где правки не уходят на прод сами, после выбора — убрать)')
+      + '. В корень проекта (GLOSSARY*.md, CONTEXT*.md, docs/adr/, docs/agents/, .scratch/) не пиши.',
   ];
+  if (always) lines.push(MATT_ALWAYS);
+  // Сохранение сразу на проде: prototype ставит варианты на страницы сайта и маршрут /prototype/; режим без пользователя
+  // здесь запрещён (/kit:matt п. 7) — непросмотренные правки ушли бы на прод.
+  if (onProd) {
+    lines.push('- Здесь правки сразу на проде: prototype — только HTML-файл в ' + docs + '/work/<тема>/, без вариантов на страницах сайта '
+      + 'и маршрута /prototype/. Без пользователя здесь не работай.');
+  }
   // Версия плагина изменилась — правила kit проверены на другой; важно, пока идёт большая работа.
   if (plugin.version !== MATT_VERIFIED && bigWorkActive(info.dir, docs)) {
     lines.push('- Плагин Мэтта обновился: правила kit проверены на ' + MATT_VERIFIED + ', стоит ' + plugin.version
