@@ -469,3 +469,16 @@ test('финальная проверка этапа 36: повторный proj
   const row = fs.readFileSync(path.join(PLUGIN, '..', '..', 'README.md'), 'utf8').split('\n').find((l) => l.startsWith('| `/kit:step-done`'));
   assert.ok(row.indexOf('archive/') > 0 && row.indexOf('archive/') < row.indexOf('kit-journal.js'), 'README: архив этапа — до журнала: ' + row);
 });
+
+test('matt: общая сессия, папки, задание исполнителю, приёмка, режим без пользователя; не больше 12 КБ', () => {
+  assert.ok(fs.statSync(path.join(PLUGIN, 'skills', 'matt', 'SKILL.md')).size <= 12288);
+  const { fm, body } = skill('matt');
+  assert.equal(fm.name, 'matt');
+  assert.notEqual(fm['disable-model-invocation'], 'true', 'Claude вызывает сам');
+  for (const s of ['scripts/matt-skill.js"', 'work/<тема>-build/', 'в работе, этап', 'mcp__ccd_session__start_session', '`fresh`',
+    '`use_worktree`', 'Status: claimed', 'Status: ready-for-human', 'Status: resolved', '## Comments', 'AskUserQuestion',
+    '/kit:step-done', '--inbox', 'принят без просмотра', 'mattpocock-skills:code-review', 'PhpStorm Always', 'reference/ssh.md',
+    'git show --stat', 'implement-spec']) {
+    assert.ok(body.includes(s), s);
+  }
+});
