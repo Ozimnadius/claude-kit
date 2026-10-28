@@ -9,7 +9,8 @@
 //                                             (kit-commit.js проверяет пути до `git add`); папка (с 3.2.0) — каждый
 //                                             файл, который из неё возьмёт git (git status), а не сама папка: `bitrix`
 //                                             проходит, если всё в ней под «кроме»; путь «-» — список путей из stdin
-//                                             по строке (kit-step.js: тысячи путей не влезают в командную строку)
+//                                             по строке (kit-step.js: тысячи путей не влезают в командную строку);
+//                                             абсолютный путь внутри проекта — от корня, как относительный (с 3.3.0)
 //   node secret-scan.js --history             все коммиты текущей ветки (с 2.5.0, перед первой отправкой в удалённый
 //                                             репозиторий): добавленные строки каждого коммита и пути, бывшие в истории
 // Код 0 — чисто, 1 — есть находки, 2 — ошибка запуска.
@@ -17,7 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { readParams } = require('./lib/params');
-const { parseRules, matchRules, norm } = require('./lib/paths');
+const { parseRules, matchRules, norm, repoPath } = require('./lib/paths');
 
 // .settings.php модуля D7 (контроллеры, консольные команды) получает каждый покупатель модуля — секретов в нём нет
 // (с 3.2.3); пароли ядра — в bitrix/.settings.php и local/.settings.php, они под запретом.
@@ -155,7 +156,7 @@ function expandDirs(root, list) {
   };
   const dirs = list.filter(isDir);
   if (!dirs.length) return { files: list, idle: [] };
-  const parts = git(['status', '--porcelain=v1', '-z', '-uall', '--', ...dirs]).split('\0');
+  const parts = git(['--no-optional-locks', 'status', '--porcelain=v1', '-z', '-uall', '--', ...dirs]).split('\0');
   const inside = [];
   for (let i = 0; i < parts.length; i++) {
     if (parts[i].length < 4) continue;
@@ -235,7 +236,8 @@ function main(argv) {
   } else if (argv[0] === '--paths' && argv.slice(argv[1] === '--' ? 2 : 1).length) {
     let list = argv.slice(argv[1] === '--' ? 2 : 1);
     if (list.length === 1 && list[0] === '-') list = fs.readFileSync(0, 'utf8').split(/\r?\n/).filter(Boolean);
-    ({ files, idle } = expandDirs(root, list.map(norm)));
+    // Абсолютный путь внутри проекта — от корня (с 3.3.0): правила «Не коммитить» видят его так же, как относительный.
+    ({ files, idle } = expandDirs(root, list.map((p) => repoPath(p, root))));
   } else if (argv[0] === '--history') {
     // По коммиту за раз: первый коммит проекта — копия сайта, одним `git log -p` он упёрся бы в память.
     commits = git(['rev-list', '--reverse', 'HEAD']).split(/\s+/).filter(Boolean);

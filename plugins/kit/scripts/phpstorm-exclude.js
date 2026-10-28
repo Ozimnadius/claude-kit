@@ -17,6 +17,7 @@ const { readStdinJson, resolveProjectDir, kitInfo, DOCS_KEEP, docsOnServer } = r
 const { splitList } = require('./lib/params');
 const { DeploymentError, readDeployment, isExcluded, addExclusions, removeExclusions } = require('./lib/deployment');
 const { isSsh } = require('./lib/deploy');
+const { writeFilesAtomic } = require('./lib/atomic');
 
 const MUST = ['.idea', '.git', '.claude'];
 const RELOAD = 'Если PhpStorm открыт и не подхватил — File → Reload All from Disk.';
@@ -85,18 +86,20 @@ function blockedByName(names) {
 
 const listOf = (added) => Object.entries(added).map(([s, list]) => `«${s}» — ${list.join(', ')}`).join('; ');
 
-// Временный файл рядом → rename; временный файл убирается и при ошибке.
+// Временный файл рядом → rename (повтор при EPERM/EBUSY/EACCES — с 3.3.0, lib/atomic.js); временный файл убирается и при ошибке.
 function writeAtomic(file, text) {
-  const tmp = `${file}.${process.pid}.kit-tmp`;
+  writeFilesAtomic([{ file, text }]);
+}
+
+// Файл уже такой, как нужно: исключения на месте и убирать нечего. Одновременный старт сессий — хук соседней записал
+// те же исключения, а наше переименование упало (с 3.3.0): тогда «не удалось записать» ложное.
+function inPlace(file, info, also, open) {
   try {
-    fs.writeFileSync(tmp, text);
-    fs.renameSync(tmp, file);
-  } finally {
-    try {
-      fs.rmSync(tmp, { force: true });
-    } catch (e) {
-      // не удалось убрать — не важнее исходной ошибки
-    }
+    const xml = fs.readFileSync(file, 'utf8');
+    const rem = open ? removeExclusions(xml, ['.claude']) : { xml, removed: {} };
+    return !Object.keys(rem.removed).length && !Object.keys(addExclusions(rem.xml, required(info, also)).added).length;
+  } catch (e) {
+    return false; // не прочитан или не разобран — считаем, что не на месте
   }
 }
 
@@ -150,6 +153,10 @@ function run(start, { hook = false, check = false, also = [] } = {}) {
   try {
     writeAtomic(file, res.xml);
   } catch (e) {
+    if (inPlace(file, info, also, open)) {
+      const lines = done.length ? [`[kit] Исключения PhpStorm: ${done.join('; ')}.`] : hook ? [] : ['Исключения PhpStorm на месте.'];
+      return { code: 0, lines: [...lines, ...notes] };
+    }
     return { code: 2, lines: [`[kit] Исключения PhpStorm: не удалось записать .idea/deployment.xml (${e.code || e.message}) — ${manual}.`, ...notes] };
   }
   let back = null;

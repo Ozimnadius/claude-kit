@@ -25,8 +25,9 @@ function run(cmd, args, cwd, input) {
 const git = (cwd, args) => run('git', ['-c', 'core.quotepath=false', ...args], cwd);
 
 // git status -z: записи «XY путь»; у переименования и копии следом — старый путь. → [[путь] | [старый, новый]].
+// Без замка индекса (--no-optional-locks, с 3.3.0): соседняя сессия в той же папке в это время может делать git add.
 function stepFiles(cwd) {
-  const parts = git(cwd, ['status', '--porcelain=v1', '-z', '-uall']).stdout.split('\0');
+  const parts = git(cwd, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '-uall']).stdout.split('\0');
   const out = [];
   for (let i = 0; i < parts.length; i++) {
     if (parts[i].length < 4) continue;

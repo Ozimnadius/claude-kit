@@ -336,3 +336,59 @@ test('план прошлого этапа без строк нового эта
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.doesNotMatch(r.stdout, /нет строки/);
 });
+
+// ---------- 47.8в: переименование при записи — повтор и честное «записано частично» ----------
+
+const { fakeRenameEnv } = require('./fake-rename');
+const runFaked = (dir, input, spec) => runScript('kit-journal.js', { cwd: dir, input, env: { KIT_TODAY: '2026-10-20', ...fakeRenameEnv(spec) } });
+// Все блоки, что пишут в файлы кроме журнала: решения, баги, справочник, план выкладки, галочка плана.
+const WITH_DECISION = blocks({ ...BASE, STEP: '36.3', NEXT: '36.4 — четвёртый', BLOCKERS: 'блокеров нет',
+  DECISIONS: ['2026-10-20 | Заменяет №29: новое решение | потому что | прежнее | пользователь'],
+  DOCS: ['work/notes.md — заметки — в работе, этап 36'],
+  BUGS: ['— | новый баг | kit-journal.js | открыт', 'К61 | | | ✅ 36.3'],
+  PROD_TODO: ['сбросить кеш'], NOTES: ['факт', 'Заказчик: письмо'],
+  RECONCILE: '2026-10-20 | этап 36 | сверено с: таблица этапа | пунктов 3, сделано 3 | расхождения: нет | на следующий этап: Т-9',
+  DEPLOY: ['Файлы: a.php', 'Проверка: ок', 'Удалить: /old.php — не нужен', 'Чек-лист: включить кеш'] });
+
+test('EPERM на двух первых переименованиях (журнал читает соседняя сессия) — повтор, код 0, файлы как без сбоя (47.8в)', () => {
+  const plain = project();
+  assert.equal(run(plain, WITH_DECISION).code, 0);
+  const dir = project();
+  const r = runFaked(dir, WITH_DECISION, '2:');
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.deepEqual(snapshot(dir), snapshot(plain));
+});
+
+test('журнал не переименовался и после повторов — код 2 «записано частично» с уже записанными файлами; повтор той же команды не удваивает (47.8в)', () => {
+  const plain = project();
+  const once = run(plain, WITH_DECISION);
+  assert.equal(once.code, 0);
+  // Изменённые файлы удачного запуска — в порядке записи; журнал — последним, его и не дали переименовать.
+  const changed = once.stdout.split('Изменены файлы:\n')[1].split('\n').filter((l) => l.startsWith('"'));
+  assert.equal(changed[changed.length - 1], `"${J}"`);
+  const written = changed.slice(0, -1);
+  assert.ok(written.includes(`"${D}"`) && written.includes(`"${B}"`), written.join(', '));
+  const dir = project();
+  const r = runFaked(dir, WITH_DECISION, 'all:progress.md');
+  assert.equal(r.code, 2, r.stdout + r.stderr);
+  const line = r.stderr.split('\n').find((l) => l.includes('записано частично'));
+  assert.ok(line, r.stderr);
+  assert.ok(line.startsWith(`kit-journal: записано частично: ${written.join(', ')} — повтори ту же команду (повтор не удваивает)`), line);
+  assert.doesNotMatch(line.split(' — повтори')[0], /progress\.md/, 'журнал не записан — его нет в перечне');
+  for (const f of written) assert.equal(read(dir, f.slice(1, -1)), read(plain, f.slice(1, -1)), f + ' уже записан');
+  assert.doesNotMatch(r.stderr, /ничего не записано/);
+  assert.equal(read(dir, J), PROGRESS, 'журнал прежний');
+  assert.deepEqual(fs.readdirSync(path.join(dir, '.claude/docs')).filter((f) => f.includes('kit-tmp')), [], 'временных файлов нет');
+  const again = run(dir, WITH_DECISION);
+  assert.equal(again.code, 0, again.stdout + again.stderr);
+  assert.deepEqual(snapshot(dir), snapshot(plain));
+});
+
+test('первый же файл не переименовался — «ничего не записано», как раньше (47.8в)', () => {
+  const dir = project();
+  const before = snapshot(dir);
+  const r = runFaked(dir, WITH_DECISION, 'all:');
+  assert.equal(r.code, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /EPERM.*— ничего не записано/s);
+  assert.deepEqual(snapshot(dir), before);
+});

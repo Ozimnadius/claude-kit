@@ -105,3 +105,56 @@ test('assertNothingLost: строка пропала — SplitError, ничег�
   assert.throws(() => assertNothingLost('a\nb\nb\n', ['a\nb\n']), SplitError);
   assert.doesNotThrow(() => assertNothingLost('a\n\nb\n', ['b\n', 'новое\na\n']));
 });
+
+test('--migrate: EPERM на двух первых переименованиях — повтор, журнал разделён, как без сбоя (47.8в)', () => {
+  const { fakeRenameEnv } = require('./fake-rename');
+  const plain = project();
+  assert.equal(run(plain, '--migrate').code, 0);
+  const dir = project();
+  const r = runScript('journal-split.js', { args: ['--migrate'], cwd: dir, env: fakeRenameEnv('2:') });
+  assert.equal(r.code, 0, r.stderr);
+  for (const rel of ['progress.md', 'journal/decisions.md', 'journal/bugs.md', 'journal/reference.md', 'journal/stages/stage-01.md']) {
+    assert.equal(read(dir, rel), read(plain, rel), rel);
+  }
+});
+
+// Все файлы и папки .claude/docs с содержимым файлов.
+function tree(dir) {
+  const out = {};
+  const walk = (rel) => {
+    for (const e of fs.readdirSync(path.join(dir, '.claude/docs', rel), { withFileTypes: true })) {
+      const r = rel ? rel + '/' + e.name : e.name;
+      if (e.isDirectory()) {
+        out[r + '/'] = '';
+        walk(r);
+      } else out[r] = read(dir, r);
+    }
+  };
+  walk('');
+  return out;
+}
+
+test('progress.md занят и после повторов — новые части убраны, «ничего не записано … повтори позже», код 2; повтор после — как без сбоя: --migrate и --stage (47.8в, раунд 1)', () => {
+  const { fakeRenameEnv } = require('./fake-rename');
+  const plain = project();
+  assert.equal(run(plain, '--migrate').code, 0);
+  const dir = project();
+  const before = tree(dir);
+  const r = runScript('journal-split.js', { args: ['--migrate'], cwd: dir, env: fakeRenameEnv('all:progress.md') });
+  assert.equal(r.code, 2, r.stdout + r.stderr);
+  assert.match(r.stderr, /^journal-split: ничего не записано \(\.claude\/docs\/progress\.md занят: EPERM\) — повтори позже$/m);
+  assert.doesNotMatch(r.stderr, /удалите|частично/);
+  assert.deepEqual(tree(dir), before, 'новых частей и папок нет, progress.md прежний');
+  const again = run(dir, '--migrate');
+  assert.equal(again.code, 0, again.stderr);
+  assert.doesNotMatch(again.stdout, /уже по частям/);
+  assert.deepEqual(tree(dir), tree(plain));
+  // --stage: файл этапа — новый, журнал занят
+  const split = tree(dir);
+  const s = runScript('journal-split.js', { args: ['--stage', '3'], cwd: dir, env: fakeRenameEnv('all:progress.md') });
+  assert.equal(s.code, 2, s.stdout + s.stderr);
+  assert.match(s.stderr, /ничего не записано \(\.claude\/docs\/progress\.md занят: EPERM\) — повтори позже/);
+  assert.deepEqual(tree(dir), split, 'stage-03.md убран');
+  assert.equal(run(dir, '--stage', '3').code, 0);
+  assert.ok(exists(dir, 'journal/stages/stage-03.md'));
+});

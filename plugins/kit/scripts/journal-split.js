@@ -11,6 +11,7 @@
 const fs = require('fs');
 const path = require('path');
 const { resolveProjectDir, kitInfo } = require('./lib/project');
+const { writeFilesAtomic, PartialWriteError, NothingWrittenError } = require('./lib/atomic');
 
 const PARTS = {
   decisions: { file: 'decisions.md', title: 'решения', sections: ['Решения'] },
@@ -103,23 +104,16 @@ function assertNothingLost(source, outputs, except = []) {
   }
 }
 
-// Временный файл рядом → rename; файлы — по порядку, последним — progress.md.
-function writeAll(files) {
-  const tmps = [];
-  try {
-    for (const [file, text] of files) {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      const tmp = `${file}.${process.pid}.kit-tmp`;
-      fs.writeFileSync(tmp, text);
-      tmps.push([tmp, file]);
-    }
-    for (const [tmp, file] of tmps) fs.renameSync(tmp, file);
-  } finally {
-    for (const [tmp] of tmps) fs.rmSync(tmp, { force: true });
-  }
+// Временный файл рядом → rename; файлы — по порядку, последним — progress.md. Переименование при чужом читателе
+// повторяется (с 3.3.0, тот же приём, что у kit-journal.js). Не вышло и после повторов — новые части убираются (откат,
+// rollbackNew: до записи их не было — migrate без journal/decisions.md, closeStage без файла этапа): NothingWrittenError,
+// повтор безопасен. Подписи файлов — от папки проекта root.
+function writeAll(files, root) {
+  const label = (file) => path.relative(root, file).replace(/\\/g, '/');
+  writeFilesAtomic(files.map(([file, text]) => ({ file, text, label: label(file) })), { mkdir: true, rollbackNew: true });
 }
 
-function migrate(journalPath) {
+function migrate(journalPath, root = process.cwd()) {
   const dir = path.dirname(journalPath);
   if (fs.existsSync(path.join(dir, 'journal', PARTS.decisions.file))) return { changed: false, message: 'Журнал уже по частям (journal/decisions.md есть) — переносить нечего.' };
   const source = fs.readFileSync(journalPath, 'utf8');
@@ -169,11 +163,11 @@ function migrate(journalPath) {
   for (const [rel, lines] of stageFiles) files.push([path.join(dir, rel), join(lines)]);
   files.push([journalPath, join(progress)]);
   assertNothingLost(source, files.map(([, t]) => t));
-  writeAll(files);
+  writeAll(files, root);
   return { changed: true, message: `Журнал разделён: части — journal/decisions.md, bugs.md, reference.md; закрытых этапов перенесено — ${stageFiles.length}${keepN !== null ? `, текущий этап ${keepN} остался в ${path.basename(journalPath)}` : ''}.` };
 }
 
-function closeStage(journalPath, n) {
+function closeStage(journalPath, n, root = process.cwd()) {
   const dir = path.dirname(journalPath);
   if (!fs.existsSync(path.join(dir, 'journal'))) throw new SplitError('журнал не по частям (нет папки journal/) — сначала --migrate');
   const target = path.join(dir, stageFile(n));
@@ -208,7 +202,7 @@ function closeStage(journalPath, n) {
     [journalPath, join(progress)],
   ];
   assertNothingLost(source, files.map(([, t]) => t), replaced);
-  writeAll(files);
+  writeAll(files, root);
   return { changed: true, message: `Этап ${n} перенесён в ${stageFile(n)}${index ? ', оглавление «Этапы» обновлено' : ' (раздела «Этапы» нет — оглавление не обновлено)'}.` };
 }
 
@@ -217,7 +211,7 @@ function main(argv) {
     const info = kitInfo(resolveProjectDir({}));
     if (!info.hasJournal) throw new SplitError(`журнала ${info.journalRel} нет`);
     let r;
-    if (argv.includes('--migrate')) r = migrate(info.journalPath);
+    if (argv.includes('--migrate')) r = migrate(info.journalPath, info.dir);
     else {
       const si = argv.indexOf('--stage');
       const n = si >= 0 ? Number(argv[si + 1]) : NaN;
@@ -225,12 +219,16 @@ function main(argv) {
         console.error('Использование: node journal-split.js --migrate | --stage N');
         return 2;
       }
-      r = closeStage(info.journalPath, n);
+      r = closeStage(info.journalPath, n, info.dir);
     }
     console.log(r.message);
     return 0;
   } catch (e) {
-    console.error(`journal-split: ${e instanceof SplitError ? e.message : e.stack || e.message}`);
+    // Откат удался — на диске всё как было, повтор безопасен. Не удался (часть была и раньше или не удалилась) —
+    // повтор увидел бы «уже по частям» или «уже есть»: только перечень, без совета повторить.
+    if (e instanceof NothingWrittenError) console.error(`journal-split: ничего не записано (${e.message}) — повтори позже`);
+    else if (e instanceof PartialWriteError) console.error(`journal-split: ${e.message} — повтор команды перенос не доделает`);
+    else console.error(`journal-split: ${e instanceof SplitError ? e.message : e.stack || e.message}`);
     return 2;
   }
 }

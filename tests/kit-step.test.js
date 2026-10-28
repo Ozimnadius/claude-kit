@@ -1,6 +1,7 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
 const { gitRepo, git, writeFiles, runScript, makeProject } = require('./helpers');
 const { paramsMd, journalFiles } = require('./fixtures');
@@ -129,4 +130,16 @@ test('«Claude по SSH» без параметра «SSH прод» — код 
   const r = step(dir);
   assert.equal(r.code, 2, r.stdout + r.stderr);
   assert.match(r.stderr, /сухой прогон ssh-deploy\.js не прошёл \(код 2\).*SSH прод/);
+});
+
+test('git status без замка индекса (--no-optional-locks): у файла новое время изменения — индекс kit-step.js не переписан (47.8в)', () => {
+  const dir = repo();
+  writeFiles(dir, { 'b.php': 'новый' });
+  const old = new Date('2001-01-01T00:00:00Z');
+  fs.utimesSync(path.join(dir, 'a.php'), old, old); // содержимое то же — обычный git status обновил бы индекс
+  const index = path.join(dir, '.git', 'index');
+  const before = fs.readFileSync(index);
+  const r = step(dir);
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.ok(fs.readFileSync(index).equals(before), 'индекс переписан');
 });

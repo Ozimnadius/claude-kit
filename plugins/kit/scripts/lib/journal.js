@@ -8,6 +8,7 @@ const fs = require('fs');
 const path = require('path');
 const { normalize, getSection } = require('./md');
 const { serverEnv } = require('./project');
+const { writeFilesAtomic, PartialWriteError } = require('./atomic');
 
 class JournalError extends Error {}
 
@@ -705,19 +706,10 @@ function applyBlocks(info, b, { today }) {
 }
 
 // Временные файлы рядом → rename по порядку (журнал — последним); временные файлы убираются и при ошибке.
+// Переименование при чужом читателе повторяется (с 3.3.0); остановилось не на первом файле — PartialWriteError
+// с уже записанными (пути от корня): повтор тех же блоков их не удваивает.
 function writeAll(dir, files) {
-  const tmps = [];
-  try {
-    for (const [rel, text] of files) {
-      const file = path.join(dir, rel);
-      const tmp = `${file}.${process.pid}.kit-tmp`;
-      fs.writeFileSync(tmp, text);
-      tmps.push([tmp, file]);
-    }
-    for (const [tmp, file] of tmps) fs.renameSync(tmp, file);
-  } finally {
-    for (const [tmp] of tmps) fs.rmSync(tmp, { force: true });
-  }
+  writeFilesAtomic([...files].map(([rel, text]) => ({ file: path.join(dir, rel), text, label: rel })));
 }
 
-module.exports = { oldFormat, oldFormatText, parseBlocks, applyBlocks, writeAll, JournalError };
+module.exports = { oldFormat, oldFormatText, parseBlocks, applyBlocks, writeAll, JournalError, PartialWriteError };

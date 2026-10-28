@@ -238,3 +238,58 @@ test('plainPath: маски, «кроме», абсолютные и наруж�
     assert.equal(plainPath(bad), null, bad);
   }
 });
+
+// ---------- 47.8в: одновременный старт сессий — повтор переименования, без ложного «не удалось записать» ----------
+
+const { run: runExclude } = require('../plugins/kit/scripts/phpstorm-exclude');
+
+// fs.renameSync на время fn: act(from, to, n) — что сделать на n-м вызове: 'ok' — переименовать, 'fail' — EPERM,
+// 'neighbour' — переименовать (тот же файл записала соседняя сессия) и всё равно EPERM.
+function withRename(act, fn) {
+  const real = fs.renameSync;
+  let n = 0;
+  fs.renameSync = (from, to) => {
+    const a = act(++n);
+    if (a !== 'fail') real(from, to);
+    if (a !== 'ok') throw Object.assign(new Error('EPERM: operation not permitted, rename'), { code: 'EPERM' });
+  };
+  try {
+    return fn(() => n);
+  } finally {
+    fs.renameSync = real;
+  }
+}
+
+test('запись: EPERM дважды, затем переименование проходит — исключения добавлены, временного файла нет (47.8в)', () => {
+  const dir = makeProject({ '.claude/docs/progress.md': progressMd(), [XML]: BETA });
+  const r = withRename((n) => (n <= 2 ? 'fail' : 'ok'), (calls) => {
+    const res = runExclude(dir, { hook: true });
+    assert.equal(calls(), 3);
+    return res;
+  });
+  assert.equal(r.code, 0);
+  assert.match(r.lines.join('\n'), /^\[kit\] Исключения PhpStorm: добавлено «ftp» — \.claude, /);
+  assert.deepEqual(excluded(dir).slice(-4), ['.claude', ...TOOLS]);
+  assert.deepEqual(fs.readdirSync(path.join(dir, '.idea')), ['deployment.xml']);
+});
+
+test('запись не удалась, но исключения уже на месте (их записала соседняя сессия) — тишина, код 0; не на месте — «не удалось записать», как раньше (47.8в)', () => {
+  const dir = makeProject({ '.claude/docs/progress.md': progressMd(), [XML]: BETA });
+  const quiet = withRename(() => 'neighbour', () => runExclude(dir, { hook: true }));
+  assert.deepEqual(quiet, { code: 0, lines: [] });
+  assert.deepEqual(excluded(dir).slice(-4), ['.claude', ...TOOLS]);
+  const cliQuiet = makeProject({ '.claude/docs/progress.md': progressMd(), [XML]: BETA });
+  const c = withRename(() => 'neighbour', () => runExclude(cliQuiet, {}));
+  assert.equal(c.code, 0);
+  assert.doesNotMatch(c.lines.join('\n'), /не удалось записать/);
+  const other = makeProject({ '.claude/docs/progress.md': progressMd(), [XML]: BETA });
+  const loud = withRename(() => 'fail', (calls) => {
+    const res = runExclude(other, { hook: true });
+    assert.equal(calls(), 6, 'первая попытка и 5 повторов');
+    return res;
+  });
+  assert.equal(loud.code, 2);
+  assert.match(loud.lines[0], /^\[kit\] Исключения PhpStorm: не удалось записать \.idea\/deployment\.xml \(EPERM\) — добавьте в Excluded Paths руками: «ftp» — \.claude/);
+  assert.equal(xmlOf(other), BETA);
+  assert.deepEqual(fs.readdirSync(path.join(other, '.idea')), ['deployment.xml'], 'временный файл удалён');
+});

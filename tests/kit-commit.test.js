@@ -3,8 +3,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
+const { spawn } = require('child_process');
 const { gitRepo, git, writeFiles, runScript, makeProject } = require('./helpers');
-const { cleanMessage, parseArgs, PUSH_TIMEOUT_MS } = require('../plugins/kit/scripts/kit-commit');
+const { cleanMessage, parseArgs, lockRetry, PUSH_TIMEOUT_MS } = require('../plugins/kit/scripts/kit-commit');
+const { norm } = require('../plugins/kit/scripts/lib/paths');
 const { paramsMd, WORK_GITIGNORE, WORK_RULE, WORK_FILES } = require('./fixtures');
 
 const ENV = {
@@ -261,4 +263,163 @@ test('--push: удалённый отклонил хуком pre-receive — к�
   assert.equal(r.code, 4, r.stdout + r.stderr);
   assert.match(r.stdout, /kit-commit: не отправлено — удалённый репозиторий отклонил отправку/);
   assert.doesNotMatch(r.stdout, /есть коммиты, которых здесь нет/);
+});
+
+// ---------- 47.8в: абсолютные пути, чужой index.lock, git status без замка ----------
+
+// Буква диска в другом регистре (Windows): C:\… → c:\…
+const otherDriveCase = (p) => p.replace(/^[A-Za-z]/, (c) => (c === c.toUpperCase() ? c.toLowerCase() : c.toUpperCase()));
+
+test('абсолютные пути внутри репозитория («как видят инструменты»): обе формы косых и другой регистр буквы диска — код 0, без «сверх переданных» (47.8в)', () => {
+  const dir = gitRepo({ 'local/a.php': '1', 'local/b.php': '1', 'local/c.php': '1', 'x.txt': '1' });
+  writeFiles(dir, { 'local/a.php': '2', 'local/b.php': '2', 'local/c.php': '2', 'x.txt': '2' });
+  const back = path.join(dir, 'local', 'a.php');
+  const fwd = dir.replace(/\\/g, '/') + '/local/b.php';
+  const low = process.platform === 'win32' ? otherDriveCase(dir).replace(/\\/g, '/') + '/local/c.php' : path.join(dir, 'local', 'c.php');
+  const r = commit(dir, [back, fwd, low], '47.8: абсолютные пути\n');
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.doesNotMatch(r.stdout, /сверх переданных/);
+  assert.deepEqual(committed(dir), ['M\tlocal/a.php', 'M\tlocal/b.php', 'M\tlocal/c.php']);
+  assert.match(git(dir, 'status', '--short'), /x\.txt/, 'чужой файл не взят');
+});
+
+test('абсолютный путь под «Не коммитить» — код 1, как у относительного; путь вне репозитория — код 2, как раньше (47.8в)', () => {
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd({ 'Не коммитить': 'upload/ (кроме upload/docs/)' }), 'a.txt': '1' });
+  writeFiles(dir, { 'upload/iblock/x.jpg': 'jpg', 'a.txt': '2' });
+  const bad = commit(dir, ['a.txt', path.join(dir, 'upload', 'iblock', 'x.jpg')], '47.8: a\n');
+  assert.equal(bad.code, 1, bad.stdout + bad.stderr);
+  assert.match(bad.stdout, /upload\/iblock\/x\.jpg: запрещённый путь/);
+  assert.equal(staged(dir), '');
+  const outside = makeProject({ 'y.txt': 'y' });
+  const out = commit(dir, ['a.txt', path.join(outside, 'y.txt')], '47.8: a\n');
+  assert.equal(out.code, 2, out.stdout + out.stderr);
+  assert.equal(count(dir), 1);
+});
+
+test('parseArgs с корнем: абсолютный путь внутри — от корня с «/», сам корень — «.», снаружи и относительные — как раньше (47.8в)', () => {
+  const root = path.join(makeProject(), 'repo');
+  const fwd = root.replace(/\\/g, '/');
+  assert.deepEqual(parseArgs(['--', path.join(root, 'local', 'a.php'), fwd + '/b/', './c.txt'], root).paths, ['local/a.php', 'b', 'c.txt']);
+  if (process.platform === 'win32') assert.deepEqual(parseArgs(['--', otherDriveCase(fwd) + '/A.php'], root).paths, ['A.php']);
+  assert.match(parseArgs(['--', root], root).error, /«\.»/);
+  assert.deepEqual(parseArgs(['--', fwd + '-other/x.php'], root).paths, [norm(fwd + '-other/x.php')], 'соседняя папка с тем же началом имени — не внутри');
+});
+
+// Чужой замок индекса (параллельный git status соседней сессии, PhpStorm): отдельный процесс снимает его через ms.
+function lockIndex(dir, ms) {
+  const lock = path.join(dir, '.git', 'index.lock');
+  fs.writeFileSync(lock, '');
+  if (ms !== undefined) {
+    spawn(process.execPath, ['-e', `setTimeout(() => require('fs').rmSync(${JSON.stringify(lock)}, { force: true }), ${ms})`], { stdio: 'ignore' });
+  }
+  return lock;
+}
+
+test('index.lock снимается через ~0,7 с — git add повторяется, код 0 (47.8в)', () => {
+  const dir = gitRepo({ 'a.txt': '1\n' });
+  writeFiles(dir, { 'a.txt': '2\n' });
+  lockIndex(dir, 700);
+  const r = commit(dir, ['a.txt'], '47.8: a\n');
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(count(dir), 2);
+  assert.deepEqual(committed(dir), ['M\ta.txt']);
+});
+
+test('index.lock снимается через ~0,7 с, а git add не нужен (только помеченное удаление) — повторяется git commit, код 0 (47.8в)', () => {
+  const dir = gitRepo({ 'old.txt': '1\n', 'a.txt': '1\n' });
+  git(dir, 'rm', '-q', 'old.txt');
+  lockIndex(dir, 700);
+  const r = commit(dir, ['old.txt'], '47.8: удалить old\n');
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.equal(count(dir), 2);
+  assert.deepEqual(committed(dir), ['D\told.txt']);
+});
+
+test('index.lock не снимается — код 2 с выводом git, коммита нет (47.8в)', () => {
+  const dir = gitRepo({ 'a.txt': '1\n' });
+  writeFiles(dir, { 'a.txt': '2\n' });
+  const lock = lockIndex(dir);
+  try {
+    const r = commit(dir, ['a.txt'], '47.8: a\n');
+    assert.equal(r.code, 2, r.stdout + r.stderr);
+    assert.match(r.stdout, /index\.lock/);
+    assert.match(r.stdout, /git add не прошёл, коммита нет/);
+    assert.equal(count(dir), 1);
+  } finally {
+    fs.rmSync(lock, { force: true });
+  }
+});
+
+test('lockRetry: повтор только при index.lock и пока safe() — не больше 3 раз (47.8в)', () => {
+  const LOCK = { code: 128, out: "fatal: Unable to create '/x/.git/index.lock': File exists." };
+  const OK = { code: 0, out: '' };
+  let calls = 0;
+  const seq = (...rs) => {
+    calls = 0;
+    return () => rs[Math.min(calls++, rs.length - 1)];
+  };
+  const pauses = [];
+  const pause = (ms) => pauses.push(ms);
+  assert.equal(lockRetry(seq(LOCK, LOCK, OK), () => true, pause).code, 0);
+  assert.equal(calls, 3);
+  assert.deepEqual(pauses, [500, 500]);
+  assert.equal(lockRetry(seq(LOCK), () => true, pause).code, 128);
+  assert.equal(calls, 4, 'первая попытка и 3 повтора');
+  assert.equal(lockRetry(seq(LOCK, OK), () => false, pause).code, 128, 'safe() — нет: коммит мог случиться, повтора нет');
+  assert.equal(calls, 1);
+  assert.equal(lockRetry(seq({ code: 1, out: 'хук отклонил' }, OK), () => true, pause).code, 1, 'другая ошибка — без повтора');
+  assert.equal(calls, 1);
+});
+
+test('самопроверка смотрит git status без замка индекса (--no-optional-locks): индекс после коммита не переписан (47.8в)', () => {
+  const dir = gitRepo({ 'a.txt': '1\n', 'b.txt': '1\n' });
+  writeFiles(dir, {
+    'a.txt': '2\n',
+    // После коммита у b.txt другое время изменения (содержимое то же) — обычный git status обновил бы индекс; снимок индекса.
+    '.git/hooks/post-commit': "#!/bin/sh\ntouch -d '2001-01-01 00:00:00' b.txt\ncp .git/index .git/index.after\n",
+  });
+  fs.chmodSync(path.join(dir, '.git/hooks/post-commit'), 0o755);
+  const r = commit(dir, ['a.txt'], '47.8: a\n');
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.ok(fs.readFileSync(path.join(dir, '.git/index')).equals(fs.readFileSync(path.join(dir, '.git/index.after'))), 'индекс переписан после коммита');
+});
+
+// Хук pre-commit сам сдвигает HEAD коммитом с сообщением msg (родитель — прежний HEAD), печатает «index.lock» и падает:
+// так git commit «упал на замке», а коммит уже есть. Каждый запуск хука — строка в .git/hook-runs.
+function movingHook(dir, msg) {
+  writeFiles(dir, {
+    '.git/hooks/pre-commit': '#!/bin/sh\necho run >> .git/hook-runs\nunset GIT_INDEX_FILE\n'
+      + `T=$(git rev-parse HEAD^{tree}); C=$(printf '%s\\n' '${msg}' | git commit-tree $T -p HEAD); git update-ref HEAD $C\n`
+      + "echo \"fatal: Unable to create '.git/index.lock': File exists.\" >&2\nexit 1\n",
+  });
+  fs.chmodSync(path.join(dir, '.git/hooks/pre-commit'), 0o755);
+  return () => fs.readFileSync(path.join(dir, '.git/hook-runs'), 'utf8').split('\n').filter(Boolean).length;
+}
+
+test('git commit упал на index.lock, а HEAD сдвинул коммит с нашим сообщением и родителем — код 3 со сводкой коммита, без повтора (47.8в, раунд 1)', () => {
+  const dir = gitRepo({ 'a.txt': '1\n' });
+  writeFiles(dir, { 'a.txt': '2\n' });
+  const before = git(dir, 'rev-parse', '--short', 'HEAD').trim();
+  const runs = movingHook(dir, '47.8: a');
+  const r = commit(dir, ['a.txt'], '47.8: a\n');
+  assert.equal(r.code, 3, r.stdout + r.stderr);
+  assert.equal(runs(), 1, 'git commit не повторялся');
+  assert.equal(count(dir), 2, 'второго коммита нет');
+  const now = git(dir, 'rev-parse', '--short', 'HEAD').trim();
+  assert.match(r.stdout, new RegExp('^' + now + ' 47\\.8: a$', 'm'), 'сводка git show --stat');
+  assert.match(r.stdout, /повтор не выполнен/);
+  assert.ok(r.stdout.includes(before), 'прежний HEAD назван');
+  assert.doesNotMatch(r.stdout, /проверь git log/);
+});
+
+test('git commit упал, а HEAD сдвинул чужой коммит (другое сообщение) — код 2 «наш не создан», без повтора (47.8в, раунд 1)', () => {
+  const dir = gitRepo({ 'a.txt': '1\n' });
+  writeFiles(dir, { 'a.txt': '2\n' });
+  const runs = movingHook(dir, 'соседняя сессия');
+  const r = commit(dir, ['a.txt'], '47.8: a\n');
+  assert.equal(r.code, 2, r.stdout + r.stderr);
+  assert.equal(runs(), 1);
+  assert.match(r.stdout, /HEAD сдвинул чужой коммит, наш не создан/);
+  assert.equal(count(dir), 2);
+  assert.equal(lastMessage(dir), 'соседняя сессия\n');
 });

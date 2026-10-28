@@ -486,3 +486,20 @@ test('--history: коммит, который не удалось прочита
   assert.equal(r.code, 1, r.stdout + r.stderr);
   assert.match(r.stdout, new RegExp(first + ': коммит слишком большой для проверки'));
 });
+
+test('--paths: абсолютный путь внутри проекта — как относительный: под «Не коммитить» код 1, папка раскрывается по git status (47.8в)', () => {
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd({ 'Не коммитить': 'upload/ (кроме upload/docs/)' }) });
+  writeFiles(dir, { 'upload/iblock/x.jpg': 'jpg', 'upload/docs/a.txt': 'a' });
+  const rel = scan(dir, '--paths', '--', 'upload/iblock/x.jpg');
+  assert.equal(rel.code, 1, rel.stdout);
+  for (const abs of [path.join(dir, 'upload', 'iblock', 'x.jpg'), dir.replace(/\\/g, '/') + '/upload/iblock/x.jpg']) {
+    const r = scan(dir, '--paths', '--', abs);
+    assert.equal(r.code, 1, r.stdout);
+    assert.match(r.stdout, /^ {2}upload\/iblock\/x\.jpg: запрещённый путь \(upload\/ \(кроме upload\/docs\/\)\)$/m);
+  }
+  const folder = scan(dir, '--paths', '--', path.join(dir, 'upload'));
+  assert.equal(folder.code, 1, folder.stdout);
+  assert.match(folder.stdout, /^ {2}upload\/iblock\/x\.jpg: запрещённый путь/m);
+  assert.doesNotMatch(folder.stdout, /upload\/docs\/a\.txt/);
+  assert.equal(scan(dir, '--paths', '--', path.join(dir, 'upload', 'docs', 'a.txt')).code, 0, 'исключение «кроме» — и для абсолютного');
+});
