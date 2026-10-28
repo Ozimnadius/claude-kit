@@ -567,3 +567,18 @@ test('project-init: система Мэтта — вопрос, параметр
   }
   assert.match(read('templates', 'CLAUDE.md'), /^- Система Мэтта: \{\{да \| нет\}\}$/m);
 });
+
+test('project-init: исправления по глубокому исследованию — worktree, маркетплейс, ID шага не по тикету (47.8е)', () => {
+  const init = skill('project-init').body;
+  const s46a = init.slice(init.indexOf('### 4.6а Система Мэтта'), init.indexOf('### 4.7'));
+  // Р-22: сессия в worktree — команды claude plugin не запускать; маркетплейс не найден — добавить и повторить.
+  for (const s of ['.claude/worktrees/', 'claude plugin marketplace add anthropics/claude-plugins-official']) {
+    assert.ok(s46a.includes(s), 'project-init п. 4.6а: ' + s);
+  }
+  // 47.8е, раунд 1: сессия в worktree — стоп уже в разведке, до записей и шага 4.8 на ветке worktree.
+  const s1 = init.slice(init.indexOf('## 1. Разведка'), init.indexOf('## 2. Вопросы'));
+  for (const s of ['.claude/worktrees/', 'этот запуск дальше не веди и шаг не закрывай']) assert.ok(s1.includes(s), 'project-init п. 1: ' + s);
+  // Р-10: шаг не по тикету в этапе Мэтта — N.0а, N.0б: номера без буквы заняты тикетами.
+  const s48 = init.slice(init.indexOf('### 4.8 Закрыть шаг'));
+  assert.ok(s48.includes('`N.0а`'), 'project-init п. 4.8: N.0а');
+});

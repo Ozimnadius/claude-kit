@@ -83,10 +83,10 @@ function cycle() {
 
 // 3. Хуки: событие → признак kit-проекта → скрипт → проверка → итог.
 function hooks() {
-  const d = makeDiagram('d3', 1040, 660, 'Хуки: каждое событие сначала проверяет, kit-проект ли это; если нет — тишина. SessionStart дописывает исключения PhpStorm, кладёт в контекст раздел «Сейчас» и правила и сверяет ветку с удалённым репозиторием; PreToolUse запрещает cd вне подоболочки и sed -i по PHP, а в проекте Мэтта (с 3.3.0) ещё коммит в обход /kit:step-done, ветки и worktree при автозаливке (guard-bash.js), файлы Мэтта в корне проекта и worktree у субагента и подчинённой сессии (guard-matt.js); PostToolUse после правки прогоняет php -l и при ошибке возвращает код 2, а после вопроса пользователю записывает ответ во входящие для /kit:step-done.');
-  d.box({ x: 20, y: 22, w: 200, h: 140, k: 'hook', L: [['tm', 'SessionStart'], ['m', 'startup · resume'], ['m', 'clear · compact']] });
+  const d = makeDiagram('d3', 1040, 660, 'Хуки: каждое событие сначала проверяет, kit-проект ли это; если нет — тишина. SessionStart дописывает исключения PhpStorm, кладёт в контекст раздел «Сейчас» и правила и сверяет ветку с удалённым репозиторием; PreToolUse запрещает cd вне подоболочки и sed -i по PHP, а в проекте Мэтта (с 3.3.0) ещё коммит в обход /kit:step-done, ветки и worktree, при автозаливке — перезапись рабочей копии старыми версиями (guard-bash.js), файлы Мэтта в корне проекта и уход в worktree (guard-matt.js); PostToolUse после правки прогоняет php -l и при ошибке возвращает код 2, а после вопроса пользователю записывает ответ во входящие для /kit:step-done.');
+  d.box({ x: 20, y: 22, w: 200, h: 140, k: 'hook', L: [['tm', 'SessionStart'], ['m', 'startup · resume'], ['m', 'clear · compact'], ['m', 'fork']] });
   d.box({ x: 20, y: 200, w: 200, h: 70, k: 'hook', L: [['tm', 'PreToolUse'], ['m', 'Bash · PowerShell']] });
-  d.box({ x: 20, y: 312, w: 200, h: 82, k: 'hook', L: [['tm', 'PreToolUse'], ['m', 'Write · Edit · Agent'], ['m', 'start_session']] });
+  d.box({ x: 20, y: 312, w: 200, h: 82, k: 'hook', L: [['tm', 'PreToolUse'], ['m', 'Write · Edit · Agent'], ['m', 'EnterWorktree'], ['m', 'start_session']] });
   d.box({ x: 20, y: 424, w: 200, h: 70, k: 'hook', L: [['tm', 'PostToolUse'], ['m', 'Write · Edit · MultiEdit']] });
   d.box({ x: 20, y: 524, w: 200, h: 70, k: 'hook', L: [['tm', 'PostToolUse'], ['m', 'AskUserQuestion']] });
   d.box({ x: 262, y: 22, w: 130, h: 572, k: 'core', L: [['t', 'kit-проект?'], ['s', '«Параметры»'], ['s', 'или журнал']] });
@@ -116,9 +116,9 @@ function hooks() {
   d.box({ x: 662, y: 22, w: 358, h: 40, k: 'ext', L: [['s', 'Excluded Paths в .idea/deployment.xml']] });
   d.box({ x: 662, y: 72, w: 358, h: 40, L: [['s', 'в контекст Claude: «Сейчас» + правила']] });
   d.box({ x: 662, y: 122, w: 358, h: 40, k: 'ext', L: [['s', 'git fetch → pull --ff-only, push или стоп']] });
-  d.box({ x: 662, y: 190, w: 180, h: 92, L: [['m', 'cd вне ( … )'], ['m', 'Set-Location'], ['m', 'sed -i по .php'], ['m', 'git commit (Мэтт)'], ['m', 'ветки при Always']] });
+  d.box({ x: 662, y: 175, w: 180, h: 120, L: [['m', 'cd вне ( … )'], ['m', 'Set-Location'], ['m', 'sed -i по .php'], ['s', 'Мэтт:'], ['m', 'коммит мимо kit'], ['m', 'ветки, worktree'], ['m', 'bisect… при Always']] });
   d.box({ x: 870, y: 210, w: 150, h: 50, k: 'user', L: [['t', 'deny'], ['s', '+ причина']] });
-  d.box({ x: 662, y: 320, w: 180, h: 66, L: [['m', 'GLOSSARY.md, adr/,'], ['m', '.scratch/ в корне'], ['m', 'worktree при Always']] });
+  d.box({ x: 662, y: 313, w: 180, h: 80, L: [['m', 'GLOSSARY.md, adr/,'], ['m', '.scratch/… в корне'], ['m', 'worktree'], ['m', 'remote при Always']] });
   d.box({ x: 870, y: 328, w: 150, h: 50, k: 'user', L: [['t', 'deny'], ['s', '+ причина']] });
   d.box({ x: 662, y: 426, w: 180, h: 66, L: [['s', '.php и параметр'], ['s', '«PHP» — путь'], ['s', 'к php.exe']] });
   d.box({ x: 870, y: 434, w: 150, h: 50, k: 'user', L: [['t', 'код 2'], ['s', 'ошибка → Claude']] });
