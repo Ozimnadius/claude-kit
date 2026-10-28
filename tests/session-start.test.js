@@ -1,20 +1,29 @@
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('fs');
 const path = require('path');
-const { makeProject, writeFiles, runScript } = require('./helpers');
+const { makeProject, tmpDir, writeFiles, runScript } = require('./helpers');
 const { ALPHA_CLAUDE_MD, GAMMA_CLAUDE_MD, paramsMd, progressMd, journalFiles } = require('./fixtures');
+const { kitInfo } = require('../plugins/kit/scripts/lib/project');
+const { mattRules } = require('../plugins/kit/scripts/session-start');
+
+// Файлов плагинов и настроек этого компьютера тесты не читают: по умолчанию оба пути — на файл, которого нет.
+const NO_FILE = path.join(tmpDir('kit-ss-nofile-'), 'нет.json');
 
 // Хук отдаёт JSON (с 3.1.0): stdout — контекст Claude, user — напоминание пользователю.
-const run = (dir) => {
+// env — переменные окружения хука (KIT_PLUGINS_FILE, KIT_USER_SETTINGS — поверх «нет файла»).
+const runEnv = (dir, env = {}) => {
   const r = runScript('session-start.js', {
     input: { hook_event_name: 'SessionStart', source: 'startup', cwd: dir },
+    env: { KIT_PLUGINS_FILE: NO_FILE, KIT_USER_SETTINGS: NO_FILE, ...env },
   });
   if (!r.stdout) return { ...r, user: '' };
   const o = JSON.parse(r.stdout);
   assert.equal(o.hookSpecificOutput.hookEventName, 'SessionStart');
   return { ...r, stdout: o.hookSpecificOutput.additionalContext, user: o.systemMessage || '' };
 };
+const run = (dir) => runEnv(dir);
 const VERSION = require('../plugins/kit/.claude-plugin/plugin.json').version;
 
 test('чужой проект — тишина', () => {
@@ -193,4 +202,144 @@ test('версия kit: совпала — тихо, иначе напомина
   assert.match(at('3.x').user, /Проект настроен на kit 3\.x, установлен/, 'не разобрана — тоже расхождение');
   const noParams = run(makeProject({ '.claude/docs/progress.md': progressMd() }));
   assert.equal(noParams.user, '', 'нет раздела параметров — своё правило, без напоминания');
+});
+
+// Система Мэтта (с 3.3.0): правила Мэтта вместо правил superpowers; плагин не на проекте — напоминание о /kit:project-init.
+const MATT_PLUGIN = 'mattpocock-skills@claude-plugins-official';
+const MATT_PARAMS = { 'Выкладка': 'PhpStorm Always', 'Система Мэтта': 'да', 'Версия kit': VERSION };
+const MATT_RULE = /- Система Мэтта \(проект Мэтта\)/;
+const MATT_REMIND_CTX = '- Система Мэтта: да, но плагин mattpocock-skills на этот проект не поставлен или выключен — запустите /kit:project-init (поставит его и выключит superpowers в проекте).';
+const MATT_REMIND_USER = '[kit] Система Мэтта: плагин mattpocock-skills на этот проект не поставлен — запустите /kit:project-init.';
+
+// Подставной installed_plugins.json: запись плагина Мэтта на проект dir (поля поверх — over).
+function pluginsOn(dir, over = {}) {
+  const file = path.join(tmpDir('kit-ss-plugins-'), 'installed_plugins.json');
+  const rec = { scope: 'project', projectPath: dir, installPath: '/x', version: '1.3.1', ...over };
+  fs.writeFileSync(file, JSON.stringify({ version: 2, plugins: { [MATT_PLUGIN]: [rec] } }));
+  return { KIT_PLUGINS_FILE: file };
+}
+
+const mattFiles = (params = MATT_PARAMS) => ({ '.claude/CLAUDE.md': paramsMd(params), '.claude/docs/progress.md': progressMd() });
+
+test('проект Мэтта с плагином: правила Мэтта и места файлов, без правил superpowers', () => {
+  const dir = makeProject(mattFiles());
+  const { stdout: ctx, user } = runEnv(dir, pluginsOn(dir));
+  assert.match(ctx, MATT_RULE);
+  assert.match(ctx, /work\/<тема>-build\//);
+  assert.match(ctx, /matt-skill\.js" <имя>/);
+  assert.doesNotMatch(ctx, /Superpowers по правилам kit/);
+  assert.doesNotMatch(ctx, /Superpowers при автозаливке/);
+  assert.equal(user, '');
+  assert.ok(!ctx.includes(MATT_REMIND_CTX), 'напоминания нет');
+  // Путь к скрипту — абсолютный, с «/», и файл по нему есть.
+  const script = /node "([^"]+matt-skill\.js)" <имя>/.exec(ctx)[1];
+  assert.ok(!script.includes('\\'), script);
+  assert.ok(path.isAbsolute(script) && fs.existsSync(script), 'скрипт есть: ' + script);
+  // Места файлов — по папке документов проекта.
+  assert.ok(ctx.includes('- Файлы системы Мэтта — в .claude/docs/: карта, тикеты-решения и спек — work/<тема>/ (map.md, issues/NN-<slug>.md, spec.md), '
+    + 'тикеты реализации — work/<тема>-build/ (issues/NN-<slug>.md, README.md), глоссарий — GLOSSARY.md, ADR — adr/NNNN-<slug>.md, '
+    + 'исследования и прочие документы навыков — work/, прототипы prototype — HTML в work/<тема>/ (варианты экранов на сайте — только где правки не уходят на прод сами); '
+    + 'трекер задач — эти локальные файлы. В корень проекта (GLOSSARY.md, CONTEXT.md, docs/adr/, docs/agents/, .scratch/) не пиши.\n'), ctx);
+  assert.match(ctx, /implement-spec и setup-matt-pocock-skills не используются; вопросы грилинга — через AskUserQuestion\./);
+  assert.match(ctx, /## Правила процесса \(плагин kit\)/, 'общие правила kit на месте');
+});
+
+test('проект Мэтта без плагина на проекте: напоминание о /kit:project-init в контексте и пользователю, правила superpowers на месте', () => {
+  const dir = makeProject(mattFiles());
+  // Запись есть, но на другой проект — для этого проекта плагин не поставлен.
+  const { stdout: ctx, user } = runEnv(dir, pluginsOn(path.join(dir, 'другой')));
+  assert.ok(ctx.includes(MATT_REMIND_CTX), ctx);
+  assert.equal(user, MATT_REMIND_USER);
+  assert.match(ctx, /Superpowers по правилам kit/);
+  assert.match(ctx, /Superpowers при автозаливке/);
+  assert.doesNotMatch(ctx, MATT_RULE);
+  assert.doesNotMatch(ctx, /Файлы системы Мэтта/);
+  // Нет installed_plugins.json вовсе — то же самое, без сбоя.
+  const none = runEnv(makeProject(mattFiles()));
+  assert.equal(none.code, 0);
+  assert.equal(none.user, MATT_REMIND_USER);
+  assert.ok(none.stdout.includes(MATT_REMIND_CTX));
+  // Битый installed_plugins.json — как «не установлен».
+  const broken = path.join(tmpDir('kit-ss-broken-'), 'installed_plugins.json');
+  fs.writeFileSync(broken, '{не json');
+  const bad = runEnv(makeProject(mattFiles()), { KIT_PLUGINS_FILE: broken });
+  assert.equal(bad.code, 0);
+  assert.equal(bad.user, MATT_REMIND_USER);
+  assert.match(bad.stdout, /Superpowers по правилам kit/);
+});
+
+test('проект Мэтта, плагин выключен в настройках проекта: напоминание, правила superpowers', () => {
+  const dir = makeProject({ ...mattFiles(), '.claude/settings.json': JSON.stringify({ enabledPlugins: { [MATT_PLUGIN]: false } }) });
+  const r = runEnv(dir, pluginsOn(dir));
+  assert.ok(r.stdout.includes(MATT_REMIND_CTX), r.stdout);
+  assert.equal(r.user, MATT_REMIND_USER);
+  assert.match(r.stdout, /Superpowers по правилам kit/);
+  assert.doesNotMatch(r.stdout, MATT_RULE);
+});
+
+test('напоминание о Мэтте и о версии kit — пользователю вместе, через перевод строки', () => {
+  const dir = makeProject(mattFiles({ ...MATT_PARAMS, 'Версия kit': '0.0.1' }));
+  const lines = runEnv(dir).user.split('\n');
+  assert.equal(lines.length, 2, lines.join(' | '));
+  assert.match(lines[0], /^\[kit\] Проект настроен на kit 0\.0\.1, установлен /);
+  assert.equal(lines[1], MATT_REMIND_USER);
+});
+
+test('сессия в worktree приложения: плагин на проект ищется по основной папке', () => {
+  const main = makeProject();
+  const wt = writeFiles(path.join(main, '.claude', 'worktrees', 'brave-turing-1a2b3c'), mattFiles());
+  const r = runEnv(wt, pluginsOn(main));
+  assert.match(r.stdout, MATT_RULE);
+  assert.equal(r.user, '');
+});
+
+test('обычный kit-проект: строк Мэтта нет, superpowers по правилам kit', () => {
+  const files = mattFiles({ 'Выкладка': 'PhpStorm Always', 'Версия kit': VERSION });
+  const plain = runEnv(makeProject(files));
+  assert.match(plain.stdout, /Superpowers по правилам kit/);
+  assert.match(plain.stdout, /Superpowers при автозаливке/);
+  assert.doesNotMatch(plain.stdout, /Система Мэтта|Мэтт/);
+  assert.equal(plain.user, '');
+  // «нет» — как обычный проект, даже если плагин на проекте стоит.
+  const dir = makeProject(mattFiles({ ...MATT_PARAMS, 'Система Мэтта': 'нет' }));
+  const off = runEnv(dir, pluginsOn(dir));
+  assert.match(off.stdout, /Superpowers по правилам kit/);
+  assert.doesNotMatch(off.stdout, /Система Мэтта|Мэтт/);
+  assert.equal(off.user, '');
+});
+
+test('плагин Мэтта 9.9.9 при большой работе — строка «проверены на 1.3.1» для Claude, не пользователю; без work/*/issues/ — строки нет', () => {
+  const warn = /- Плагин Мэтта обновился: правила kit проверены на 1\.3\.1, стоит 9\.9\.9 — если навык ведёт себя не так, как в \/kit:matt \(пути, имена навыков, поля тикетов\), сверь и скажи пользователю\./;
+  const big = makeProject({ ...mattFiles(), '.claude/docs/work/alpha-topic/issues/01-first.md': '# тикет\n' });
+  const r = runEnv(big, pluginsOn(big, { version: '9.9.9' }));
+  assert.match(r.stdout, MATT_RULE);
+  assert.match(r.stdout, warn);
+  assert.equal(r.user, '', 'пользователю строки о версии плагина нет');
+  const small = makeProject({ ...mattFiles(), '.claude/docs/work/alpha-topic/spec.md': '# спек\n' });
+  assert.doesNotMatch(runEnv(small, pluginsOn(small, { version: '9.9.9' })).stdout, /Плагин Мэтта обновился/, 'папки issues/ нет — строки нет');
+  assert.doesNotMatch(runEnv(big, pluginsOn(big)).stdout, /Плагин Мэтта обновился/, 'версия 1.3.1 — строки нет');
+});
+
+test('mattRules: не проект Мэтта — пусто; плагин на проекте — правила; нет плагина — напоминание', () => {
+  const plain = makeProject(mattFiles({ 'Версия kit': VERSION }));
+  assert.deepEqual(mattRules(kitInfo(plain)), { on: false, lines: [], user: '' });
+  const dir = makeProject(mattFiles());
+  const prev = { p: process.env.KIT_PLUGINS_FILE, s: process.env.KIT_USER_SETTINGS };
+  try {
+    process.env.KIT_USER_SETTINGS = NO_FILE;
+    process.env.KIT_PLUGINS_FILE = pluginsOn(dir).KIT_PLUGINS_FILE;
+    const on = mattRules(kitInfo(dir));
+    assert.equal(on.on, true);
+    assert.equal(on.user, '');
+    assert.equal(on.lines.length, 2, 'правило и места файлов; версия плагина проверена — строки о версии нет');
+    process.env.KIT_PLUGINS_FILE = NO_FILE;
+    const off = mattRules(kitInfo(dir));
+    assert.equal(off.on, false);
+    assert.deepEqual(off.lines, [MATT_REMIND_CTX]);
+    assert.equal(off.user, MATT_REMIND_USER);
+  } finally {
+    for (const [k, v] of [['KIT_PLUGINS_FILE', prev.p], ['KIT_USER_SETTINGS', prev.s]]) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
 });

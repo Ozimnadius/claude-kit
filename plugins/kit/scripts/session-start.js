@@ -2,6 +2,8 @@
 'use strict';
 // Хук SessionStart (startup|resume|clear|compact): раздел «Сейчас» из журнала и правила процесса в контекст.
 // С 3.1.0 — JSON: контекст — в hookSpecificOutput.additionalContext, напоминание о версии kit — пользователю (systemMessage).
+// С 3.3.0 в проекте с «Система Мэтта: да» и плагином mattpocock-skills на проекте — правила Мэтта вместо правил superpowers;
+// плагина нет — правила superpowers и напоминание о /kit:project-init (в контекст и пользователю).
 // Вне kit-проекта молчит. Любая ошибка — тихий выход 0.
 const fs = require('fs');
 const path = require('path');
@@ -9,6 +11,7 @@ const { readStdinJson, resolveProjectDir, kitInfo, serverEnv } = require('./lib/
 const { getSection } = require('./lib/md');
 const { readDeployment } = require('./lib/deployment');
 const { oldFormat, oldFormatText } = require('./lib/journal');
+const { isMattProject, mattPlugin, bigWorkActive, MATT_VERIFIED } = require('./lib/matt');
 
 const MAX_NOW = 4000;
 
@@ -41,6 +44,10 @@ const RULE_NO_PARAMS = '- В .claude/CLAUDE.md нет раздела «Пара�
 const SPEC_TEMPLATE = path.join(__dirname, '..', 'skills', 'project-init', 'templates', 'spec.md');
 const RULE_SP_ALWAYS = '- Superpowers при автозаливке: без отдельных веток и worktree (.worktrees, using-git-worktrees) — правки из них не дойдут до сервера.';
 const RULE_WORKTREE ='- Сессия работает в git worktree — правки здесь не попадут на сервер автозаливкой основной папки, пока их не сольют в основную ветку; не проверяй результат на сервере сразу после записи.';
+// Система Мэтта (с 3.3.0): путь к скрипту навыков — абсолютный, с «/», как у SPEC_TEMPLATE.
+const MATT_SKILL_SCRIPT = path.join(__dirname, 'matt-skill.js').replace(/\\/g, '/');
+const MATT_REMIND = '- Система Мэтта: да, но плагин mattpocock-skills на этот проект не поставлен или выключен — запустите /kit:project-init (поставит его и выключит superpowers в проекте).';
+const MATT_REMIND_USER = '[kit] Система Мэтта: плагин mattpocock-skills на этот проект не поставлен — запустите /kit:project-init.';
 
 // Установленная версия kit — из манифеста плагина, рядом со скриптом.
 function installedVersion() {
@@ -88,6 +95,40 @@ function superpowersRule(docsRel) {
     + 'задача плана = шаг kit N.M; выбранный подход и отвергнутые — в DECISIONS; TDD — только где в проекте есть тесты.';
 }
 
+// Правила проекта с «Система Мэтта: да» (вместо правил superpowers) → { on, lines, user }.
+// on — плагин mattpocock-skills на проекте и включён: lines — правила Мэтта; иначе lines — напоминание о /kit:project-init,
+// user — то же пользователю (systemMessage). Не проект Мэтта — всё пусто, installed_plugins.json не читается.
+function mattRules(info) {
+  const off = { on: false, lines: [], user: '' };
+  if (!info.isKit || !isMattProject(info.params)) return off;
+  let plugin;
+  try {
+    plugin = mattPlugin(info.dir);
+  } catch (e) {
+    // не смогли определить — как «не поставлен»
+    plugin = { installed: false, enabled: false, version: '' };
+  }
+  if (!plugin.installed || !plugin.enabled) return { on: false, lines: [MATT_REMIND], user: MATT_REMIND_USER };
+  const docs = info.docsRel;
+  const lines = [
+    '- Система Мэтта (проект Мэтта): навыки mattpocock-skills — всегда с префиксом mattpocock-skills:, superpowers в проекте выключен. '
+      + 'Большая работа (не влезет в одну-две сессии) — по навыку /kit:matt: общая сессия, исполнитель на каждый тикет, приёмка через /kit:step-done; '
+      + 'без пользователя (он сам разрешил) — коммит без просмотра по /kit:matt, разбор потом. Мелкая задача — сделать и закрыть /kit:step-done. '
+      + 'Навыки только по команде (wayfinder, to-spec, to-tickets, implement и др.) читай файлом: node "' + MATT_SKILL_SCRIPT + '" <имя>. '
+      + 'implement-spec и setup-matt-pocock-skills не используются; вопросы грилинга — через AskUserQuestion.',
+    '- Файлы системы Мэтта — в ' + docs + '/: карта, тикеты-решения и спек — work/<тема>/ (map.md, issues/NN-<slug>.md, spec.md), '
+      + 'тикеты реализации — work/<тема>-build/ (issues/NN-<slug>.md, README.md), глоссарий — GLOSSARY.md, ADR — adr/NNNN-<slug>.md, '
+      + 'исследования и прочие документы навыков — work/, прототипы prototype — HTML в work/<тема>/ (варианты экранов на сайте — только где правки не уходят на прод сами); '
+      + 'трекер задач — эти локальные файлы. В корень проекта (GLOSSARY.md, CONTEXT.md, docs/adr/, docs/agents/, .scratch/) не пиши.',
+  ];
+  // Версия плагина изменилась — правила kit проверены на другой; важно, пока идёт большая работа.
+  if (plugin.version !== MATT_VERIFIED && bigWorkActive(info.dir, docs)) {
+    lines.push('- Плагин Мэтта обновился: правила kit проверены на ' + MATT_VERIFIED + ', стоит ' + plugin.version
+      + ' — если навык ведёт себя не так, как в /kit:matt (пути, имена навыков, поля тикетов), сверь и скажи пользователю.');
+  }
+  return { on: true, lines, user: '' };
+}
+
 // Автозаливка PhpStorm включена — .idea основной папки (из git worktree — папка выше .claude/worktrees). Нет файла — нет.
 function phpStormAlways(dir) {
   const root = String(dir || '').replace(/[\\/]\.claude[\\/]worktrees[\\/].*$/i, '');
@@ -103,7 +144,8 @@ function inWorktree(dir) {
   return String(dir || '').replace(/\\/g, '/').toLowerCase().includes('/.claude/worktrees/');
 }
 
-function buildContext(info) {
+// matt — уже посчитанные mattRules(info) (main считает один раз и для текста, и для напоминания пользователю).
+function buildContext(info, matt = mattRules(info)) {
   if (!info.isKit) return '';
   const out = ['[kit] Проект ведётся по журналу ' + info.journalRel + '.'];
   if (info.hasJournal) {
@@ -145,19 +187,28 @@ function buildContext(info) {
     out.push('- Журнал по частям: решения — ' + parts + 'decisions.md, баги — ' + parts + 'bugs.md, справочник и материалы заказчика — '
       + parts + 'reference.md, закрытые этапы — ' + parts + 'stages/; ищи и там.');
   }
-  out.push(superpowersRule(info.docsRel));
-  if (always) out.push(RULE_SP_ALWAYS);
+  // Проект Мэтта с плагином — правила Мэтта вместо правил superpowers; иначе superpowers, а при «да» без плагина — ещё и напоминание.
+  if (!matt.on) {
+    out.push(superpowersRule(info.docsRel));
+    if (always) out.push(RULE_SP_ALWAYS);
+  }
+  out.push(...matt.lines);
   return out.join('\n') + '\n';
 }
 
 function main() {
   try {
     const info = kitInfo(resolveProjectDir(readStdinJson()));
-    const text = buildContext(info);
+    const matt = mattRules(info);
+    const text = buildContext(info, matt);
     if (text) {
       const o = { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } };
+      // Пользователю: напоминание о версии kit и напоминание о Мэтте — через перевод строки.
       const note = versionNote(info.params, installedVersion());
-      if (note) o.systemMessage = '[kit] ' + note;
+      const notes = [];
+      if (note) notes.push('[kit] ' + note);
+      if (matt.user) notes.push(matt.user);
+      if (notes.length) o.systemMessage = notes.join('\n');
       process.stdout.write(JSON.stringify(o) + '\n');
     }
   } catch (e) {
@@ -167,4 +218,4 @@ function main() {
 }
 
 if (require.main === module) main();
-module.exports = { buildContext, inWorktree, docsRule, versionNote, cmpVersion };
+module.exports = { buildContext, mattRules, inWorktree, docsRule, versionNote, cmpVersion };
