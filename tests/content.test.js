@@ -470,25 +470,86 @@ test('финальная проверка этапа 36: повторный proj
   assert.ok(row.indexOf('archive/') > 0 && row.indexOf('archive/') < row.indexOf('kit-journal.js'), 'README: архив этапа — до журнала: ' + row);
 });
 
-test('matt: общая сессия, папки, задание исполнителю, приёмка, режим без пользователя; не больше 12 КБ', () => {
-  assert.ok(fs.statSync(path.join(PLUGIN, 'skills', 'matt', 'SKILL.md')).size <= 12288);
+test('matt: ядро ≤ 12 КБ и справки tracker.md, autonomous.md — общая сессия, задание исполнителю, приёмка, режим без пользователя (47.8г)', () => {
+  const dir = path.join(PLUGIN, 'skills', 'matt');
+  const core = path.join(dir, 'SKILL.md');
+  assert.ok(fs.statSync(core).size <= 12288, 'ядро matt — ' + fs.statSync(core).size + ' байт');
   const { fm, body } = skill('matt');
   assert.equal(fm.name, 'matt');
-  assert.notEqual(fm['disable-model-invocation'], 'true', 'Claude вызывает сам');
-  for (const s of ['scripts/matt-skill.js"', 'work/<тема>-build/', 'в работе, этап', 'mcp__ccd_session__start_session', '`fresh`',
-    '`use_worktree`', 'Status: claimed', 'Status: ready-for-human', 'Status: resolved', '## Comments', 'AskUserQuestion',
-    '/kit:step-done', '--inbox', 'принят без просмотра', 'mattpocock-skills:code-review', 'PhpStorm Always', 'reference/ssh.md',
-    'git show --stat', 'implement-spec']) {
-    assert.ok(body.includes(s), s);
+  assert.ok(!('disable-model-invocation' in fm), 'Claude вызывает сам — без disable-model-invocation');
+  assert.ok(fm.description.length >= 80 && fm.description.length <= 200, 'описание — ' + fm.description.length + ' символов (Р-15: бюджет описаний)');
+  const read = (f) => {
+    const raw = fs.readFileSync(f);
+    assert.ok(!(raw[0] === 0xef && raw[1] === 0xbb && raw[2] === 0xbf), 'BOM: ' + path.basename(f));
+    const s = raw.toString('utf8');
+    assert.ok(!s.includes('\r'), 'CRLF: ' + path.basename(f));
+    return s;
+  };
+  read(core);
+  const tracker = read(path.join(dir, 'reference', 'tracker.md'));
+  const auto = read(path.join(dir, 'reference', 'autonomous.md'));
+  const edges = read(path.join(dir, 'reference', 'edges.md'));
+  const all = body + '\n' + tracker + '\n' + auto + '\n' + edges;
+  // 47.8г, раунд 1: нарезке тикеты можно; карточка без wake_when_done; background от 80; варианты прототипа на сайте;
+  // файлы спека и нарезки; правки карты — до просмотра, после «Коммитить» — только resolved; навык — не wayfinder.
+  for (const s of ['нарезке новые тикеты можно', '`own_initiative` без `wake_when_done`', 'от 80 символов', 'только если правки не уходят на прод сами',
+    'git status --porcelain -uall` папок темы', 'До просмотра (раздел 4 `/kit:step-done`)', 'только `Status: resolved`', '`## Notes` карты, не `wayfinder`',
+    'вызывать /kit:matt']) {
+    assert.ok(body.includes(s), 'ядро, раунд 1: ' + s);
   }
-  // 47.8а: только в проекте Мэтта; исполнитель не закрывает шаг; поле session — в файле входящих; без пользователя — без отправки.
+  for (const s of ['`needs-*` — не во фронте', 'без вопроса и без «Готово:» — спроси пользователя', '`claimed`, `ready-for-human`, `resolved` — статусы kit',
+    'До просмотра в `/kit:step-done`']) {
+    assert.ok(tracker.includes(s), 'tracker.md, раунд 1: ' + s);
+  }
+  // Раунд 2: диапазон номеров ADR; -uall; «Залить на сервер» в порядке SSH; коммит первого принятого; нарезка публикует тикеты.
+  for (const s of ['<NNNN>–<MMMM>', 'git status --porcelain -uall', 'не взятые тикеты карты']) assert.ok(body.includes(s), 'ядро, раунд 2: ' + s);
+  for (const s of ['<NNNN>–<MMMM>', 'git status --porcelain -uall', '«Залить на сервер»', 'кроме нарезки', 'общая сессия (карта) или исполнитель нарезки']) {
+    assert.ok(tracker.includes(s), 'tracker.md, раунд 2: ' + s);
+  }
+  assert.ok(edges.includes('${CLAUDE_PLUGIN_ROOT}/skills/matt/reference/autonomous.md'), 'edges.md: полный путь autonomous.md');
+  assert.ok(auto.includes('первый тикет целиком при пользователе'), 'autonomous.md: Manual — первый тикет при пользователе');
+  // Строки общего хода — в ядре (ядро самодостаточно, справки — по ссылке).
+  for (const s of ['/kit:step-done', 'AskUserQuestion', 'mcp__ccd_session__start_session', '`fresh`', '`use_worktree`', 'scripts/matt-skill.js"',
+    'implement-spec', '${CLAUDE_PLUGIN_ROOT}/skills/matt/reference/tracker.md', '${CLAUDE_PLUGIN_ROOT}/skills/matt/reference/autonomous.md',
+    'mcp__ccd_session__mark_chapter', 'general-purpose', 'не fork', 'git status --porcelain', 'N.0а', '/setup-matt-pocock-skills',
+    '<side-sessions-event>', '`own_initiative`', '`permission_mode`', 'до конца сессии', 'путями от корня проекта', '--inbox']) {
+    assert.ok(body.includes(s), 'ядро: ' + s);
+  }
+  // Прежний список — в ядре или справках.
+  for (const s of ['work/<тема>-build/', 'в работе, этап', 'Status: claimed', 'Status: ready-for-human', 'Status: resolved', '## Comments',
+    'принят без просмотра', 'mattpocock-skills:code-review', 'PhpStorm Always', 'reference/ssh.md', 'git show --stat']) {
+    assert.ok(all.includes(s), 'ядро или справки: ' + s);
+  }
+  // 47.8а: только в проекте Мэтта; исполнитель не закрывает шаг; поле session — в файле входящих.
   assert.match(body.trimStart(), /^# [^\n]+\n\n[^\n]*«Система Мэтта: да»[^\n]*не применяй/, 'первая строка тела — только при «Система Мэтта: да»');
   assert.ok(/^Нельзя: коммитить и вызывать \/kit:step-done;/m.test(body), 'исполнителю — без /kit:step-done');
   assert.ok(body.includes('полю `session` в `.claude/kit-inbox.jsonl`: `--list` его не печатает'), 'где смотреть поле session');
-  const solo = body.slice(body.indexOf('## 7. Без пользователя'), body.indexOf('## 8.'));
-  const review = body.slice(body.indexOf('## 8.'), body.indexOf('## 9.'));
-  assert.ok(solo.includes('без `--push`'), '§7: без отправки');
-  assert.ok(review.includes('`--push`'), '§8: отправка после разбора');
+  // Р-3: навыки только по команде — файлом, не инструментом Skill; отказ — пользователь вводит команду.
+  assert.match(body, /инструментом Skill не вызывай/, 'Р-3: ядро');
+  assert.ok(/^Навыки только по команде — файлом \(путь выше\), инструментом Skill не вызывай/m.test(body), 'Р-3: в задании исполнителю');
+  // Р-6: фронт исключает и claimed, и ready-for-human.
+  assert.match(body, /\*\*Фронт\*\*[^\n]*не `claimed` и не `ready-for-human`/, 'Р-6: фронт');
+  // Р-7, Р-8, Р-5, М-7, Р-11 — строки задания.
+  for (const s of ['новые тикеты, правку и удаление других тикетов', 'prototype — без шага сохранения в ветку', 'research — без веток и push',
+    'git diff HEAD -- <файлы тикета>', 'не трёхточечный', 'швы tdd — из спека']) {
+    assert.ok(body.includes(s), 'задание: ' + s);
+  }
+  // Р-4, Р-9 (без пользователя — без отправки до разбора), Р-1 (режим разрешений), лимиты, сжатие.
+  const solo = auto.slice(auto.indexOf('## 1.'), auto.indexOf('## 2.'));
+  const review = auto.slice(auto.indexOf('## 2.'));
+  assert.ok(solo.length > 0 && review.length > 0, 'autonomous.md: разделы 1 (без пользователя) и 2 (разбор)');
+  for (const s of ['«Auto (Рекомендую)»', '«Bypass permissions»', '«Остаюсь в Manual»', 'без `git push` и `--push`', 'mcp__ccd_session_mgmt__get_usage',
+    '`not_applicable`', 'mcp__ccd_host__request_keep_awake', 'matt-skill.js', 'PhpStorm Always']) {
+    assert.ok(solo.includes(s), 'autonomous.md §1: ' + s);
+  }
+  assert.ok(review.includes('`--push`') && review.includes('git show --stat'), 'autonomous.md §2: отправка после разбора');
+  // Р-13: справка трекера — источник и лицензия, места kit, поля, ответ, вопрос и «готово».
+  assert.match(tracker.split('\n').slice(0, 4).join('\n'), /mattpocock-skills 1\.3\.1[^\n]*MIT/, 'tracker.md: строка об источнике в начале');
+  for (const s of ['map.md', '<тема>-build/issues/NN-<slug>.md', 'README.md', 'Type:', 'research', 'prototype', 'grilling', 'task',
+    'Status: claimed', 'Status: ready-for-human', 'Status: resolved', '**Status:** ready-for-agent', 'Blocked by:', '## Answer', 'Decisions so far',
+    '## Comments', '«Готово:»', '/setup-matt-pocock-skills']) {
+    assert.ok(tracker.includes(s), 'tracker.md: ' + s);
+  }
 });
 
 test('project-init: система Мэтта — вопрос, параметр, плагин на проект и выключение superpowers (п. 4.6а)', () => {
