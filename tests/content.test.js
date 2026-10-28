@@ -482,3 +482,17 @@ test('matt: общая сессия, папки, задание исполнит
     assert.ok(body.includes(s), s);
   }
 });
+
+test('project-init: система Мэтта — вопрос, параметр, плагин на проект и выключение superpowers (п. 4.6а)', () => {
+  const read = (...p) => fs.readFileSync(path.join(PLUGIN, 'skills', 'project-init', ...p), 'utf8');
+  const init = read('SKILL.md');
+  for (const s of ['«Вести проект по системе Мэтта Покока?»', '### 4.6а Система Мэтта', 'scripts/matt-skill.js" --status',
+    'claude plugin install mattpocock-skills@claude-plugins-official --scope project',
+    'claude plugin enable mattpocock-skills@claude-plugins-official --scope project',
+    'claude plugin disable superpowers@claude-plugins-official --scope project',
+    'claude plugin disable mattpocock-skills@claude-plugins-official --scope project',
+    'claude plugin enable superpowers@claude-plugins-official --scope project', 'перезапустите сессию']) {
+    assert.ok(init.includes(s), 'project-init: ' + s);
+  }
+  assert.match(read('templates', 'CLAUDE.md'), /^- Система Мэтта: \{\{да \| нет\}\}$/m);
+});
