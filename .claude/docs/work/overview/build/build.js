@@ -113,13 +113,13 @@ html{scroll-behavior:smooth}
 
 const toc = [
   ['karta', 'Карта'], ['cikl', 'Цикл работы'], ['huki', 'Хуки'], ['step-done', '/kit:step-done'], ['zhurnal', 'Журнал и планы'],
-  ['server', '/kit:server'], ['visual', '/kit:visual'], ['report', '/kit:report'], ['udalennyj', 'Удалённый репозиторий'], ['project-init', '/kit:project-init'],
+  ['server', '/kit:server'], ['visual', '/kit:visual'], ['report', '/kit:report'], ['udalennyj', 'Удалённый репозиторий'], ['project-init', '/kit:project-init'], ['matt', '/kit:matt'],
   ['parametry', 'Параметры'], ['grabli', 'Грабли и защита'], ['vypusk', 'Выпуск и обновление'],
 ];
 
 const lede = 'Плагин Claude Code, который ведёт проект по шагам: журнал с решениями и проверками, один коммит на проверенный шаг, выкладка, работа на сервере, снимки «до/после» и отчёт заказчику. Внутри — общий каркас для любых проектов и модуль для сайтов на 1С-Битрикс.';
 const gate = '<b>Главное условие.</b> Плагин включается только в kit-проекте — там, где в <code>.claude/CLAUDE.md</code> есть раздел «Параметры для агентов» или лежит журнал <code>.claude/docs/progress.md</code>. В остальных папках хуки молчат. Проект старого формата (журнал в <code>docs/</code> или одним файлом, старые значения параметров) хук находит при старте и предлагает <code>/kit:project-init</code> — переезд на формат kit 3.0. Ошибка внутри хука сессию не ломает: любой сбой — тихий выход с кодом 0.';
-const footer = 'Собрано по исходникам <code>plugins/kit</code> версии 3.0.0 (скиллы, хуки и скрипты), 16 октября 2026. Пересборка страницы, схем и Markdown: <code>node .claude/docs/work/overview/build/build.js</code> из корня репозитория.';
+const footer = 'Собрано по исходникам <code>plugins/kit</code> версии 3.3.0 (скиллы, хуки и скрипты), 28 октября 2026. Пересборка страницы, схем и Markdown: <code>node .claude/docs/work/overview/build/build.js</code> из корня репозитория.';
 
 // Основной текст. fig(ключ, подпись) — схема: на странице — встроенный SVG, в Markdown — картинка из img/.
 const main = (fig) => `
@@ -182,16 +182,19 @@ const main = (fig) => `
       <tr><td>старый формат (с 3.0.0)</td><td>журнал не в <code>.claude/docs</code>, одним файлом, без «Как проверено», старая таблица решений, «дев+прод» или «вручную; дев — PhpStorm Always» — предложить /kit:project-init: переезд на формат kit 3.0; до переезда kit шаги не закрывает</td></tr>
       <tr><td>нет «Параметров для агентов»</td><td>предложить /kit:project-init</td></tr>
       <tr><td>всегда</td><td>где лежат документы (<code>work/</code>, <code>archive/</code>, реестр)</td></tr>
-      <tr><td>всегда (с 2.8.0)</td><td>superpowers по правилам kit: спеки и планы — в <code>work/</code> по шаблону <code>spec.md</code>, в плане — чек-лист задач (с 2.13.0), сам superpowers не коммитит, задача плана = шаг kit</td></tr>
+      <tr><td>всегда, кроме проекта Мэтта с плагином (с 2.8.0)</td><td>superpowers по правилам kit: спеки и планы — в <code>work/</code> по шаблону <code>spec.md</code>, в плане — чек-лист задач (с 2.13.0), сам superpowers не коммитит, задача плана = шаг kit</td></tr>
       <tr><td>журнал по частям (с 2.13.0)</td><td>где лежат части: решения, баги, справочник, закрытые этапы — искать и там</td></tr>
-      <tr><td>автозаливка (с 2.8.0)</td><td>superpowers — без отдельных веток и worktree</td></tr>
+      <tr><td>автозаливка, кроме проекта Мэтта с плагином (с 2.8.0)</td><td>superpowers — без отдельных веток и worktree</td></tr>
+      <tr><td>«Система Мэтта: да» и плагин Мэтта на проекте (с 3.3.0)</td><td>правил superpowers и строки «автозаливка — без веток» нет; вместо них — правила Мэтта: указатель на <code>/kit:matt</code>, команда <code>matt-skill.js &lt;имя&gt;</code> для навыков «только по команде», места файлов; если установлена не 1.3.1 (правила kit проверены на ней) и есть папка <code>&lt;docs&gt;/work/*/issues/</code> — ещё строка сверить правила с навыком</td></tr>
+      <tr><td>«Система Мэтта: да», но плагина на проекте нет (с 3.3.0)</td><td>правила superpowers остаются, добавляется напоминание Claude и пользователю: запустить <code>/kit:project-init</code> (включение плагинов на проект лежит в <code>.claude/settings.json</code>, а он не в git)</td></tr>
     </tbody>
   </table></div>
   <p>Второй скрипт SessionStart, <code>phpstorm-exclude.js</code>, дописывает в <code>.idea/deployment.xml</code> исключения <code>.idea</code>, <code>.git</code>, <code>.claude</code>, простые пути из «Не выкладывать» и служебные папки superpowers (<code>.superpowers</code>, <code>.worktrees</code>, <code>docs/superpowers</code>, с 2.8.0) — каждому серверу, сопоставленному с корнем проекта. Он только добавляет и ничего не удаляет; из worktree работает с основной папкой проекта. Исключение — параметр «Документы на сервере: да» (с 2.6.0): тогда хук убирает исключение <code>.claude</code> целиком и исключает всё в ней поимённо, кроме <code>docs</code>, <code>CLAUDE.md</code> и <code>.htaccess</code> (нет <code>.htaccess</code> — создаёт), — документы уезжают на сервер автозаливкой, папка закрыта из веба. В режиме «Claude по SSH» (с 2.18.0) хук держит <code>.claude</code> исключённой: документы туда же заливает <code>/kit:step-done</code> скриптом <code>ssh-deploy.js --docs</code>.</p>
   <p>Третий скрипт SessionStart, <code>remote-check.js</code> (с 2.5.0), работает, только если задан параметр «Удалённый репозиторий». Он делает <code>git fetch</code> не дольше 8 секунд и без окон входа и сравнивает ветку с удалённой: новые коммиты там — Claude до любой правки выполняет <code>git pull --ff-only</code>; неотправленные здесь — отправляет; разошлись — останавливается и спрашивает. Нет сети или входа — строка «не удалось проверить», работа идёт дальше.</p>
   <h3>Страж команд и php -l</h3>
   <ul>
-    <li><code>guard-bash.js</code> разбирает команду как оболочка: вырезает heredoc, here-string и комментарии, делит на команды по <code>;</code>, <code>&amp;&amp;</code>, <code>|</code>. <code>cd</code> в Bash разрешён только внутри подоболочки <code>( cd … &amp;&amp; … )</code>; в PowerShell <code>cd</code> и <code>Set-Location</code> запрещены везде — скобки там не помогают. Например, при подготовке этого обзора страж остановил команду Claude с <code>cd</code>, и её пришлось переписать через подоболочку.</li>
+    <li><code>guard-bash.js</code> разбирает команду как оболочка: вырезает heredoc, here-string и комментарии, делит на команды по <code>;</code>, <code>&amp;&amp;</code>, <code>|</code>. <code>cd</code> в Bash разрешён только внутри подоболочки <code>( cd … &amp;&amp; … )</code>; в PowerShell <code>cd</code> и <code>Set-Location</code> запрещены везде — скобки там не помогают. Например, при подготовке этого обзора страж остановил команду Claude с <code>cd</code>, и её пришлось переписать через подоболочку. В проекте Мэтта (с 3.3.0) отказывает ещё в двух случаях: <code>git commit</code> в обход <code>/kit:step-done</code> (коммит делает только <code>kit-commit.js</code> — исполнитель не коммитит, тикет принимает общая сессия) и при «Выкладка: PhpStorm Always» создание веток и worktree (<code>checkout -b</code>, <code>switch -c</code>, <code>branch &lt;имя&gt;</code>, <code>worktree add</code>) — файлы с диска уезжают на сервер.</li>
+    <li><code>guard-matt.js</code> (с 3.3.0) — PreToolUse на <code>Write</code>, <code>Edit</code>, <code>MultiEdit</code>, <code>NotebookEdit</code>, <code>Agent</code>, <code>Task</code> и <code>start_session</code>, только в проекте с «Система Мэтта: да». Запись в корень проекта (на сайте это корень сайта) <code>GLOSSARY.md</code>, <code>GLOSSARY-MAP.md</code>, <code>CONTEXT.md</code>, <code>CONTEXT-MAP.md</code>, <code>docs/adr/</code>, <code>docs/agents/</code>, <code>.scratch/</code> — отказ с подсказкой: глоссарий и ADR — в папке документов, карта, спек и тикеты — в <code>work/&lt;тема&gt;/</code>. При «Выкладка: PhpStorm Always» отказ субагенту с <code>isolation: worktree</code> и подчинённой сессии с worktree: правки из копии не дойдут до сервера.</li>
     <li><code>php-lint.js</code> берёт <code>php.exe</code> из параметра «PHP» — только абсолютный путь к существующему файлу, иначе молчит. Скрипты для сервера (<code>.claude/scripts/</code>, библиотека <code>/kit:server</code>) пишутся без <code>&lt;?php</code>: хук проверяет их через временную копию с этой приставкой и сдвигает номера строк обратно.</li>
     <li><code>decision-inbox.js</code> (с 2.9.0) — PostToolUse на <code>AskUserQuestion</code>: каждый ответ пользователя (вопрос, варианты с описаниями, выбор или свой текст) дописывается в локальный <code>.claude/kit-inbox.jsonl</code> — не в git и не на сервер. <code>kit-step.js</code> выдаёт их готовыми строками решений («почему» — описание выбранного варианта, «что отвергли» — другие), <code>/kit:step-done</code> отбрасывает процедурные, <code>kit-commit.js --inbox</code> после проверенного коммита убирает разобранное — решения переживают сжатие контекста.</li>
   </ul>
@@ -371,7 +374,7 @@ const main = (fig) => `
   <p>Запускается только командой. В существующем проекте дополняет недостающее и ничего не перезаписывает. Порядок важен — особенно пункт 7.</p>
   <ol class="steps">
     <li><b>Разведка, только чтение.</b> git и его настройки, файлы kit, признаки старого формата (из правила хука), признаки Битрикса (<code>bitrix/</code>, <code>local/</code>, <code>urlrewrite.php</code>), <code>.idea</code>: автозаливка, серверы, домен из <code>webServers.xml</code>, File Watchers.</li>
-    <li><b>Вопросы</b> — не больше четырёх за раз, найденное разведкой — первым с пометкой «(Рекомендую)»: режим и окружение; затем адрес сервера, задача, исключения, вотчеры; удалённый репозиторий и «Ставить скиллы Битрикса?» (с 3.0.0 — при каждом запуске).</li>
+    <li><b>Вопросы</b> — не больше четырёх за раз, найденное разведкой — первым с пометкой «(Рекомендую)»: режим и окружение; затем адрес сервера, задача, исключения, вотчеры; удалённый репозиторий и «Ставить скиллы Битрикса?» (с 3.0.0 — при каждом запуске); с 3.3.0 там же «Вести проект по системе Мэтта Покока?» — тоже при каждом запуске.</li>
     <li><b>Версия PHP.</b> <code>site-probe.js</code> читает <code>X-Powered-By</code> прода и находит такой же <code>php.exe</code> в OSPanel — для хука <code>php -l</code>.</li>
     <li><b>SSH.</b> Псевдонимы из <code>~/.ssh/config</code> (с <code>Include</code>, только строки <code>Host</code>/<code>HostName</code>/<code>User</code>, ключи не открываются), затем <code>ssh-probe.js</code> — одно подключение: папка сайта и PHP CLI нужной версии. <span class="tag u">ветка</span>Новый хост — пользователь один раз входит сам; сменился отпечаток — стоп.</li>
     <li><b>Выкладка</b> (с 2.17.0) — когда окружение и SSH уже известны: окружение — один сервер, прод или дев; варианты «PhpStorm Always» / «Claude по SSH» (если SSH есть) / «вручную»; при автозаливке и «Claude по SSH» — вопрос «Документы на сервере» (при SSH — с 2.18.0).</li>
@@ -381,9 +384,22 @@ const main = (fig) => `
     <li><b>Файлы kit.</b> <code>.claude/.htaccess</code>, <code>.claude/CLAUDE.md</code> из шаблона (или дописать только раздел параметров), журнал и план выкладки в <code>.claude/docs</code>. Шаблоны собираются во временной папке и пишутся одной записью, когда не осталось ни одного <code>{{…}}</code>.</li>
     <li><b>Проверка снаружи.</b> <code>check-closed.js</code> запрашивает каждый файл <code>.claude</code> по каждому адресу: 404, 403 и 401 — норма, «ОТКРЫТ» или редирект — стоп и разбор.</li>
     <li><b>Битрикс: скиллы</b> (с 2.7.0; с 3.0.0 — отдельным вопросом). Ответ «Да» — <code>bitrix-skills.js</code> ставит в <code>.claude/skills</code> свежие версии скиллов из bxmaximum/bitrix-framework-skills (без <code>bitrix24-*</code>) и bitrix-tools/best-practice — 46 штук, уже поставленные обновляет; «Нет» — не трогает. В правила проекта — строка «код на Битриксе — по этим скиллам». В git и на сервер скиллы не попадают.</li>
+    <li><b>Система Мэтта</b> (с 3.3.0). «Да» — <code>claude plugin install mattpocock-skills@claude-plugins-official --scope project</code> (или <code>enable</code>, если стоит выключенным) и <code>claude plugin disable superpowers@claude-plugins-official --scope project</code>; сверка <code>matt-skill.js --status</code>; нужен перезапуск сессии. «Нет» после «да» — плагин Мэтта выключается, superpowers включается обратно; глоссарий, ADR и папки тем остаются. Плагин не скачался — параметр всё равно «да», хук напомнит.</li>
     <li><b>Переезд на формат kit 3.0</b> (с 3.0.0), если хук нашёл старый формат: строка плана на каждый признак — <code>docs/</code> → <code>.claude/docs</code> (исключения, <code>.gitignore</code>, старые копии на сервере, таблица «файл → куда», перенос), журнал на части, столбец «Как проверено», новая таблица решений, старые «Окружение» и «Выкладка», строки «Код пишет» и «Коммит»; в конце — проверка хуком. Отказ — kit 3.0 в проекте шаги не закрывает.</li>
     <li><b>Закрытие.</b> При автозаливке пользователь включает её и заливает записанное, пока она была выключена (<code>.claude/.htaccess</code> — первым), затем проверка снаружи. <code>/kit:step-done</code> — шаг <code>0.2</code> закрывает этап 0: он только инициализация (с 2.16.0), рабочие шаги начинаются с <code>1.1</code>. Шаг переезда — очередной шаг текущего этапа, а без открытого этапа — первый шаг нового этапа «переезд на kit 3.0».</li>
   </ol>
+</section>
+
+<section id="matt">
+  <h2>Система Мэтта Покока <span class="cmd">/kit:matt</span></h2>
+  <p>Для больших работ, которые не влезут в одну-две сессии. Система Мэтта (<a href="https://github.com/mattpocock/skills">mattpocock/skills</a>, лицензия MIT) — отдельный плагин <code>mattpocock-skills</code>; kit его не копирует и не переводит, а ставит на проект и задаёт правила его работы — так же, как уже живёт с superpowers. Включается только ответом «да» на вопрос <code>/kit:project-init</code> и параметром «Система Мэтта: да»; по ходу работы Claude её не предлагает. В проекте Мэтта superpowers выключен.</p>
+  <ul>
+    <li><b>Мелкая задача</b> — без карты и тикетов: сделать и закрыть <code>/kit:step-done</code>. <b>Большая</b> — Claude вызывает навык <code>/kit:matt</code>; маршрут (карта <code>wayfinder</code>, или грилинг → <code>to-spec</code> → <code>to-tickets</code>, или сразу сделать) предлагает пользователю вопросом.</li>
+    <li><b>Общая сессия</b> — координатор: держит карту и очередь тикетов, на каждый тикет запускает исполнителя, принимает отчёт; сама тикеты не решает. <b>Исполнитель</b> — подчинённая сессия приложения Claude, если нужен пользователь, иначе фоновый субагент; задание — по шаблону навыка. Навыки Мэтта «только по команде» Claude вызвать не может: исполнитель читает файл навыка, путь выдаёт <code>matt-skill.js</code>.</li>
+    <li><b>Приёмка.</b> Тикет = шаг kit <code>&lt;этап&gt;.&lt;номер тикета&gt;</code>; общая сессия закрывает его через <code>/kit:step-done</code> одним коммитом только с файлами тикета, в тикете — <code>Status: resolved</code>. Два этапа: подготовка (карта, спек, нарезка) и реализация (тикеты <code>&lt;тема&gt;-build/</code>).</li>
+    <li><b>Без пользователя</b> — только по его слову и не при «PhpStorm Always» на проде: тикет закрывается после проверок и ревью навыком <code>mattpocock-skills:code-review</code> в общей сессии без вопроса «Коммитить», с пометкой «принят без просмотра»; вопросы — в <code>## Comments</code> тикета; между тикетами — проверка лимитов; когда пользователь вернулся — разбор по одному тикету.</li>
+    <li><b>Файлы</b> — в папке документов: <code>work/&lt;тема&gt;/</code> (<code>map.md</code>, тикеты, <code>spec.md</code>), <code>work/&lt;тема&gt;-build/</code>, <code>GLOSSARY.md</code>, <code>adr/</code>; в корень проекта — ничего (страж <code>guard-matt.js</code>). Закрытие этапа реализации переносит обе папки темы в <code>archive/</code> вместе.</li>
+  </ul>
 </section>
 
 <section id="parametry">
@@ -405,10 +421,11 @@ const main = (fig) => `
       <tr><td>Документы на сервере</td><td></td><td></td><td>${dot}</td><td></td><td></td><td></td><td></td><td></td><td></td><td>${dot}</td><td></td></tr>
       <tr><td>Не коммитить</td><td></td><td></td><td></td><td></td><td>${dot}</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
       <tr><td>Секреты</td><td></td><td></td><td></td><td></td><td>${dot}</td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
+      <tr><td>Система Мэтта (с 3.3.0)</td><td>${dot}</td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>
       <tr><td>Удалённый репозиторий</td><td></td><td></td><td></td><td>${dot}</td><td></td><td></td><td></td><td></td><td></td><td>${dot}</td><td></td></tr>
     </tbody>
   </table></div>
-  <p>«ID шага» скрипты не читают — по нему Claude называет шаги и закрывает их в <code>/kit:step-done</code>. «Удалённый репозиторий» читает ещё <code>kit-commit.js --push</code> из <code>/kit:step-done</code>; «Журнал» и «План выкладки» — ещё <code>/kit:report</code>, «Журнал» — <code>journal-split.js</code> и <code>decision-inbox.js</code>; «SSH прод/дев», «Не выкладывать» и «Документы на сервере» — ещё <code>ssh-deploy.js</code>. Строки «Код пишет» и «Коммит» с 3.0.0 никто не читает. Пути в «Не выкладывать» и «Не коммитить»: со <code>/</code> — от корня проекта (<code>bitrix/</code> не задевает копии шаблонов в <code>local/templates/…/bitrix/</code>), без <code>/</code> — имя в любом месте пути; <code>X (кроме Y)</code> — исключение из правила.</p>
+  <p>«Система Мэтта» читают <code>session-start.js</code>, <code>guard-bash.js</code> и <code>guard-matt.js</code> (через <code>lib/matt.js</code>) и навык <code>/kit:matt</code>; строки нет — как «нет». <code>matt-skill.js</code> параметр не читает: он смотрит только <code>installed_plugins.json</code> и настройки проекта. «ID шага» скрипты не читают — по нему Claude называет шаги и закрывает их в <code>/kit:step-done</code>. «Удалённый репозиторий» читает ещё <code>kit-commit.js --push</code> из <code>/kit:step-done</code>; «Журнал» и «План выкладки» — ещё <code>/kit:report</code>, «Журнал» — <code>journal-split.js</code> и <code>decision-inbox.js</code>; «SSH прод/дев», «Не выкладывать» и «Документы на сервере» — ещё <code>ssh-deploy.js</code>. Строки «Код пишет» и «Коммит» с 3.0.0 никто не читает. Пути в «Не выкладывать» и «Не коммитить»: со <code>/</code> — от корня проекта (<code>bitrix/</code> не задевает копии шаблонов в <code>local/templates/…/bitrix/</code>), без <code>/</code> — имя в любом месте пути; <code>X (кроме Y)</code> — исключение из правила.</p>
 </section>
 
 <section id="grabli">
@@ -417,6 +434,9 @@ const main = (fig) => `
     <thead><tr><th>Грабля</th><th>Что делает kit</th></tr></thead>
     <tbody>
       <tr><td><code>cd</code> меняет каталог всей сессии</td><td>guard-bash запрещает; в Bash можно <code>( cd … &amp;&amp; … )</code>, в PowerShell — только абсолютные пути</td></tr>
+      <tr><td>исполнитель Мэтта коммитит сам (<code>implement</code> велит коммитить)</td><td>в проекте Мэтта guard-bash отказывает <code>git commit</code>: коммит — только <code>/kit:step-done</code> (<code>kit-commit.js</code>), тикет принимает общая сессия</td></tr>
+      <tr><td>Мэтт заводит ветки и worktree (<code>wayfinder</code>, <code>implement-spec</code>), а автозаливка везёт файлы с диска на сервер</td><td>при «PhpStorm Always» guard-bash отказывает создание веток и worktree в git, guard-matt — субагенту с <code>isolation: worktree</code> и подчинённой сессии с worktree</td></tr>
+      <tr><td>Мэтт пишет <code>GLOSSARY.md</code>, <code>docs/adr/</code>, <code>.scratch/</code> в корень, а на сайте это корень сайта</td><td>guard-matt отказывает запись в корень; место — папка документов (<code>GLOSSARY.md</code>, <code>adr/</code>, <code>work/&lt;тема&gt;/</code>)</td></tr>
       <tr><td><code>sed -i</code> портит <code>\\</code> в неймспейсах PHP</td><td>guard-bash запрещает; PHP правится только через Edit</td></tr>
       <tr><td>ошибка синтаксиса PHP уезжает на прод автозаливкой</td><td>php-lint после каждой правки; при Always черновик — во временной папке</td></tr>
       <tr><td>журнал, скрипты, снимки или <code>.git</code> уезжают на сервер</td><td>Excluded Paths при каждом старте, <code>.claude</code> в «Не выкладывать», <code>.htaccess</code>, проверка снаружи <code>check-closed</code></td></tr>
@@ -463,13 +483,13 @@ const head = `<title>Устройство плагина kit</title>
 
 const body = `<div class="page">
 <header class="hero">
-  <div class="eyebrow">claude-kit · плагин kit 3.0.0</div>
+  <div class="eyebrow">claude-kit · плагин kit 3.3.0</div>
   <h1>Как устроен kit</h1>
   <p class="lede">${lede}</p>
   <dl class="inv">
-    <div><dt>5</dt><dd>команд /kit:</dd></div>
-    <div><dt>4</dt><dd>хука</dd></div>
-    <div><dt>20</dt><dd>node-скриптов</dd></div>
+    <div><dt>6</dt><dd>команд /kit:</dd></div>
+    <div><dt>5</dt><dd>хуков</dd></div>
+    <div><dt>22</dt><dd>node-скрипта</dd></div>
     <div><dt>3</dt><dd>PHP-скрипта для сервера</dd></div>
   </dl>
   <ul class="legend" aria-label="Условные обозначения на схемах">

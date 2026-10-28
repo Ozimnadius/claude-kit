@@ -5,8 +5,8 @@ const { makeDiagram } = require('./svg');
 
 // 1. Карта: пользователь → Claude ← хуки / проект; Claude → скиллы → скрипты и агенты → что меняется.
 function map() {
-  const d = makeDiagram('d1', 1320, 560, 'Карта плагина kit: пользователь даёт команды Claude, хуки перехватывают события сессии, Claude вызывает пять команд /kit:, каждая работает через свои скрипты и меняет git, журнал, сервер или сайт либо только читает историю.');
-  const cx = [150, 405, 660, 915, 1170];
+  const d = makeDiagram('d1', 1320, 560, 'Карта плагина kit: пользователь даёт команды Claude, хуки перехватывают события сессии, Claude вызывает шесть команд /kit:, каждая работает через свои скрипты и меняет git, журнал, сервер или сайт либо только читает историю.');
+  const cx = [150, 365, 580, 795, 1010, 1225];
   const x = cx.map((c) => c - 85);
   d.box({ x: 530, y: 14, w: 260, h: 52, k: 'user', L: [['t', 'Пользователь'], ['s', 'команды · ответы · пароли']] });
   d.box({ x: 20, y: 100, w: 300, h: 104, k: 'hook', a: 'l', L: [['t', 'Хуки — срабатывают сами'], ['m', 'SessionStart → контекст'], ['m', 'PreToolUse → запрет'], ['m', 'PostToolUse → php -l'], ['m', 'PostToolUse → входящие ответы']] });
@@ -24,6 +24,7 @@ function map() {
     ['/kit:server', 'когда нужен сервер'],
     ['/kit:visual', 'до и после изменений'],
     ['/kit:report', 'отчёт заказчику'],
+    ['/kit:matt', 'большая работа (Мэтт)'],
   ];
   const tools = [
     [['m', 'site-probe.js'], ['m', 'ssh-probe.js'], ['m', 'phpstorm-exclude.js'], ['m', 'secret-scan.js --all'], ['m', 'journal-split.js'], ['s', '+ kit-commit.js: 0.1']],
@@ -31,6 +32,7 @@ function map() {
     [['m', 'remote-php.js'], ['m', 'kit-exec.js'], ['m', 'md5-check.js'], ['m', 'inventory.php'], ['m', 'check-files.php'], ['m', 'delete-list.php']],
     [['m', 'visual.js'], ['s', 'deps · install · login'], ['s', 'discover · shoot'], ['s', 'check · compare · list']],
     [['m', 'git log --since'], ['m', 'decision-inbox.js'], ['s', 'журнал, решения,'], ['s', 'план выкладки']],
+    [['m', 'matt-skill.js'], ['m', 'kit-step.js'], ['m', 'kit-journal.js'], ['m', 'kit-commit.js'], ['s', 'навыки Мэтта — файлом']],
   ];
   const ext = [
     [['s', 'git · .idea · сайт'], ['s', 'сервер по SSH']],
@@ -38,6 +40,7 @@ function map() {
     [['s', 'сервер по SSH'], ['s', 'или kit-exec.php']],
     [['s', 'Chrome → сайт'], ['s', 'снимки локально']],
     [['s', 'текст для Б24'], ['s', 'дата — во входящие']],
+    [['s', 'карта и тикеты'], ['s', 'в .claude/docs/work']],
   ];
   for (let i = 0; i < cx.length; i++) {
     d.edge([[cx[i], 214], [cx[i], 238]]);
@@ -80,48 +83,57 @@ function cycle() {
 
 // 3. Хуки: событие → признак kit-проекта → скрипт → проверка → итог.
 function hooks() {
-  const d = makeDiagram('d3', 1040, 548, 'Хуки: каждое событие сначала проверяет, kit-проект ли это; если нет — тишина. SessionStart дописывает исключения PhpStorm, кладёт в контекст раздел «Сейчас» и правила и сверяет ветку с удалённым репозиторием; PreToolUse запрещает cd вне подоболочки и sed -i по PHP; PostToolUse после правки прогоняет php -l и при ошибке возвращает код 2, а после вопроса пользователю записывает ответ во входящие для /kit:step-done.');
+  const d = makeDiagram('d3', 1040, 660, 'Хуки: каждое событие сначала проверяет, kit-проект ли это; если нет — тишина. SessionStart дописывает исключения PhpStorm, кладёт в контекст раздел «Сейчас» и правила и сверяет ветку с удалённым репозиторием; PreToolUse запрещает cd вне подоболочки и sed -i по PHP, а в проекте Мэтта (с 3.3.0) ещё коммит в обход /kit:step-done, ветки и worktree при автозаливке (guard-bash.js), файлы Мэтта в корне проекта и worktree у субагента и подчинённой сессии (guard-matt.js); PostToolUse после правки прогоняет php -l и при ошибке возвращает код 2, а после вопроса пользователю записывает ответ во входящие для /kit:step-done.');
   d.box({ x: 20, y: 22, w: 200, h: 140, k: 'hook', L: [['tm', 'SessionStart'], ['m', 'startup · resume'], ['m', 'clear · compact']] });
   d.box({ x: 20, y: 200, w: 200, h: 70, k: 'hook', L: [['tm', 'PreToolUse'], ['m', 'Bash · PowerShell']] });
-  d.box({ x: 20, y: 312, w: 200, h: 70, k: 'hook', L: [['tm', 'PostToolUse'], ['m', 'Write · Edit · MultiEdit']] });
-  d.box({ x: 20, y: 412, w: 200, h: 70, k: 'hook', L: [['tm', 'PostToolUse'], ['m', 'AskUserQuestion']] });
-  d.box({ x: 262, y: 22, w: 130, h: 460, k: 'core', L: [['t', 'kit-проект?'], ['s', '«Параметры»'], ['s', 'или журнал']] });
-  d.edge([[327, 482], [327, 510]], { c: 'u' });
-  d.label(327, 530, 'нет → тишина, код 0', 'middle', 'u');
-  d.edge([[220, 447], [262, 447]]);
-  d.box({ x: 432, y: 422, w: 190, h: 50, L: [['m', 'decision-inbox.js']] });
-  d.edge([[392, 447], [432, 447]]);
-  d.box({ x: 662, y: 414, w: 358, h: 66, k: 'ext', L: [['s', 'вопрос, варианты, ответ → kit-inbox.jsonl'], ['s', 'kit-step.js → строки решений']] });
-  d.edge([[622, 447], [662, 447]]);
+  d.box({ x: 20, y: 312, w: 200, h: 82, k: 'hook', L: [['tm', 'PreToolUse'], ['m', 'Write · Edit · Agent'], ['m', 'start_session']] });
+  d.box({ x: 20, y: 424, w: 200, h: 70, k: 'hook', L: [['tm', 'PostToolUse'], ['m', 'Write · Edit · MultiEdit']] });
+  d.box({ x: 20, y: 524, w: 200, h: 70, k: 'hook', L: [['tm', 'PostToolUse'], ['m', 'AskUserQuestion']] });
+  d.box({ x: 262, y: 22, w: 130, h: 572, k: 'core', L: [['t', 'kit-проект?'], ['s', '«Параметры»'], ['s', 'или журнал']] });
+  d.edge([[327, 594], [327, 622]], { c: 'u' });
+  d.label(327, 642, 'нет → тишина, код 0', 'middle', 'u');
+  d.edge([[220, 559], [262, 559]]);
+  d.box({ x: 432, y: 534, w: 190, h: 50, L: [['m', 'decision-inbox.js']] });
+  d.edge([[392, 559], [432, 559]]);
+  d.box({ x: 662, y: 526, w: 358, h: 66, k: 'ext', L: [['s', 'вопрос, варианты, ответ → kit-inbox.jsonl'], ['s', 'kit-step.js → строки решений']] });
+  d.edge([[622, 559], [662, 559]]);
   d.edge([[220, 92], [262, 92]]);
   d.edge([[220, 235], [262, 235]]);
-  d.edge([[220, 347], [262, 347]]);
+  d.edge([[220, 353], [262, 353]]);
+  d.edge([[220, 459], [262, 459]]);
   d.box({ x: 432, y: 22, w: 190, h: 40, L: [['m', 'phpstorm-exclude.js']] });
   d.box({ x: 432, y: 72, w: 190, h: 40, L: [['m', 'session-start.js']] });
   d.box({ x: 432, y: 122, w: 190, h: 40, L: [['m', 'remote-check.js']] });
   d.box({ x: 432, y: 210, w: 190, h: 50, L: [['m', 'guard-bash.js']] });
-  d.box({ x: 432, y: 322, w: 190, h: 50, L: [['m', 'php-lint.js']] });
+  d.box({ x: 432, y: 328, w: 190, h: 50, L: [['m', 'guard-matt.js']] });
+  d.box({ x: 432, y: 434, w: 190, h: 50, L: [['m', 'php-lint.js']] });
   d.edge([[392, 42], [432, 42]]);
   d.edge([[392, 92], [432, 92]]);
   d.edge([[392, 142], [432, 142]]);
   d.edge([[392, 235], [432, 235]], { lbl: 'да', lx: 412, ly: 227 });
-  d.edge([[392, 347], [432, 347]]);
+  d.edge([[392, 353], [432, 353]], { lbl: 'да', lx: 412, ly: 345 });
+  d.edge([[392, 459], [432, 459]]);
   d.box({ x: 662, y: 22, w: 358, h: 40, k: 'ext', L: [['s', 'Excluded Paths в .idea/deployment.xml']] });
   d.box({ x: 662, y: 72, w: 358, h: 40, L: [['s', 'в контекст Claude: «Сейчас» + правила']] });
   d.box({ x: 662, y: 122, w: 358, h: 40, k: 'ext', L: [['s', 'git fetch → pull --ff-only, push или стоп']] });
-  d.box({ x: 662, y: 202, w: 180, h: 66, L: [['m', 'cd вне ( … )'], ['m', 'Set-Location'], ['m', 'sed -i по .php']] });
+  d.box({ x: 662, y: 190, w: 180, h: 92, L: [['m', 'cd вне ( … )'], ['m', 'Set-Location'], ['m', 'sed -i по .php'], ['m', 'git commit (Мэтт)'], ['m', 'ветки при Always']] });
   d.box({ x: 870, y: 210, w: 150, h: 50, k: 'user', L: [['t', 'deny'], ['s', '+ причина']] });
-  d.box({ x: 662, y: 314, w: 180, h: 66, L: [['s', '.php и параметр'], ['s', '«PHP» — путь'], ['s', 'к php.exe']] });
-  d.box({ x: 870, y: 322, w: 150, h: 50, k: 'user', L: [['t', 'код 2'], ['s', 'ошибка → Claude']] });
+  d.box({ x: 662, y: 320, w: 180, h: 66, L: [['m', 'GLOSSARY.md, adr/,'], ['m', '.scratch/ в корне'], ['m', 'worktree при Always']] });
+  d.box({ x: 870, y: 328, w: 150, h: 50, k: 'user', L: [['t', 'deny'], ['s', '+ причина']] });
+  d.box({ x: 662, y: 426, w: 180, h: 66, L: [['s', '.php и параметр'], ['s', '«PHP» — путь'], ['s', 'к php.exe']] });
+  d.box({ x: 870, y: 434, w: 150, h: 50, k: 'user', L: [['t', 'код 2'], ['s', 'ошибка → Claude']] });
   d.edge([[622, 42], [662, 42]]);
   d.edge([[622, 92], [662, 92]]);
   d.edge([[622, 142], [662, 142]]);
   d.edge([[622, 235], [662, 235]]);
   d.edge([[842, 235], [870, 235]]);
-  d.edge([[622, 347], [662, 347]]);
-  d.edge([[842, 347], [870, 347]]);
-  d.text(945, 280, 'иначе — выполняется', 's', 'middle');
-  d.text(945, 392, 'нет ошибки — тишина', 's', 'middle');
+  d.edge([[622, 353], [662, 353]]);
+  d.edge([[842, 353], [870, 353]]);
+  d.edge([[622, 459], [662, 459]]);
+  d.edge([[842, 459], [870, 459]]);
+  d.text(945, 298, 'иначе — выполняется', 's', 'middle');
+  d.text(945, 404, 'иначе — выполняется', 's', 'middle');
+  d.text(945, 504, 'нет ошибки — тишина', 's', 'middle');
   return d;
 }
 
