@@ -60,38 +60,70 @@ const commitHash = (cwd, rev) => {
   const r = git(cwd, ['rev-parse', '--verify', '--quiet', rev + '^{commit}']);
   return r.ok ? r.out.trim() : null;
 };
-const isAncestor = (cwd, a, b) => git(cwd, ['merge-base', '--is-ancestor', a, b]).ok;
 
-// База входа: самый поздний из последнего коммита входа и коммита последней строки «Залито на …» плана; нет обоих — первый
-// коммит репозитория. Хеш плана, которого нет в репозитории, не в счёт (более старая база безопасна — ложного «забрать»
-// поверх нашего незалитого не будет). { error } — только если базы нет совсем.
+// База входа (Т-5) — по путям, «известное состояние сервера» (с 48.3, Р-24). base (D) — коммит последней строки «Залито на …»
+// плана (хеш, которого нет в репозитории, не в счёт — с пометкой); нет — первый коммит репозитория. Поверх D — пути, которые меняли
+// коммиты входа своего окружения из D..HEAD (после D или не связанные с ней): overlay — путь → полный хеш самого нового такого
+// коммита (путь удалён им — версии в базе нет). Дерево одного коммита входа базой быть не может: это HEAD на момент входа, в нём и
+// наши незалитые шаги, а сервер с ними не совпадал. Более старая база для остальных путей безопасна — ложного «забрать» поверх
+// нашего незалитого не будет. → { base, source, overlay: Map, entries: число коммитов входа поверх } | { error }.
 function entryBase(cwd, info, env) {
   if (!commitHash(cwd, 'HEAD')) return { error: 'в репозитории нет коммитов или это не git' };
-  // только коммиты входа своего окружения: вход с дева говорит о деве, а прод мог быть любым
-  const prefix = (env === 'дев' ? 'Дев' : 'Прод') + ': изменения без kit ';
-  let entry = null;
-  for (const line of git(cwd, ['log', '--format=%H%x09%s']).out.split('\n')) {
-    const tab = line.indexOf('\t');
-    if (tab > 0 && line.slice(tab + 1).startsWith(prefix)) {
-      entry = line.slice(0, tab);
-      break;
-    }
-  }
   const planRaw = baseFromPlan(path.resolve(cwd, info.planRel), env, { cwd, byStep: isSsh(info) });
   const planned = planRaw ? commitHash(cwd, planRaw) : null;
   const note = planRaw && !planned ? ' (хеш ' + planRaw + ' из плана выкладки не найден в репозитории)' : '';
-  const short = (h) => git(cwd, ['rev-parse', '--short', h]).out.trim();
-  const byEntry = () => ({ base: entry, source: 'коммит входа ' + short(entry) + note });
-  const byPlan = () => ({ base: planned, source: '«' + sectionOf(env) + '» в ' + info.planRel });
-  if (entry && planned) {
-    if (entry === planned || isAncestor(cwd, planned, entry) || !isAncestor(cwd, entry, planned)) return byEntry();
-    return byPlan();
+  let base = planned;
+  let source = '«' + sectionOf(env) + '» в ' + info.planRel;
+  if (!base) {
+    const roots = git(cwd, ['rev-list', '--max-parents=0', 'HEAD']).out.trim().split(/\s+/).filter(Boolean);
+    if (!roots.length) return { error: 'не найден первый коммит репозитория' };
+    base = roots[roots.length - 1];
+    source = 'первый коммит репозитория' + note;
   }
-  if (entry) return byEntry();
-  if (planned) return byPlan();
-  const roots = git(cwd, ['rev-list', '--max-parents=0', 'HEAD']).out.trim().split(/\s+/).filter(Boolean);
-  if (!roots.length) return { error: 'не найден первый коммит репозитория' };
-  return { base: roots[roots.length - 1], source: 'первый коммит репозитория' + note };
+  // только коммиты входа своего окружения: вход с дева говорит о деве, а прод мог быть любым; git log — от новых к старым
+  const prefix = (env === 'дев' ? 'Дев' : 'Прод') + ': изменения без kit ';
+  const overlay = new Map();
+  let entries = 0;
+  for (const c of logPaths(cwd, ['^' + base])) {
+    if (!c.subject.startsWith(prefix)) continue;
+    entries++;
+    for (const p of c.paths) if (!overlay.has(p)) overlay.set(p, c.hash);
+  }
+  if (entries) source += '; поверх — ' + entries + ' ' + plural(entries, 'коммит', 'коммита', 'коммитов') + ' входа';
+  return { base, source, overlay, entries };
+}
+
+// git ls-tree -r: путь → { mode, oid }. Ошибку git бросает.
+function treeOf(cwd, rev) {
+  const r = git(cwd, ['ls-tree', '-r', '-z', '--full-tree', rev]);
+  if (!r.ok) throw new Error('git ls-tree ' + rev + ': ' + r.err);
+  const out = new Map();
+  for (const rec of r.out.split('\0')) {
+    const tab = rec.indexOf('\t');
+    if (tab < 0) continue;
+    const [mode, , oid] = rec.slice(0, tab).split(' ');
+    out.set(rec.slice(tab + 1), { mode, oid });
+  }
+  return out;
+}
+
+// Известное состояние сервера по entryBase как дерево: дерево base, поверх — пути overlay из своих коммитов входа (нет в его
+// дереве — удалён, в базе его нет). → Map<путь, { mode, oid }>. Ошибку git бросает.
+function baseTree(cwd, b) {
+  const tree = treeOf(cwd, b.base);
+  const byCommit = new Map();
+  for (const [p, h] of b.overlay || []) {
+    if (!byCommit.has(h)) byCommit.set(h, []);
+    byCommit.get(h).push(p);
+  }
+  for (const [h, paths] of byCommit) {
+    const t = treeOf(cwd, h);
+    for (const p of paths) {
+      if (t.has(p)) tree.set(p, t.get(p));
+      else tree.delete(p);
+    }
+  }
+  return tree;
 }
 
 // Что не забирается: бэкапы и архивы (как при первом скачивании в /kit:project-init) и файлы больше предела.
@@ -106,10 +138,11 @@ function skipTake(rel, size) {
   return null;
 }
 
-// Коммиты, достижимые из HEAD, и их пути: [{ subject, paths }]. Корневые коммиты и слияния пропускаются (дифф корня огромен,
-// изменения слияния — в его родителях). -z: пути с пробелом, кириллицей, кавычкой и переводом строки целы.
+// Коммиты, достижимые из HEAD (от новых к старым), и их пути: [{ hash, subject, paths }]. Корневые коммиты и слияния
+// пропускаются (дифф корня огромен, изменения слияния — в его родителях). -z: пути с пробелом, кириллицей, кавычкой и переводом
+// строки целы. extra — доп. аргументы git log (например, «^<коммит>» — только после него).
 function logPaths(cwd, extra = []) {
-  const args = ['log', '-z', '--name-only', '--no-renames', '--min-parents=1', '--max-parents=1', ...extra, '--format=%x01%s%x02', 'HEAD'];
+  const args = ['log', '-z', '--name-only', '--no-renames', '--min-parents=1', '--max-parents=1', ...extra, '--format=%x01%H %s%x02', 'HEAD'];
   const r = git(cwd, args);
   if (!r.ok) return [];
   const commits = [];
@@ -120,7 +153,9 @@ function logPaths(cwd, extra = []) {
     let rest = chunk.slice(end + 1);
     if (rest.startsWith('\0')) rest = rest.slice(1);
     if (rest.startsWith('\n')) rest = rest.slice(1);
-    commits.push({ subject: chunk.slice(0, end), paths: rest.split('\0').filter(Boolean) });
+    const head = chunk.slice(0, end);
+    const sp = head.indexOf(' ');
+    commits.push({ hash: head.slice(0, sp), subject: head.slice(sp + 1), paths: rest.split('\0').filter(Boolean) });
   }
   return commits;
 }
@@ -279,6 +314,6 @@ function lastNeed(dir) {
 }
 
 module.exports = {
-  ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, entrySubject, md5NoCr, classify, entryBase, skipTake, oursPaths, pendingDelete, inPending,
-  summaryLine, readMark, writeMark, markSession, sessionDone, lastNeed,
+  ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake,
+  oursPaths, pendingDelete, inPending, summaryLine, readMark, writeMark, markSession, sessionDone, lastNeed,
 };

@@ -284,4 +284,4 @@ if (require.main === module) {
     process.exitCode = 2;
   }
 }
-module.exports = { scanLine, looksSecret, listItemSecret };
+module.exports = { scanLine, looksSecret, listItemSecret, BASE_FORBIDDEN };

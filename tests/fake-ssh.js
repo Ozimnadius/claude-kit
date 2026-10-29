@@ -6,6 +6,8 @@
 // лог не пишется).
 // hang — прочитал stdin и завис (для проверки таймаута: runSsh убивает процесс).
 // sh — сценарий со stdin выполняется локальной оболочкой (FAKE_SH или sh из PATH), затем метка с её кодом (заливка ssh-deploy.js).
+// shdrop — как sh, но подключение номер FAKE_SSH_DROP (по умолчанию 2; счётчик — в файле FAKE_SSH_COUNT) начинает вывод и
+// обрывается, как drop (вход prod-entry.js: сверка прошла, скачивание оборвалось).
 // Иначе: FAKE_SSH_OUT задан — печатает его и метку с кодом FAKE_SSH_EXIT (по умолчанию 0); не задан — в команде
 // первый путь в одинарных кавычках ('<php>', в том числе внутри «timeout -k 5 N '<php>'») выполняется локальным PHP:
 // stdin → php, затем метка с кодом php (как настоящий сервер).
@@ -49,7 +51,13 @@ function main() {
     process.stdout.write(mark(0));
     return 0;
   }
-  if (host === 'sh') {
+  if (host === 'shdrop') {
+    const file = process.env.FAKE_SSH_COUNT;
+    const n = (file && fs.existsSync(file) ? Number(fs.readFileSync(file, 'utf8')) || 0 : 0) + 1;
+    if (file) fs.writeFileSync(file, String(n));
+    if (n === Number(process.env.FAKE_SSH_DROP || 2)) return fail('KIT_F 1\nYWJj\n', 'Connection to shdrop closed by remote host.\n');
+  }
+  if (host === 'sh' || host === 'shdrop') {
     const r = spawnSync(process.env.FAKE_SH || 'sh', ['-s'], { input: stdin, env: { ...process.env, LC_ALL: process.env.LC_ALL || 'C.UTF-8' } });
     process.stdout.write(Buffer.concat([r.stdout || Buffer.alloc(0), Buffer.from(mark(r.status === null ? 255 : r.status))]));
     process.stderr.write(r.stderr || Buffer.alloc(0));

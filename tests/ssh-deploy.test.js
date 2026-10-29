@@ -3,25 +3,14 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
-const { gitRepo, git, writeFiles, runScript, runScriptAsync, tmpDir } = require('./helpers');
+const { gitRepo, git, writeFiles, runScript, runScriptAsync, tmpDir, findSh, shPath } = require('./helpers');
 const { paramsMd } = require('./fixtures');
 const { parseArgs, safePath, buildScript, parseResult } = require('../plugins/kit/scripts/ssh-deploy');
 const { isDocOnServer } = require('../plugins/kit/scripts/lib/project');
 
 const FAKE = path.join(__dirname, 'fake-ssh.js');
-// Локальный sh с base64 и md5sum (Git для Windows или системный) — для заливки через заглушку; нет — эти тесты пропускаются.
-function findSh() {
-  for (const c of [process.env.FAKE_SH, 'sh', 'C:\\Program Files\\Git\\bin\\sh.exe']) {
-    if (!c) continue;
-    const r = spawnSync(c, ['-c', 'command -v base64 >/dev/null && command -v md5sum >/dev/null && echo ok'], { encoding: 'utf8' });
-    if (r.status === 0 && String(r.stdout).trim() === 'ok') return c;
-  }
-  return null;
-}
+// Локальный sh — для заливки через заглушку; нет — эти тесты пропускаются (findSh — tests/helpers.js).
 const SH = findSh();
-// Папка «сервера» в виде, понятном sh: на Windows C:\a\b → /c/a/b.
-const shPath = (p) => p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (m, d) => '/' + d.toLowerCase());
 
 function project(target, extra = {}) {
   return gitRepo({

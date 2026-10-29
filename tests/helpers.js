@@ -84,6 +84,19 @@ function gitRepo(files = {}) {
   return dir;
 }
 
+// Локальный sh с base64 и md5sum (Git для Windows или системный) — «сервер» для заглушки fake-ssh.js (хост sh); нет — такие
+// тесты пропускаются.
+function findSh() {
+  for (const c of [process.env.FAKE_SH, 'sh', 'C:\\Program Files\\Git\\bin\\sh.exe']) {
+    if (!c) continue;
+    const r = spawnSync(c, ['-c', 'command -v base64 >/dev/null && command -v md5sum >/dev/null && echo ok'], { encoding: 'utf8' });
+    if (r.status === 0 && String(r.stdout).trim() === 'ok') return c;
+  }
+  return null;
+}
+// Папка «сервера» в виде, понятном sh: на Windows C:\a\b → /c/a/b.
+const shPath = (p) => p.replace(/\\/g, '/').replace(/^([A-Za-z]):/, (m, d) => '/' + d.toLowerCase());
+
 // PHP 7.2 из OSPanel сам, без кода плагина, иногда падает (код 0xC0000005) или зависает, когда тесты идут параллельно
 // (проверено: ~3 % запусков при 16 параллельных; 7.4 и 8.3 — стабильны). Такой запуск повторяем, любой другой результат — как есть.
 const PHP_CRASH = 3221225477;
@@ -110,5 +123,5 @@ function phpLint(version, code) {
 
 module.exports = {
   ROOT, PLUGIN, SCRIPTS, php, hasPhp, tmpDir, writeFiles, makeProject,
-  runScript, runScriptAsync, git, gitRepo, spawnPhp, runPhp, phpLint,
+  runScript, runScriptAsync, git, gitRepo, spawnPhp, runPhp, phpLint, findSh, shPath,
 };

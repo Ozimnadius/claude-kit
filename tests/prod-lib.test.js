@@ -9,7 +9,7 @@ const { paramsMd } = require('./fixtures');
 const { kitInfo } = require('../plugins/kit/scripts/lib/project');
 const prod = require('../plugins/kit/scripts/lib/prod');
 
-const { ENTRY_RE, entrySubject, md5NoCr, classify, entryBase, FILE_LIMIT, ENTRY_LIMIT, skipTake, oursPaths, pendingDelete, inPending,
+const { ENTRY_RE, entrySubject, md5NoCr, classify, entryBase, baseTree, FILE_LIMIT, ENTRY_LIMIT, skipTake, oursPaths, pendingDelete, inPending,
   summaryLine, MARK_FILE, readMark, writeMark, markSession, sessionDone, lastNeed } = prod;
 
 const PARAMS = { 'Режим': 'общий', 'Прод': 'https://alpha.example.com', 'Выкладка': 'вручную', 'План выкладки': 'plan.md' };
@@ -59,13 +59,17 @@ test('md5NoCr: CRLF и LF — один хеш, каждый \\r убираетс
   assert.equal(md5NoCr(Buffer.alloc(0)), 'd41d8cd98f00b204e9800998ecf8427e');
 });
 
-test('entryBase: коммит входа после заливки — он; заливка после входа — она; ничего — первый коммит', () => {
+const overlayOf = (r) => [...r.overlay].sort((a, b) => (a[0] < b[0] ? -1 : 1));
+
+test('entryBase: база — заливка (нет — первый коммит), поверх — пути своих коммитов входа после неё; заливка после входа — наложения нет (Р-24)', () => {
   const dir = kitRepo();
   const info = kitInfo(dir);
   const first = git(dir, 'rev-parse', 'HEAD').trim();
   const r0 = entryBase(dir, info, 'прод');
   assert.equal(r0.base, first);
   assert.equal(r0.source, 'первый коммит репозитория');
+  assert.deepEqual(overlayOf(r0), []);
+  assert.equal(r0.entries, 0);
 
   writeFiles(dir, { 'a.php': '2' });
   const step = commit(dir, '1.1: правка');
@@ -76,20 +80,56 @@ test('entryBase: коммит входа после заливки — он; з�
   assert.equal(r1.base.length, 40);
   assert.equal(r1.source, '«Залито на прод» в plan.md');
 
+  assert.deepEqual(overlayOf(r1), []);
+
   writeFiles(dir, { 'a.php': '3' });
   const entry = commit(dir, ENTRY);
   const r2 = entryBase(dir, info, 'прод');
-  assert.equal(r2.base, entry, 'коммит входа позже заливки');
-  assert.match(r2.source, /^коммит входа [0-9a-f]{7,}/);
+  assert.equal(r2.base, step, 'коммит входа позже заливки — не база, а наложение');
+  assert.deepEqual(overlayOf(r2), [['a.php', entry]]);
+  assert.equal(r2.entries, 1);
+  assert.equal(r2.source, '«Залито на прод» в plan.md; поверх — 1 коммит входа');
 
   writeFiles(dir, { 'a.php': '4' });
   const step2 = commit(dir, '1.2: правка');
   fs.writeFileSync(path.join(dir, 'plan.md'), plan([step.slice(0, 9), step2.slice(0, 9)]));
   commit(dir, '1.2а: план');
-  assert.equal(entryBase(dir, info, 'прод').base, step2, 'заливка позже входа');
+  const r3 = entryBase(dir, info, 'прод');
+  assert.equal(r3.base, step2, 'заливка позже входа — база для всех путей');
+  assert.deepEqual(overlayOf(r3), []);
+  assert.equal(r3.source, '«Залито на прод» в plan.md');
 });
 
-test('entryBase: коммит плана и входа не связаны — коммит входа', () => {
+test('entryBase и baseTree: несколько коммитов входа подряд — у пути версия из самого нового, что его менял; удалённого входом нет; незалитый шаг — не база', () => {
+  const dir = kitRepo({ 'b.php': 'b', 'c.php': 'c' });
+  const info = kitInfo(dir);
+  const first = git(dir, 'rev-parse', 'HEAD').trim();
+  writeFiles(dir, { 'a.php': 'наш шаг' });
+  commit(dir, '1.1: правка, не залита');
+  writeFiles(dir, { 'b.php': 'b1' });
+  const e1 = commit(dir, ENTRY);
+  writeFiles(dir, { 'b.php': 'b2' });
+  fs.rmSync(path.join(dir, 'c.php'));
+  const e2 = commit(dir, 'Прод: изменения без kit на 2026-10-30 (2 файла)');
+  writeFiles(dir, { 'd.php': 'd' });
+  const e3 = commit(dir, 'Прод: изменения без kit на 2026-10-30 (1 файл)'); // вторая часть того же входа (Р-16)
+  const r = entryBase(dir, info, 'прод');
+  assert.equal(r.base, first);
+  assert.equal(r.entries, 3);
+  assert.deepEqual(overlayOf(r), [['b.php', e2], ['c.php', e2], ['d.php', e3]]);
+  assert.equal(r.source, 'первый коммит репозитория; поверх — 3 коммита входа');
+  assert.notEqual(e1, e2);
+  const t = baseTree(dir, r);
+  const blob = (rev, p) => git(dir, 'rev-parse', rev + ':' + p).trim();
+  assert.equal(t.get('a.php').oid, blob(first, 'a.php'), 'наш незалитый шаг — не база');
+  assert.equal(t.get('b.php').oid, blob(e2, 'b.php'));
+  assert.ok(!t.has('c.php'), 'удалён коммитом входа — в базе нет');
+  assert.equal(t.get('d.php').oid, blob(e3, 'd.php'));
+  assert.equal(t.get('.claude/CLAUDE.md').mode, '100644');
+  assert.deepEqual([...baseTree(dir, { base: first, overlay: new Map() }).keys()].sort(), ['.claude/CLAUDE.md', 'a.php', 'b.php', 'c.php']);
+});
+
+test('entryBase: коммит плана и входа не связаны — база из плана, коммит входа — наложение', () => {
   const dir = kitRepo();
   const info = kitInfo(dir);
   git(dir, 'checkout', '-q', '-b', 'side');
@@ -101,22 +141,24 @@ test('entryBase: коммит плана и входа не связаны — �
   fs.writeFileSync(path.join(dir, 'plan.md'), plan([side]));
   commit(dir, '1.1а: план');
   const r = entryBase(dir, info, 'прод');
-  assert.equal(r.base, entry);
-  assert.match(r.source, /коммит входа/);
+  assert.equal(r.base, side);
+  assert.deepEqual(overlayOf(r), [['a.php', entry]]);
+  assert.match(r.source, /поверх — 1 коммит входа/);
 });
 
-test('entryBase: учитываются только коммиты входа своего окружения — «Дев» не база для прода и наоборот', () => {
+test('entryBase: учитываются только коммиты входа своего окружения — «Дев» не наложение для прода и наоборот', () => {
   const dir = kitRepo();
   const info = kitInfo(dir);
   const first = git(dir, 'rev-parse', 'HEAD').trim();
   writeFiles(dir, { 'a.php': '2' });
   const dev = commit(dir, 'Дев: изменения без kit на 2026-10-29 (2 файла)');
-  assert.equal(entryBase(dir, info, 'прод').base, first, 'коммит входа с дева — не база прода');
-  assert.equal(entryBase(dir, info, 'дев').base, dev);
+  assert.deepEqual(overlayOf(entryBase(dir, info, 'прод')), [], 'коммит входа с дева — не в счёт для прода');
+  assert.equal(entryBase(dir, info, 'прод').base, first);
+  assert.deepEqual(overlayOf(entryBase(dir, info, 'дев')), [['a.php', dev]]);
   writeFiles(dir, { 'a.php': '3' });
   const prodEntry = commit(dir, ENTRY);
-  assert.equal(entryBase(dir, info, 'прод').base, prodEntry);
-  assert.equal(entryBase(dir, info, 'дев').base, dev, 'коммит входа с прода — не база дева');
+  assert.deepEqual(overlayOf(entryBase(dir, info, 'прод')), [['a.php', prodEntry]]);
+  assert.deepEqual(overlayOf(entryBase(dir, info, 'дев')), [['a.php', dev]], 'коммит входа с прода — не в счёт для дева');
   // «Залито на прод» важнее чужого коммита входа
   writeFiles(dir, { 'a.php': '4' });
   const step = commit(dir, '1.1: правка');
@@ -126,6 +168,7 @@ test('entryBase: учитываются только коммиты входа �
   commit(dir, 'Дев: изменения без kit на 2026-10-30 (1 файл)');
   const r = entryBase(dir, info, 'прод');
   assert.equal(r.base, step);
+  assert.deepEqual(overlayOf(r), [], 'коммит входа дева после заливки прода — не наложение');
   assert.equal(r.source, '«Залито на прод» в plan.md');
 });
 
@@ -163,8 +206,9 @@ test('entryBase: хеш плана, которого нет в репозито�
   writeFiles(dir, { 'a.php': '2' });
   const entry = commit(dir, ENTRY);
   const r2 = entryBase(dir, info, 'прод');
-  assert.equal(r2.base, entry);
-  assert.match(r2.source, /не найден/);
+  assert.equal(r2.base, first);
+  assert.deepEqual(overlayOf(r2), [['a.php', entry]]);
+  assert.match(r2.source, /не найден.*; поверх — 1 коммит входа$/);
 });
 
 test('entryBase: не git и пустой репозиторий — error', () => {
