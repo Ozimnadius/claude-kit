@@ -10,7 +10,7 @@ const { kitInfo } = require('../plugins/kit/scripts/lib/project');
 const prod = require('../plugins/kit/scripts/lib/prod');
 
 const { ENTRY_RE, entrySubject, md5NoCr, classify, entryBase, baseTree, FILE_LIMIT, ENTRY_LIMIT, skipTake, oursPaths, pendingDelete, inPending,
-  summaryLine, MARK_FILE, readMark, writeMark, markSession, sessionDone, lastNeed, watcherExts, mergeVersions } = prod;
+  summaryLine, MARK_FILE, readMark, writeMark, markSession, sessionDone, lastNeed, watcherExts, mergeVersions, bigOf, stopLines, md5Eol } = prod;
 
 const PARAMS = { 'Режим': 'общий', 'Прод': 'https://alpha.example.com', 'Выкладка': 'вручную', 'План выкладки': 'plan.md' };
 const ENTRY = 'Прод: изменения без kit на 2026-10-29 (1 файл)';
@@ -61,7 +61,7 @@ test('md5NoCr: CRLF и LF — один хеш, каждый \\r убираетс
 
 const overlayOf = (r) => [...r.overlay].sort((a, b) => (a[0] < b[0] ? -1 : 1));
 
-test('entryBase: база — заливка (нет — первый коммит), поверх — пути своих коммитов входа после неё; заливка после входа — наложения нет (Р-24)', () => {
+test('entryBase: база — заливка (нет — первый коммит), поверх — пути своих коммитов синхронизации после неё; заливка после синхронизации — наложения нет (Р-24)', () => {
   const dir = kitRepo();
   const info = kitInfo(dir);
   const first = git(dir, 'rev-parse', 'HEAD').trim();
@@ -85,22 +85,22 @@ test('entryBase: база — заливка (нет — первый комми
   writeFiles(dir, { 'a.php': '3' });
   const entry = commit(dir, ENTRY);
   const r2 = entryBase(dir, info, 'прод');
-  assert.equal(r2.base, step, 'коммит входа позже заливки — не база, а наложение');
+  assert.equal(r2.base, step, 'коммит синхронизации позже заливки — не база, а наложение');
   assert.deepEqual(overlayOf(r2), [['a.php', entry]]);
   assert.equal(r2.entries, 1);
-  assert.equal(r2.source, '«Залито на прод» в plan.md; поверх — 1 коммит входа');
+  assert.equal(r2.source, '«Залито на прод» в plan.md; поверх — 1 коммит синхронизации');
 
   writeFiles(dir, { 'a.php': '4' });
   const step2 = commit(dir, '1.2: правка');
   fs.writeFileSync(path.join(dir, 'plan.md'), plan([step.slice(0, 9), step2.slice(0, 9)]));
   commit(dir, '1.2а: план');
   const r3 = entryBase(dir, info, 'прод');
-  assert.equal(r3.base, step2, 'заливка позже входа — база для всех путей');
+  assert.equal(r3.base, step2, 'заливка позже синхронизации — база для всех путей');
   assert.deepEqual(overlayOf(r3), []);
   assert.equal(r3.source, '«Залито на прод» в plan.md');
 });
 
-test('entryBase и baseTree: несколько коммитов входа подряд — у пути версия из самого нового, что его менял; удалённого входом нет; незалитый шаг — не база', () => {
+test('entryBase и baseTree: несколько коммитов синхронизации подряд — у пути версия из самого нового, что его менял; удалённого синхронизацией нет; незалитый шаг — не база', () => {
   const dir = kitRepo({ 'b.php': 'b', 'c.php': 'c' });
   const info = kitInfo(dir);
   const first = git(dir, 'rev-parse', 'HEAD').trim();
@@ -112,24 +112,24 @@ test('entryBase и baseTree: несколько коммитов входа по
   fs.rmSync(path.join(dir, 'c.php'));
   const e2 = commit(dir, 'Прод: изменения без kit на 2026-10-30 (2 файла)');
   writeFiles(dir, { 'd.php': 'd' });
-  const e3 = commit(dir, 'Прод: изменения без kit на 2026-10-30 (1 файл)'); // вторая часть того же входа (Р-16)
+  const e3 = commit(dir, 'Прод: изменения без kit на 2026-10-30 (1 файл)'); // вторая часть той же синхронизации (Р-16)
   const r = entryBase(dir, info, 'прод');
   assert.equal(r.base, first);
   assert.equal(r.entries, 3);
   assert.deepEqual(overlayOf(r), [['b.php', e2], ['c.php', e2], ['d.php', e3]]);
-  assert.equal(r.source, 'первый коммит репозитория; поверх — 3 коммита входа');
+  assert.equal(r.source, 'первый коммит репозитория; поверх — 3 коммита синхронизации');
   assert.notEqual(e1, e2);
   const t = baseTree(dir, r);
   const blob = (rev, p) => git(dir, 'rev-parse', rev + ':' + p).trim();
   assert.equal(t.get('a.php').oid, blob(first, 'a.php'), 'наш незалитый шаг — не база');
   assert.equal(t.get('b.php').oid, blob(e2, 'b.php'));
-  assert.ok(!t.has('c.php'), 'удалён коммитом входа — в базе нет');
+  assert.ok(!t.has('c.php'), 'удалён коммитом синхронизации — в базе нет');
   assert.equal(t.get('d.php').oid, blob(e3, 'd.php'));
   assert.equal(t.get('.claude/CLAUDE.md').mode, '100644');
   assert.deepEqual([...baseTree(dir, { base: first, overlay: new Map() }).keys()].sort(), ['.claude/CLAUDE.md', 'a.php', 'b.php', 'c.php']);
 });
 
-test('entryBase: коммит плана и входа не связаны — база из плана, коммит входа — наложение', () => {
+test('entryBase: коммит плана и синхронизации не связаны — база из плана, коммит синхронизации — наложение', () => {
   const dir = kitRepo();
   const info = kitInfo(dir);
   git(dir, 'checkout', '-q', '-b', 'side');
@@ -143,23 +143,23 @@ test('entryBase: коммит плана и входа не связаны — �
   const r = entryBase(dir, info, 'прод');
   assert.equal(r.base, side);
   assert.deepEqual(overlayOf(r), [['a.php', entry]]);
-  assert.match(r.source, /поверх — 1 коммит входа/);
+  assert.match(r.source, /поверх — 1 коммит синхронизации/);
 });
 
-test('entryBase: учитываются только коммиты входа своего окружения — «Дев» не наложение для прода и наоборот', () => {
+test('entryBase: учитываются только коммиты синхронизации своего окружения — «Дев» не наложение для прода и наоборот', () => {
   const dir = kitRepo();
   const info = kitInfo(dir);
   const first = git(dir, 'rev-parse', 'HEAD').trim();
   writeFiles(dir, { 'a.php': '2' });
   const dev = commit(dir, 'Дев: изменения без kit на 2026-10-29 (2 файла)');
-  assert.deepEqual(overlayOf(entryBase(dir, info, 'прод')), [], 'коммит входа с дева — не в счёт для прода');
+  assert.deepEqual(overlayOf(entryBase(dir, info, 'прод')), [], 'коммит синхронизации с дева — не в счёт для прода');
   assert.equal(entryBase(dir, info, 'прод').base, first);
   assert.deepEqual(overlayOf(entryBase(dir, info, 'дев')), [['a.php', dev]]);
   writeFiles(dir, { 'a.php': '3' });
   const prodEntry = commit(dir, ENTRY);
   assert.deepEqual(overlayOf(entryBase(dir, info, 'прод')), [['a.php', prodEntry]]);
-  assert.deepEqual(overlayOf(entryBase(dir, info, 'дев')), [['a.php', dev]], 'коммит входа с прода — не в счёт для дева');
-  // «Залито на прод» важнее чужого коммита входа
+  assert.deepEqual(overlayOf(entryBase(dir, info, 'дев')), [['a.php', dev]], 'коммит синхронизации с прода — не в счёт для дева');
+  // «Залито на прод» важнее чужого коммита синхронизации
   writeFiles(dir, { 'a.php': '4' });
   const step = commit(dir, '1.1: правка');
   fs.writeFileSync(path.join(dir, 'plan.md'), plan([step.slice(0, 9)]));
@@ -168,7 +168,7 @@ test('entryBase: учитываются только коммиты входа �
   commit(dir, 'Дев: изменения без kit на 2026-10-30 (1 файл)');
   const r = entryBase(dir, info, 'прод');
   assert.equal(r.base, step);
-  assert.deepEqual(overlayOf(r), [], 'коммит входа дева после заливки прода — не наложение');
+  assert.deepEqual(overlayOf(r), [], 'коммит синхронизации дева после заливки прода — не наложение');
   assert.equal(r.source, '«Залито на прод» в plan.md');
 });
 
@@ -208,7 +208,7 @@ test('entryBase: хеш плана, которого нет в репозито�
   const r2 = entryBase(dir, info, 'прод');
   assert.equal(r2.base, first);
   assert.deepEqual(overlayOf(r2), [['a.php', entry]]);
-  assert.match(r2.source, /не найден.*; поверх — 1 коммит входа$/);
+  assert.match(r2.source, /не найден.*; поверх — 1 коммит синхронизации$/);
 });
 
 test('entryBase: не git и пустой репозиторий — error', () => {
@@ -233,7 +233,7 @@ test('skipTake: архивы и бэкапы без регистра, преде
   assert.equal(skipTake('a/_dir.back/index.php', 10), null, 'маска — только по имени файла');
 });
 
-test('oursPaths: первый коммит и коммиты входа не считаются, слияния — тоже; пути с пробелом, кириллицей и кавычкой', () => {
+test('oursPaths: первый коммит и коммиты синхронизации не считаются, слияния — тоже; пути с пробелом, кириллицей и кавычкой', () => {
   const dir = kitRepo({ 'first.php': '1' });
   assert.deepEqual([...oursPaths(dir)], [], 'только первый коммит');
   writeFiles(dir, { 'a.php': '2', "д/с пробелом 'x'.php": 'n' });
@@ -264,7 +264,7 @@ test('oursPaths: ветка с слиянием; пустой репозитор
   assert.equal(oursPaths(empty).size, 0);
 });
 
-test('pendingDelete: удалено шагом и нет в HEAD; входом — нет; вернувшееся — нет', () => {
+test('pendingDelete: удалено шагом и нет в HEAD; синхронизацией — нет; вернувшееся — нет', () => {
   const dir = kitRepo({ 'gone.php': '1', 'back.php': '1', 'by-entry.php': '1', 'keep.php': '1', 'д/ста рое.php': '1' });
   fs.unlinkSync(path.join(dir, 'gone.php'));
   fs.unlinkSync(path.join(dir, 'back.php'));
@@ -313,20 +313,20 @@ test('entrySubject и summaryLine: склонение; нечего — «про
   assert.equal(entrySubject('дев', '2026-10-29', 3), 'Дев: изменения без kit на 2026-10-29 (3 файла)');
   assert.ok(ENTRY_RE.test(entrySubject('прод', 'd', 1)) && ENTRY_RE.test(entrySubject('дев', 'd', 1)));
 
-  assert.equal(summaryLine({ env: 'прод', changed: [], added: [], removed: [], ours: [], skipped: [], waiting: [] }), '[kit] Вход с прода: прод совпадает с git.');
-  assert.equal(summaryLine({ env: 'прод' }), '[kit] Вход с прода: прод совпадает с git.');
-  assert.equal(summaryLine({ env: 'дев' }), '[kit] Вход с дева: дев совпадает с git.');
+  assert.equal(summaryLine({ env: 'прод', changed: [], added: [], removed: [], ours: [], skipped: [], waiting: [] }), '[kit] Синхронизация с продом: прод совпадает с git.');
+  assert.equal(summaryLine({ env: 'прод' }), '[kit] Синхронизация с продом: прод совпадает с git.');
+  assert.equal(summaryLine({ env: 'дев' }), '[kit] Синхронизация с девом: дев совпадает с git.');
 
   const only = summaryLine({ env: 'прод', changed: ['a.php', 'b.php', 'c.php'], added: ['n.php'] });
-  assert.equal(only.startsWith('[kit] Вход с прода: '), true);
+  assert.equal(only.startsWith('[kit] Синхронизация с продом: '), true);
   assert.match(only, /изменено 3, добавлено 1, удалено 0/);
   assert.ok(!only.includes('\n'));
   assert.ok(!/доработ|не забрано|удален/i.test(only.replace(/удалено 0/, '')), 'пустые части не выводятся: ' + only);
   const nulls = { env: 'прод', changed: null, added: null, removed: 5, ours: 'x', skipped: {}, waiting: undefined };
-  assert.equal(summaryLine(nulls), '[kit] Вход с прода: прод совпадает с git.', 'null и не-массив — как пустой массив');
+  assert.equal(summaryLine(nulls), '[kit] Синхронизация с продом: прод совпадает с git.', 'null и не-массив — как пустой массив');
   assert.match(summaryLine({ ...nulls, added: ['n'], ours: null }), /изменено 0, добавлено 1, удалено 0/);
-  assert.equal(summaryLine(), '[kit] Вход с прода: прод совпадает с git.');
-  assert.match(summaryLine({ env: 'дев', removed: ['x'] }), /^\[kit\] Вход с дева: .*изменено 0, добавлено 0, удалено 1/);
+  assert.equal(summaryLine(), '[kit] Синхронизация с продом: прод совпадает с git.');
+  assert.match(summaryLine({ env: 'дев', removed: ['x'] }), /^\[kit\] Синхронизация с девом: .*изменено 0, добавлено 0, удалено 1/);
 
   const full = summaryLine({ env: 'прод', changed: ['a.php'], ours: ['a.php'], skipped: [{ path: 'x.zip', why: 'архив' }, { path: 'big.bin', why: 'больше 10 МБ' }],
     waiting: ['old.php'] });
@@ -343,22 +343,22 @@ test('entrySubject и summaryLine: склонение; нечего — «про
 test('summaryLine: merged — «Совмещено с нашими незакоммиченными правками» после доработок; только оно — числа нулевые, не «совпадает»', () => {
   const PART = 'Совмещено с нашими незакоммиченными правками — проверьте в панели изменений: ';
   assert.equal(summaryLine({ env: 'прод', merged: ['a.php', 'b.php'] }),
-    '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. ' + PART + 'a.php, b.php.');
-  assert.equal(summaryLine({ env: 'прод', merged: [] }), '[kit] Вход с прода: прод совпадает с git.');
+    '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. ' + PART + 'a.php, b.php.');
+  assert.equal(summaryLine({ env: 'прод', merged: [] }), '[kit] Синхронизация с продом: прод совпадает с git.');
   const full = summaryLine({ env: 'дев', changed: ['x.php'], ours: ['x.php'], merged: ['m.php'], skipped: [{ path: 'a.zip', why: 'архив' }] });
   const iOurs = full.indexOf('доработ');
   const iMerged = full.indexOf('Совмещено');
   const iSkip = full.indexOf('Не забрано');
   assert.ok(iOurs > 0 && iMerged > iOurs && iSkip > iMerged, full);
-  assert.match(full, /^\[kit\] Вход с дева: файлов без kit: изменено 1/);
+  assert.match(full, /^\[kit\] Синхронизация с девом: файлов без kit: изменено 1/);
 });
 
 test('summaryLine: conflicts (Р-37) — «Не совместилось само — вопрос ниже»; одни конфликты — не «совпадает»', () => {
   assert.equal(summaryLine({ env: 'прод', conflicts: ['a.php', 'b.php'] }),
-    '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: a.php, b.php.');
+    '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: a.php, b.php.');
   assert.equal(summaryLine({ env: 'дев', conflicts: ['a.php'] }),
-    '[kit] Вход с дева: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: a.php.');
-  assert.equal(summaryLine({ env: 'прод', conflicts: [] }), '[kit] Вход с прода: прод совпадает с git.');
+    '[kit] Синхронизация с девом: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: a.php.');
+  assert.equal(summaryLine({ env: 'прод', conflicts: [] }), '[kit] Синхронизация с продом: прод совпадает с git.');
   const full = summaryLine({ env: 'прод', changed: ['x.php'], merged: ['m.php'], conflicts: ['c.php'], skipped: [{ path: 'a.zip', why: 'архив' }] });
   const iMerged = full.indexOf('Совмещено');
   const iConf = full.indexOf('Не совместилось');
@@ -368,10 +368,10 @@ test('summaryLine: conflicts (Р-37) — «Не совместилось сам�
   assert.match(many, /c9\.php и ещё 2\.$/);
 });
 
-test('summaryLine: conflictsAhead (--check, Р-39) — «Не совместится само — вопрос задаст вход общей сессии»; одни — не «совпадает»', () => {
+test('summaryLine: conflictsAhead (--check, Р-39) — «Не совместится само — вопрос задаст синхронизация в основной папке»; одни — не «совпадает»', () => {
   assert.equal(summaryLine({ env: 'прод', conflictsAhead: ['a.php'] }),
-    '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместится само — вопрос задаст вход общей сессии: a.php.');
-  assert.equal(summaryLine({ env: 'прод', conflictsAhead: [] }), '[kit] Вход с прода: прод совпадает с git.');
+    '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместится само — вопрос задаст синхронизация в основной папке: a.php.');
+  assert.equal(summaryLine({ env: 'прод', conflictsAhead: [] }), '[kit] Синхронизация с продом: прод совпадает с git.');
   const full = summaryLine({ env: 'прод', changed: ['x.php'], conflictsAhead: ['c.php'], skipped: [{ path: 'd', why: 'у нас на этом месте папка' }] });
   assert.ok(full.indexOf('Не совместится') > 0 && full.indexOf('Не забрано') > full.indexOf('Не совместится'), full);
 });
@@ -574,4 +574,33 @@ test('markSession: неверный результат не пишется; comm
   const rec = readMark(dir).sessions.s;
   assert.equal(rec.result, 'checked');
   assert.ok(!('commit' in rec), 'запись сессии заменяется целиком');
+});
+
+test('правила без SSH — в lib/prod.js (48.6): имя пути, вотчеры и объём, папка конфликтов, blob и его варианты; lib/prod.js не берёт lib/prod-ssh.js', () => {
+  for (const name of ['badName', 'watcherHits', 'bigOf', 'stopLines', 'conflictDir', 'md5Eol', 'catBlobs', 'blobHashes', 'blobVariants', 'readText', 'clean']) {
+    assert.equal(typeof prod[name], 'function', name);
+  }
+  assert.equal(prod.UNKNOWN_SIZE, 1024 * 1024);
+  assert.equal(prod.SKIP, 'Отложить');
+  assert.ok(!fs.readFileSync(require.resolve('../plugins/kit/scripts/lib/prod'), 'utf8').includes("require('./prod-ssh')"), 'без круговой зависимости');
+  assert.equal(md5Eol(Buffer.from('a\r\nb\n'), false), md5('a\nb\n'));
+  assert.equal(md5Eol(Buffer.from('a\r\nb\n'), true), md5('a\r\nb\r\n'));
+});
+
+test('bigOf и stopLines (48.6): «Синхронизация остановлена, ничего не записано»; варианты «… / Отложить», флаги prod-sync.js', () => {
+  const MB = 1024 * 1024;
+  assert.equal(bigOf([{ path: 'a.bin', size: 10 * MB }, { path: 'b.php' }], ENTRY_LIMIT), null);
+  const big = bigOf([{ path: 'media/a/b/c/1.bin', size: 40 * MB }, { path: '2.bin', size: 20 * MB }, { path: 'x.php' }], ENTRY_LIMIT);
+  assert.deepEqual(big, { total: 61 * MB, top: [['media/a/b/', 40 * MB], ['2.bin', 20 * MB], ['x.php', MB]] }, 'размер неизвестен — 1 МБ');
+  const ask = 'спроси пользователя одним AskUserQuestion: ';
+  const byWatchers = 'по вотчерам — Забирать (`prod-sync.js --watchers-ok`; лучше выключить вотчеры на время синхронизации) / Отложить';
+  const bySize = 'по объёму — Забрать всё (`prod-sync.js --big-ok`) / Не забирать папки (допиши их в .gitignore и повтори синхронизацию) / Отложить';
+  assert.deepEqual(stopLines({ exts: ['scss'], hits: ['a.scss'] }, big, ENTRY_LIMIT), [
+    'Синхронизация остановлена, ничего не записано:',
+    '  File Watchers PhpStorm (scss) — среди забираемого 1 файл: a.scss; пересборка перезапишет результат, PhpStorm (Always) зальёт его на сервер',
+    '  Забрать за одну синхронизацию — 61 МБ (больше 50 МБ); самые тяжёлые папки: media/a/b/ — 40 МБ, 2.bin — 20 МБ, x.php — 1 МБ',
+    ask + byWatchers + '; ' + bySize + '; оба ответа «забирать» — флаги вместе',
+  ]);
+  assert.equal(stopLines(null, big, ENTRY_LIMIT).pop(), ask + bySize);
+  assert.equal(stopLines({ exts: ['scss'], hits: ['a.scss'] }, null, ENTRY_LIMIT).pop(), ask + byWatchers);
 });

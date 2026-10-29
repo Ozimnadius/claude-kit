@@ -1,21 +1,25 @@
 'use strict';
-// Вход с прода (этап 48): правила сверки сервера с git — три версии файла (база, HEAD, сервер), база входа, что не забирать,
-// наши доработки, ждущее удаления, совмещение (git merge-file), File Watchers PhpStorm, строка для пользователя и отметка
-// входа. Только чистые правила и git; сервер, скачивание и коммит — в prod-entry.js. Отметка — `.claude/kit-prod.json`:
-// читается без исключений, пишется атомарно.
+// Синхронизация с продом (этап 48): правила сверки сервера с git без SSH — три версии файла (база, HEAD, сервер), база
+// синхронизации, что не забирать (и недопустимое имя пути), наши доработки, ждущее удаления, совмещение (git merge-file) и папка
+// конфликтов, File Watchers PhpStorm и объём за раз, строки для пользователя, отметка синхронизации; blob из git и md5 его
+// вариантов переводов строк. Только правила и git; сценарии для сервера и их разбор — lib/prod-ssh.js; подключение,
+// скачивание, запись и коммит — prod-sync.js. Отметка — `.claude/kit-prod.json`: читается без исключений, пишется атомарно.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { git, isSsh, baseFromPlan, sectionOf } = require('./deploy');
 const { getSection, parseTable } = require('./md');
 const { writeFilesAtomic } = require('./atomic');
+const { readDeployment } = require('./deployment');
+const { safePath } = require('../ssh-deploy');
 
-// Заголовок коммита входа: по нему находятся база, «наши доработки» и файлы, не идущие на заливку.
+// Заголовок коммита синхронизации: по нему находятся база, «наши доработки» и файлы, не идущие на заливку.
 const ENTRY_RE = /^(Прод|Дев): изменения без kit /;
 const FILE_LIMIT = 10 * 1024 * 1024; // файл больше — не забирается
-const ENTRY_LIMIT = 50 * 1024 * 1024; // за один вход больше — стоп и вопрос
+const ENTRY_LIMIT = 50 * 1024 * 1024; // за одну синхронизацию больше — стоп и вопрос
+const UNKNOWN_SIZE = 1024 * 1024; // размер файла неизвестен — для объёма за раз и порций скачивания
 const MARK_FILE = '.claude/kit-prod.json';
 const MARK_TTL_MS = 7 * 24 * 3600 * 1000;
 const LIST_LIMIT = 10;
@@ -64,12 +68,13 @@ const commitHash = (cwd, rev) => {
   return r.ok ? r.out.trim() : null;
 };
 
-// База входа (Т-5) — по путям, «известное состояние сервера» (с 48.3, Р-24). base (D) — коммит последней строки «Залито на …»
-// плана (хеш, которого нет в репозитории, не в счёт — с пометкой); нет — первый коммит репозитория. Поверх D — пути, которые меняли
-// коммиты входа своего окружения из D..HEAD (после D или не связанные с ней): overlay — путь → полный хеш самого нового такого
-// коммита (путь удалён им — версии в базе нет). Дерево одного коммита входа базой быть не может: это HEAD на момент входа, в нём и
-// наши незалитые шаги, а сервер с ними не совпадал. Более старая база для остальных путей безопасна — ложного «забрать» поверх
-// нашего незалитого не будет. → { base, source, overlay: Map, entries: число коммитов входа поверх } | { error }.
+// База синхронизации (Т-5) — по путям, «известное состояние сервера» (с 48.3, Р-24). base (D) — коммит последней строки «Залито
+// на …» плана (хеш, которого нет в репозитории, не в счёт — с пометкой); нет — первый коммит репозитория. Поверх D — пути, которые
+// меняли коммиты синхронизации своего окружения из D..HEAD (после D или не связанные с ней): overlay — путь → полный хеш самого
+// нового такого коммита (путь удалён им — версии в базе нет). Дерево одного коммита синхронизации базой быть не может: это HEAD на
+// момент синхронизации, в нём и наши незалитые шаги, а сервер с ними не совпадал. Более старая база для остальных путей
+// безопасна — ложного «забрать» поверх нашего незалитого не будет. → { base, source, overlay: Map, entries: число коммитов
+// синхронизации поверх } | { error }.
 function entryBase(cwd, info, env) {
   if (!commitHash(cwd, 'HEAD')) return { error: 'в репозитории нет коммитов или это не git' };
   const planRaw = baseFromPlan(path.resolve(cwd, info.planRel), env, { cwd, byStep: isSsh(info) });
@@ -83,7 +88,8 @@ function entryBase(cwd, info, env) {
     base = roots[roots.length - 1];
     source = 'первый коммит репозитория' + note;
   }
-  // только коммиты входа своего окружения: вход с дева говорит о деве, а прод мог быть любым; git log — от новых к старым
+  // только коммиты синхронизации своего окружения: синхронизация с девом говорит о деве, а прод мог быть любым; git log — от
+  // новых к старым
   const prefix = (env === 'дев' ? 'Дев' : 'Прод') + ': изменения без kit ';
   const overlay = new Map();
   let entries = 0;
@@ -92,7 +98,7 @@ function entryBase(cwd, info, env) {
     entries++;
     for (const p of c.paths) if (!overlay.has(p)) overlay.set(p, c.hash);
   }
-  if (entries) source += '; поверх — ' + entries + ' ' + plural(entries, 'коммит', 'коммита', 'коммитов') + ' входа';
+  if (entries) source += '; поверх — ' + entries + ' ' + plural(entries, 'коммит', 'коммита', 'коммитов') + ' синхронизации';
   return { base, source, overlay, entries };
 }
 
@@ -110,8 +116,8 @@ function treeOf(cwd, rev) {
   return out;
 }
 
-// Известное состояние сервера по entryBase как дерево: дерево base, поверх — пути overlay из своих коммитов входа (нет в его
-// дереве — удалён, в базе его нет). → Map<путь, { mode, oid }>. Ошибку git бросает.
+// Известное состояние сервера по entryBase как дерево: дерево base, поверх — пути overlay из своих коммитов синхронизации (нет
+// в его дереве — удалён, в базе его нет). → Map<путь, { mode, oid }>. Ошибку git бросает.
 function baseTree(cwd, b) {
   const tree = treeOf(cwd, b.base);
   const byCommit = new Map();
@@ -163,7 +169,7 @@ function logPaths(cwd, extra = []) {
   return commits;
 }
 
-// Наши доработки (Т-7): пути, которые менял хоть один коммит, кроме первого и коммитов входа.
+// Наши доработки (Т-7): пути, которые менял хоть один коммит, кроме первого и коммитов синхронизации.
 function oursPaths(cwd) {
   const out = new Set();
   for (const c of logPaths(cwd)) {
@@ -291,9 +297,9 @@ function mergeVersions({ ours = null, base = null, theirs = null } = {}) {
 }
 
 // Строка для пользователя (Т-7). Массивы путей; skipped — [{ path, why }]. Числа — изменено/добавлено/удалено без kit (только
-// забранное коммитом входа); merged — совмещённое с нашими незакоммиченными правками в этом входе (Р-33); conflicts — не
-// совместилось само (Р-37: подробности и вопрос — строками ниже); conflictsAhead — не совместится само (--check, Р-39: вопрос
-// задаст вход общей сессии). «Совпадает с git» — только если всё пусто.
+// забранное коммитом синхронизации); merged — совмещённое с нашими незакоммиченными правками в этой синхронизации (Р-33);
+// conflicts — не совместилось само (Р-37: подробности и вопрос — строками ниже); conflictsAhead — не совместится само (--check,
+// Р-39: вопрос задаст синхронизация в основной папке). «Совпадает с git» — только если всё пусто.
 const cleanText = (s) => String(s).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '?');
 const listOf = (items, fmt = cleanText) => items.slice(0, LIST_LIMIT).map(fmt).join(', ') +
   (items.length > LIST_LIMIT ? ' и ещё ' + (items.length - LIST_LIMIT) : '');
@@ -305,19 +311,221 @@ function summaryLine(input = {}) {
   const all = keys.map((k) => list(input[k]));
   const [changed, added, removed, ours, merged, conflicts, ahead, skipped, waiting] = all;
   const dev = env === 'дев';
-  const head = '[kit] ' + (dev ? 'Вход с дева: ' : 'Вход с прода: ');
+  const head = '[kit] ' + (dev ? 'Синхронизация с девом: ' : 'Синхронизация с продом: ');
   if (!all.some((a) => a.length)) return head + (dev ? 'дев' : 'прод') + ' совпадает с git.';
   const parts = [`файлов без kit: изменено ${changed.length}, добавлено ${added.length}, удалено ${removed.length}.`];
   if (ours.length) parts.push(`Наши прошлые доработки среди изменённых (проверьте, не затёрты ли): ${listOf(ours)}.`);
   if (merged.length) parts.push(`Совмещено с нашими незакоммиченными правками — проверьте в панели изменений: ${listOf(merged)}.`);
   if (conflicts.length) parts.push(`Не совместилось само — вопрос ниже: ${listOf(conflicts)}.`);
-  if (ahead.length) parts.push(`Не совместится само — вопрос задаст вход общей сессии: ${listOf(ahead)}.`);
+  if (ahead.length) parts.push(`Не совместится само — вопрос задаст синхронизация в основной папке: ${listOf(ahead)}.`);
   if (skipped.length) parts.push(`Не забрано, осталось на сервере: ${listOf(skipped, (s) => cleanText(s.path) + ' (' + cleanText(s.why) + ')')}.`);
   if (waiting.length) parts.push(`Ждёт удаления с сервера: ${listOf(waiting)}.`);
   return head + parts.join(' ');
 }
 
-// ---- Отметка входа ----------------------------------------------------------------------------------------------
+// ---- Имя пути, File Watchers и объём за раз, папка конфликтов ----------------------------------------------------------
+const md5 = (buf) => crypto.createHash('md5').update(buf).digest('hex');
+const readText = (file) => {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch (e) {
+    return '';
+  }
+};
+const clean = (s) => String(s).replace(/[\x00-\x1f\x7f-\x9f]/g, '?');
+// Вариант ответа «не сейчас» в вопросах пользователю (Р-42): синхронизация откладывается, ничего не записано.
+const SKIP = 'Отложить';
+
+const REPLACEMENT = String.fromCharCode(0xfffd); // имя на сервере не в UTF-8 — после разбора это уже другое имя
+const WIN_RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
+
+// Путь нельзя безопасно записать в рабочую копию и отдать kit-commit.js: не safePath, «\» (kit-commit.js читает его как «/»),
+// имя не в UTF-8, пробел в начале или в конце части (самопроверка kit-commit.js обрезает пробелы, М-5); на Windows ещё
+// <>:"|?*, CON, PRN, AUX, NUL, COM1–9, LPT1–9 (и с расширением), точка в конце части.
+function badName(p, win = process.platform === 'win32') {
+  const s = String(p);
+  if (!safePath(s) || s.includes('\\') || s.includes(REPLACEMENT)) return true;
+  const segs = s.split('/');
+  if (segs.some((seg) => /^ | $/.test(seg))) return true;
+  if (!win) return false;
+  return /[<>:"|?*]/.test(s) || segs.some((seg) => WIN_RESERVED.test(seg) || /\.$/.test(seg));
+}
+
+// Размер для пользователя: меньше 1 МБ — в КБ (с округлением вверх), иначе в МБ до десятых, с запятой.
+const mb = (n) => (n < 1024 * 1024 ? Math.max(1, Math.ceil(n / 1024)) + ' КБ' : String(Math.round(n / 104857.6) / 10).replace('.', ',') + ' МБ');
+
+// File Watchers при PhpStorm Always (Т-14, Р-31): пути, которые пересоберёт вотчер. Always — .idea/deployment.xml (нет или не
+// разобран — не Always), расширения — watcherExts. → { exts: [расширения], hits: [пути] }.
+function watcherHits(dir, paths) {
+  const none = { exts: [], hits: [] };
+  if (!paths.length) return none;
+  const exts = watcherExts(dir);
+  if (!exts.size || !readDeployment(readText(path.join(dir, '.idea', 'deployment.xml'))).always) return none;
+  const extOf = (p) => {
+    const name = p.split('/').pop();
+    const i = name.lastIndexOf('.');
+    return i < 0 ? '' : name.slice(i + 1).toLowerCase();
+  };
+  return { exts: [...exts].sort(), hits: paths.filter((p) => exts.has(extOf(p))).sort() };
+}
+
+// Объём за раз (Р-31): сумма размеров (неизвестный — UNKNOWN_SIZE) больше предела → { total, top: [[папка, размер]] — до 5
+// самых тяжёлых: папка файла, обрезанная до трёх уровней, файл в корне — сам по себе } | null.
+function bigOf(items, limit) {
+  const size = (it) => (Number.isFinite(it.size) ? it.size : UNKNOWN_SIZE);
+  const total = items.reduce((n, it) => n + size(it), 0);
+  if (total <= limit) return null;
+  const dirs = new Map();
+  for (const it of items) {
+    const segs = it.path.split('/');
+    const key = segs.length > 1 ? segs.slice(0, Math.min(3, segs.length - 1)).join('/') + '/' : it.path;
+    dirs.set(key, (dirs.get(key) || 0) + size(it));
+  }
+  return { total, top: [...dirs].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 5) };
+}
+
+// Остановка (Р-31, Р-40): вотчеры и объём — одной остановкой, одним вопросом; последняя строка — что делать Claude.
+function stopLines(w, big, limit) {
+  const said = [];
+  const ask = [];
+  if (w && w.hits.length) {
+    said.push(`File Watchers PhpStorm (${w.exts.join(', ')}) — среди забираемого ${w.hits.length} ${plural(w.hits.length, 'файл', 'файла', 'файлов')}: ` +
+      `${listOf(w.hits)}; пересборка перезапишет результат, PhpStorm (Always) зальёт его на сервер`);
+    ask.push('по вотчерам — Забирать (`prod-sync.js --watchers-ok`; лучше выключить вотчеры на время синхронизации) / ' + SKIP);
+  }
+  if (big) {
+    said.push(`Забрать за одну синхронизацию — ${mb(big.total)} (больше ${mb(limit)}); самые тяжёлые папки: ${big.top.map(([d, n]) => clean(d) + ' — ' + mb(n)).join(', ')}`);
+    ask.push('по объёму — Забрать всё (`prod-sync.js --big-ok`) / Не забирать папки (допиши их в .gitignore и повтори синхронизацию) / ' + SKIP);
+  }
+  return ['Синхронизация остановлена, ничего не записано:', ...said.map((l) => '  ' + l),
+    'спроси пользователя одним AskUserQuestion: ' + ask.join('; ') + (ask.length > 1 ? '; оба ответа «забирать» — флаги вместе' : '')];
+}
+
+// Папка конфликтов (Р-38): kit-prod-<8 знаков md5 пути папки проекта (на Windows — в нижнем регистре)>-* в os.tmpdir().
+// Прежние папки этого проекта убираются перед созданием новой; ошибки — молча (занятые остаются, чужие проекты не трогаются).
+function conflictDir(dir) {
+  const key = path.resolve(dir);
+  const tag = 'kit-prod-' + md5(process.platform === 'win32' ? key.toLowerCase() : key).slice(0, 8) + '-';
+  let old = [];
+  try {
+    old = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith(tag));
+  } catch (e) {
+    // список не прочитан — убирать нечего
+  }
+  for (const f of old) {
+    try {
+      fs.rmSync(path.join(os.tmpdir(), f), { recursive: true, force: true });
+    } catch (e) {
+      // занята — остаётся
+    }
+  }
+  return fs.mkdtempSync(path.join(os.tmpdir(), tag));
+}
+
+// ---- git: blob и md5 вариантов переводов строк -------------------------------------------------------------------------
+const CR = Buffer.from([13]);
+
+// md5 варианта с другими переводами строк: toCrlf — одиночный \n → \r\n, иначе \r\n → \n.
+function md5Eol(buf, toCrlf) {
+  const h = crypto.createHash('md5');
+  let from = 0;
+  for (let i = buf.indexOf(10); i >= 0; i = buf.indexOf(10, i + 1)) {
+    const cr = i > 0 && buf[i - 1] === 13;
+    if (toCrlf && !cr) {
+      h.update(buf.subarray(from, i));
+      h.update(CR);
+      from = i;
+    } else if (!toCrlf && cr) {
+      h.update(buf.subarray(from, i - 1));
+      from = i;
+    }
+  }
+  h.update(buf.subarray(from));
+  return h.digest('hex');
+}
+
+// Содержимое blob одним процессом git cat-file --batch, потоком: onBlob(oid, buf) по одному — в памяти один blob за раз.
+function catBlobs(dir, oids, onBlob) {
+  return new Promise((resolve, reject) => {
+    if (!oids.length) {
+      resolve();
+      return;
+    }
+    const child = spawn('git', ['cat-file', '--batch'], { cwd: dir, windowsHide: true });
+    let chunks = [];
+    let len = 0;
+    let cur = null;
+    let left = oids.length;
+    let failed = null;
+    let errText = '';
+    const flat = () => {
+      const b = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, len);
+      chunks = [b];
+      return b;
+    };
+    const drop = (b, n) => {
+      chunks = [b.subarray(n)];
+      len -= n;
+    };
+    child.stdout.on('data', (d) => {
+      if (failed) return;
+      chunks.push(d);
+      len += d.length;
+      try {
+        for (;;) {
+          if (!cur) {
+            if (!len) break;
+            const b = flat();
+            const nl = b.indexOf(10);
+            if (nl < 0) break;
+            const head = b.subarray(0, nl).toString('utf8');
+            const m = /^([0-9a-f]+) blob (\d+)$/.exec(head);
+            if (!m) throw new Error('git cat-file: ' + head);
+            cur = { oid: m[1], size: Number(m[2]) };
+            drop(b, nl + 1);
+          }
+          if (len < cur.size + 1) break;
+          const b = flat();
+          onBlob(cur.oid, b.subarray(0, cur.size));
+          drop(b, cur.size + 1);
+          cur = null;
+          left--;
+        }
+      } catch (e) {
+        failed = e;
+        child.kill();
+      }
+    });
+    child.stderr.on('data', (d) => { errText += d; });
+    child.on('error', (e) => { failed = failed || e; });
+    child.on('close', () => {
+      if (failed) reject(failed);
+      else if (left) reject(new Error('git cat-file: ответ неполный ' + errText.trim()));
+      else resolve();
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(oids.join('\n') + '\n');
+  });
+}
+
+// oid → { raw: md5 как есть, noCr: md5 без \r }.
+async function blobHashes(dir, oids) {
+  const out = new Map();
+  await catBlobs(dir, oids, (oid, buf) => {
+    const raw = md5(buf);
+    out.set(oid, { raw, noCr: buf.includes(13) ? md5NoCr(buf) : raw });
+  });
+  return out;
+}
+
+// oid → md5 вариантов с \r\n → \n и с одиночными \n → \r\n (любой из них без \r равен blob без \r).
+async function blobVariants(dir, oids) {
+  const out = new Map();
+  await catBlobs(dir, oids, (oid, buf) => out.set(oid, new Set([md5Eol(buf, false), md5Eol(buf, true)])));
+  return out;
+}
+
+// ---- Отметка синхронизации --------------------------------------------------------------------------------------
 // Ключи сессий — внешний ввод (`__proto__`, `constructor`): запись в объект — через defineProperty, поиск — по собственным свойствам.
 const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
 const setOwn = (o, k, v) => Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
@@ -399,5 +607,6 @@ function lastNeed(dir) {
 module.exports = {
   ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake,
   oursPaths, pendingDelete, inPending, watcherExts, mergeVersions, listOf, summaryLine, readMark, writeMark, markSession, sessionDone,
-  lastNeed,
+  lastNeed, UNKNOWN_SIZE, SKIP, readText, clean, badName, watcherHits, bigOf, stopLines, conflictDir, md5Eol, catBlobs, blobHashes,
+  blobVariants,
 };
