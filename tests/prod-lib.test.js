@@ -10,7 +10,7 @@ const { kitInfo } = require('../plugins/kit/scripts/lib/project');
 const prod = require('../plugins/kit/scripts/lib/prod');
 
 const { ENTRY_RE, entrySubject, md5NoCr, classify, entryBase, baseTree, FILE_LIMIT, ENTRY_LIMIT, skipTake, oursPaths, pendingDelete, inPending,
-  summaryLine, MARK_FILE, readMark, writeMark, markSession, sessionDone, lastNeed } = prod;
+  summaryLine, MARK_FILE, readMark, writeMark, markSession, sessionDone, lastNeed, watcherExts, mergeVersions } = prod;
 
 const PARAMS = { 'Режим': 'общий', 'Прод': 'https://alpha.example.com', 'Выкладка': 'вручную', 'План выкладки': 'plan.md' };
 const ENTRY = 'Прод: изменения без kit на 2026-10-29 (1 файл)';
@@ -338,6 +338,115 @@ test('entrySubject и summaryLine: склонение; нечего — «про
   assert.match(full, /big\.bin \(больше 10 МБ\)/);
   assert.match(full, /ждёт удаления с сервера/i);
   assert.match(full, /не забрано/i);
+});
+
+test('summaryLine: merged — «Совмещено с нашими незакоммиченными правками» после доработок; только оно — числа нулевые, не «совпадает»', () => {
+  const PART = 'Совмещено с нашими незакоммиченными правками — проверьте в панели изменений: ';
+  assert.equal(summaryLine({ env: 'прод', merged: ['a.php', 'b.php'] }),
+    '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. ' + PART + 'a.php, b.php.');
+  assert.equal(summaryLine({ env: 'прод', merged: [] }), '[kit] Вход с прода: прод совпадает с git.');
+  const full = summaryLine({ env: 'дев', changed: ['x.php'], ours: ['x.php'], merged: ['m.php'], skipped: [{ path: 'a.zip', why: 'архив' }] });
+  const iOurs = full.indexOf('доработ');
+  const iMerged = full.indexOf('Совмещено');
+  const iSkip = full.indexOf('Не забрано');
+  assert.ok(iOurs > 0 && iMerged > iOurs && iSkip > iMerged, full);
+  assert.match(full, /^\[kit\] Вход с дева: файлов без kit: изменено 1/);
+});
+
+test('summaryLine: conflicts (Р-37) — «Не совместилось само — вопрос ниже»; одни конфликты — не «совпадает»', () => {
+  assert.equal(summaryLine({ env: 'прод', conflicts: ['a.php', 'b.php'] }),
+    '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: a.php, b.php.');
+  assert.equal(summaryLine({ env: 'дев', conflicts: ['a.php'] }),
+    '[kit] Вход с дева: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: a.php.');
+  assert.equal(summaryLine({ env: 'прод', conflicts: [] }), '[kit] Вход с прода: прод совпадает с git.');
+  const full = summaryLine({ env: 'прод', changed: ['x.php'], merged: ['m.php'], conflicts: ['c.php'], skipped: [{ path: 'a.zip', why: 'архив' }] });
+  const iMerged = full.indexOf('Совмещено');
+  const iConf = full.indexOf('Не совместилось');
+  const iSkip = full.indexOf('Не забрано');
+  assert.ok(iMerged > 0 && iConf > iMerged && iSkip > iConf, full);
+  const many = summaryLine({ env: 'прод', conflicts: Array.from({ length: 12 }, (_, i) => `c${i}.php`) });
+  assert.match(many, /c9\.php и ещё 2\.$/);
+});
+
+test('summaryLine: conflictsAhead (--check, Р-39) — «Не совместится само — вопрос задаст вход общей сессии»; одни — не «совпадает»', () => {
+  assert.equal(summaryLine({ env: 'прод', conflictsAhead: ['a.php'] }),
+    '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместится само — вопрос задаст вход общей сессии: a.php.');
+  assert.equal(summaryLine({ env: 'прод', conflictsAhead: [] }), '[kit] Вход с прода: прод совпадает с git.');
+  const full = summaryLine({ env: 'прод', changed: ['x.php'], conflictsAhead: ['c.php'], skipped: [{ path: 'd', why: 'у нас на этом месте папка' }] });
+  assert.ok(full.indexOf('Не совместится') > 0 && full.indexOf('Не забрано') > full.indexOf('Не совместится'), full);
+});
+
+// .idea/watcherTasks.xml PhpStorm: задачи по образцу настоящего файла.
+const task = (attrs, ext, extra = '') => `    <TaskOptions${attrs}>\n      <option name="arguments" value="$FileName$" />\n` +
+  (ext === null ? '' : `      <option name="fileExtension" value="${ext}" />\n`) + `      <option name="name" value="W" />\n${extra}      <envs />\n    </TaskOptions>\n`;
+const watchers = (...tasks) => '<?xml version="1.0" encoding="UTF-8"?>\n<project version="4">\n  <component name="ProjectTasksOptions">\n' +
+  tasks.join('') + '  </component>\n</project>\n';
+
+test('watcherExts: включённые задачи (isEnabled="true" или без него), без точки и нижним регистром; выключенные — нет; нет файла или не разобран — пусто', () => {
+  const dir = makeProject({});
+  assert.deepEqual([...watcherExts(dir)], [], 'нет файла');
+  writeFiles(dir, { '.idea/watcherTasks.xml': watchers(task(' isEnabled="true"', 'scss'), task(' isEnabled="false"', 'less'), task('', '.JS'),
+    task(' isEnabled="true"', null), task(' isEnabled="true"', ' Ts ')) });
+  assert.deepEqual([...watcherExts(dir)].sort(), ['js', 'scss', 'ts']);
+  writeFiles(dir, { '.idea/watcherTasks.xml': '\uFEFF' + watchers('    <TaskOptions isEnabled="true" />\n', task(' isEnabled="true"', 'styl')) });
+  assert.deepEqual([...watcherExts(dir)], ['styl'], 'самозакрытая задача не съедает следующую; BOM не мешает');
+  writeFiles(dir, { '.idea/watcherTasks.xml': '<project><component name="ProjectTasksOptions"><TaskOptions isEnabled="true"><option name="fileExt' });
+  assert.deepEqual([...watcherExts(dir)], [], 'обрезанный файл');
+  writeFiles(dir, { '.idea/watcherTasks.xml': 'не xml' });
+  assert.deepEqual([...watcherExts(dir)], []);
+});
+
+test('mergeVersions: сошлось — результат; правки пересекаются — конфликт; базы нет — пустой файл; временная папка убирается', () => {
+  const B = (s) => Buffer.from(s);
+  const base = B('l1\nl2\nl3\nl4\nl5\n');
+  const made = [];
+  const mk = fs.mkdtempSync;
+  fs.mkdtempSync = (...a) => {
+    const d = mk(...a);
+    made.push(d);
+    return d;
+  };
+  try {
+    const ok = mergeVersions({ ours: B('L1\nl2\nl3\nl4\nl5\n'), base, theirs: B('l1\nl2\nl3\nl4\nL5\n') });
+    assert.deepEqual(ok, { result: B('L1\nl2\nl3\nl4\nL5\n') });
+    const bad = mergeVersions({ ours: B('наша\nl2\nl3\nl4\nl5\n'), base, theirs: B('сервер\nl2\nl3\nl4\nl5\n') });
+    assert.deepEqual(bad, { conflict: 'правки пересекаются' });
+    assert.deepEqual(mergeVersions({ ours: B('x\n'), base: null, theirs: B('x\n') }), { result: B('x\n') }, 'добавлен одинаково у обоих');
+    assert.deepEqual(mergeVersions({ ours: B('x\n'), base: null, theirs: B('y\n') }), { conflict: 'правки пересекаются' });
+  } finally {
+    fs.mkdtempSync = mk;
+  }
+  assert.equal(made.length, 4);
+  for (const d of made) {
+    assert.ok(path.basename(d).startsWith('kit-merge-'), d);
+    assert.ok(!fs.existsSync(d), 'временная папка убрана: ' + d);
+  }
+});
+
+test('mergeVersions: CRLF → LF до совмещения, результат — в стиле нашей версии; удалён с одной стороны; NUL — двоичный, без merge-file', () => {
+  const B = (s) => Buffer.from(s);
+  const base = B('l1\nl2\nl3\nl4\nl5\n');
+  assert.deepEqual(mergeVersions({ ours: B('L1\r\nl2\r\nl3\r\nl4\r\nl5\r\n'), base, theirs: B('l1\nl2\nl3\nl4\nL5\n') }),
+    { result: B('L1\r\nl2\r\nl3\r\nl4\r\nL5\r\n') }, 'наша с CRLF — результат с CRLF');
+  assert.deepEqual(mergeVersions({ ours: B('L1\nl2\nl3\nl4\nl5\n'), base: B('l1\r\nl2\r\nl3\r\nl4\r\nl5\r\n'), theirs: B('l1\r\nl2\r\nl3\r\nl4\r\nL5\r\n') }),
+    { result: B('L1\nl2\nl3\nl4\nL5\n') }, 'сервер с CRLF, наша с LF — результат с LF, без ложного конфликта');
+  assert.deepEqual(mergeVersions({ ours: null, base, theirs: B('x\n') }), { conflict: 'удалён у нас, изменён на сервере' });
+  assert.deepEqual(mergeVersions({ ours: B('x\n'), base, theirs: null }), { conflict: 'изменён у нас, удалён на сервере' });
+  assert.deepEqual(mergeVersions({ ours: null, base, theirs: null }), { result: null }, 'удалён у обоих — совмещать нечего');
+  const made = [];
+  const mk = fs.mkdtempSync;
+  fs.mkdtempSync = (...a) => {
+    made.push(a);
+    return mk(...a);
+  };
+  try {
+    for (const v of [{ ours: B('a\0b'), base, theirs: B('x\n') }, { ours: B('x\n'), base: B('\0'), theirs: B('y\n') }, { ours: B('x\n'), base, theirs: B('\0') }]) {
+      assert.deepEqual(mergeVersions(v), { conflict: 'двоичный файл' });
+    }
+  } finally {
+    fs.mkdtempSync = mk;
+  }
+  assert.equal(made.length, 0, 'двоичный файл — без временной папки и merge-file');
 });
 
 test('summaryLine: не больше 10 путей в части, дальше «и ещё N»; управляющие символы заменяются', () => {

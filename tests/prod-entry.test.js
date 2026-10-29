@@ -1,9 +1,11 @@
 'use strict';
-// Вход с прода по SSH (шаг 48.3): prod-entry.js — сверка «сервера» (временная папка через заглушку fake-ssh.js, хост sh) с git,
-// забор изменённого без нас, коммит входа через kit-commit.js, отметка .claude/kit-prod.json.
+// Вход с прода по SSH (шаги 48.3–48.4): prod-entry.js — сверка «сервера» (временная папка через заглушку fake-ssh.js, хост sh) с
+// git, забор изменённого без нас, коммит входа через kit-commit.js, отметка .claude/kit-prod.json; наши незакоммиченные правки и
+// совмещение, File Watchers PhpStorm и предел 50 МБ за вход.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
@@ -57,11 +59,11 @@ const text = (r) => r.out.join('\n');
 const last = (r) => r.out[r.out.length - 1];
 
 // Проект в git и «сервер» — временная папка с файлами сайта (по умолчанию — теми же). host — хост заглушки: sh, shdrop, down, hang,
-// fixed (готовый ответ FAKE_SSH_OUT).
-function site(files, { params = {}, gitignore = GITIGNORE, host = 'sh', server: serverFiles = files } = {}) {
+// fixed (готовый ответ FAKE_SSH_OUT); ssh — параметр с адресом («SSH прод» или «SSH дев»).
+function site(files, { params = {}, gitignore = GITIGNORE, host = 'sh', ssh = 'SSH прод', server: serverFiles = files } = {}) {
   const server = writeFiles(tmpDir('kit-prod-srv-'), serverFiles);
   const dir = tmpDir('kit-prod-');
-  writeFiles(dir, { '.claude/CLAUDE.md': paramsMd({ ...PARAMS, 'SSH прод': host + ':' + shPath(server), ...params }), '.gitignore': gitignore, ...files });
+  writeFiles(dir, { '.claude/CLAUDE.md': paramsMd({ ...PARAMS, [ssh]: host + ':' + shPath(server), ...params }), '.gitignore': gitignore, ...files });
   g(dir, 'init', '-q');
   g(dir, 'config', 'core.autocrlf', 'input');
   commit(dir, '0.1: исходники');
@@ -92,10 +94,46 @@ async function withEnv(vars, fn) {
 }
 
 // Готовый ответ сервера на сверку (для FAKE_SSH_OUT и разбора): states — { номер: N | U | O }, hashes — строки md5sum по порядку
-// отслеживаемых «есть», list — [[размер, путь]] из find.
-const listOut = ({ states = {}, hashes = [], list = [], findCode = 0 }) => [
-  ...Object.entries(states).map(([n, s]) => `KIT_S ${n} ${s}`), 'KIT_H', ...hashes, 'KIT_L',
+// отслеживаемых «есть», sizes — их размеры (по умолчанию 1), list — [[размер, путь]] из find.
+const listOut = ({ states = {}, hashes = [], sizes = hashes.map(() => 1), list = [], findCode = 0 }) => [
+  ...Object.entries(states).map(([n, s]) => `KIT_S ${n} ${s}`), 'KIT_H', ...hashes, 'KIT_Z', ...sizes.map(String), 'KIT_L',
   Buffer.from(list.map(([s, p]) => `${s} ${p}\0`).join('')).toString('base64'), `KIT_LE ${findCode}`, 'KIT_END', ''].join('\n');
+
+// .idea PhpStorm: deployment.xml (always — автозаливка Always) и watcherTasks.xml (watchers — [[расширение, включён]]).
+function idea(dir, { always = false, watchers = [] } = {}) {
+  writeFiles(dir, {
+    '.idea/deployment.xml': '<?xml version="1.0" encoding="UTF-8"?>\n<project version="4">\n  <component name="PublishConfigData"' +
+      (always ? ' autoUpload="Always"' : '') + ' serverName="alpha">\n    <serverData>\n      <paths name="alpha">\n        <serverdata>\n' +
+      '          <mappings>\n            <mapping deploy="/" local="$PROJECT_DIR$" web="/" />\n          </mappings>\n        </serverdata>\n' +
+      '      </paths>\n    </serverData>\n  </component>\n</project>\n',
+    '.idea/watcherTasks.xml': '<?xml version="1.0" encoding="UTF-8"?>\n<project version="4">\n  <component name="ProjectTasksOptions">\n' +
+      watchers.map(([ext, on]) => `    <TaskOptions isEnabled="${on}">\n      <option name="fileExtension" value="${ext}" />\n` +
+        '      <option name="name" value="W" />\n      <option name="output" value="$FileNameWithoutExtension$.css" />\n    </TaskOptions>\n').join('') +
+      '  </component>\n</project>\n',
+  });
+}
+// Сценарий последнего подключения (FAKE_SSH_LOG): было ли скачивание.
+const lastSent = (log) => JSON.parse(fs.readFileSync(log, 'utf8')).stdin;
+const fetched = (log) => /KIT_F /.test(lastSent(log));
+// Пути временных файлов конфликта из строки вывода: «  путь — причина; наша — …; сервера — …; база — …». Папку kit-prod-* вход
+// не убирает (её читает Claude) — тесты убирают её сами при выходе.
+const conflictDirs = new Set();
+process.on('exit', () => {
+  for (const d of conflictDirs) fs.rmSync(d, { recursive: true, force: true });
+});
+function conflictOf(r, rel) {
+  const line = r.out.find((l) => l.startsWith('  ' + rel + ' — '));
+  assert.ok(line, 'нет строки конфликта ' + rel + '\n' + text(r));
+  const m = /^ {2}(.+?) — (.+?); наша — (.+?); сервера — (.+?); база — (.+)$/.exec(line);
+  assert.ok(m, line);
+  const file = (v) => (v === 'нет' ? null : v);
+  for (const f of [file(m[4]), file(m[5])].filter(Boolean)) {
+    let d = f;
+    while (path.dirname(d) !== d && !path.basename(d).startsWith('kit-prod-')) d = path.dirname(d);
+    if (path.basename(d).startsWith('kit-prod-')) conflictDirs.add(d);
+  }
+  return { why: m[2], ours: m[3], server: file(m[4]), base: file(m[5]) };
+}
 
 // ---- Разбор и правила ---------------------------------------------------------------------------------------------------
 
@@ -120,6 +158,23 @@ test('badName: небезопасный путь — везде; на Windows е
   assert.equal(pe.badName('ab:c.php', false), false, 'на Linux двоеточие допустимо (кроме «буквы диска» в начале — safePath)');
   assert.equal(pe.badName('a:b.php', false), true);
   assert.equal(pe.badName('con.php', false), false);
+  // М-5: пробел в начале или в конце любой части — на всех ОС (самопроверка kit-commit.js обрезает пробелы в именах)
+  for (const p of [' x.php', 'x.php ', 'a/ b.php', 'папка /x.php', ' папка/x.php']) {
+    assert.equal(pe.badName(p, false), true, JSON.stringify(p));
+    assert.equal(pe.badName(p, true), true, JSON.stringify(p));
+  }
+  assert.equal(pe.badName('x.php.', false), false, 'точка в конце — только Windows');
+});
+
+test('pruneRules: .gitignore в папке над P (М-1) — P и её детей не отрезать; P целиком — смотрим до родителя P', () => {
+  const own = new Set(['a', 'c']);
+  const r = pe.pruneRules('/a/b/*\n/c/d/\n/e/f/\n/g/h/*\n', (p) => own.has(p) || p === 'e/f' || p === 'g');
+  assert.ok(!r.some((x) => x.path === 'a/b'), 'a/.gitignore может вернуть детей a/b');
+  assert.ok(!r.some((x) => x.path === 'c/d'), 'c/.gitignore может вернуть c/d');
+  assert.deepEqual(r.find((x) => x.path === 'e/f'), { path: 'e/f', dir: true }, 'свой e/f/.gitignore git не читает — e/f целиком можно');
+  assert.ok(!r.some((x) => x.path === 'g/h'), 'g/.gitignore над g/h');
+  assert.deepEqual(pe.pruneRules('/a/b/*\n/c/d/\n').filter((x) => x.path === 'a/b' || x.path === 'c/d'),
+    [{ path: 'a/b', children: true, keep: [], names: [] }, { path: 'c/d', dir: true }]);
 });
 
 test('pruneRules: шаблон gitignore-bitrix с рабочими папками — дети bitrix/, кроме рабочих, дети upload/, кроме docs; .env.example не отрезается (Р-11)', () => {
@@ -175,20 +230,29 @@ test('listScript: пути — только через shq; md5 пачкой (xa
   assert.ok(s.includes("-printf '%s %P\\0'"));
   assert.ok(s.includes("-path './bitrix/*'"));
   assert.match(s, /\nexit 0\n$/);
+  // М-11: размеры отслеживаемых — пачкой по тому же списку, одним find на пачку
+  assert.ok(s.includes('xargs -0 sh -c \'find "$@" -maxdepth 0 -printf "%s\\n"\' sh'), s);
+  // без правил — только состояния, md5 и размеры, без обхода папки сайта
+  const h = pe.listScript('/srv/site', ['a.php'], null);
+  assert.doesNotMatch(h, /-prune/);
+  assert.match(h, /xargs -0 md5sum/);
 });
 
 test('parseList: состояния, хеши по порядку (и с «\\» в начале), список find с размерами и переводом строки в имени; обрыв, лишний хеш, KIT_ERR', () => {
   const tracked = ['a.php', 'b.php', 'c.php', 'd.php', 'e.php'];
-  const out = listOut({ states: { 2: 'U', 4: 'O', 5: 'N' }, hashes: [md5('a') + ' ', '\\' + md5('c') + ' '], list: [[1, 'a.php'], [3, "new/it's\nфайл.php"]], findCode: 1 });
+  const out = listOut({ states: { 2: 'U', 4: 'O', 5: 'N' }, hashes: [md5('a') + ' ', '\\' + md5('c') + ' '], sizes: [1, 20971520], list: [[1, 'a.php'], [3, "new/it's\nфайл.php"]], findCode: 1 });
   const r = pe.parseList(out, tracked);
   assert.equal(r.err, null);
   assert.equal(r.bad, null);
   assert.deepEqual(Object.fromEntries(r.state), { 'a.php': 'file', 'b.php': 'unreadable', 'c.php': 'file', 'd.php': 'notfile', 'e.php': 'absent' });
   assert.deepEqual(Object.fromEntries(r.md5), { 'a.php': md5('a'), 'c.php': md5('c') });
+  assert.deepEqual(Object.fromEntries(r.sizes), { 'a.php': 1, 'c.php': 20971520 }, 'М-11: размеры отслеживаемых — по порядку, как хеши');
   assert.deepEqual([...r.files], [['a.php', 1], ["new/it's\nфайл.php", 3]]);
   assert.equal(r.findFailed, true);
   assert.match(pe.parseList(out.replace('KIT_END', ''), tracked).bad, /оборван/);
   assert.match(pe.parseList(listOut({ hashes: [md5('a')] }), tracked).bad, /хеш/);
+  assert.match(pe.parseList(listOut({ states: { 2: 'U', 4: 'O', 5: 'N' }, hashes: [md5('a'), md5('c')], sizes: [1] }), tracked).bad, /размер/);
+  assert.match(pe.parseList(listOut({ states: { 2: 'U', 4: 'O', 5: 'N' }, hashes: [md5('a'), md5('c')], sizes: [1, 'x'] }), tracked).bad, /размер/);
   assert.match(pe.parseList(listOut({ states: { 9: 'U' } }), tracked).bad, /9/);
   assert.equal(pe.parseList('KIT_ERR на сервере нет md5sum\n', tracked).err, 'на сервере нет md5sum');
 });
@@ -217,6 +281,7 @@ test('listScript на локальном sh: есть, нет, папка, не�
   assert.deepEqual(Object.fromEntries(list.state), { '-x.php': 'file', 'a.php': 'file', 'd': 'notfile', 'gone.php': 'absent', "n/it's файл.php": 'file', 'no/dir/x.php': 'absent' });
   assert.equal(list.md5.get('a.php'), md5('a\r\n'));
   assert.equal(list.md5.get("n/it's файл.php"), md5('ф'));
+  assert.deepEqual(Object.fromEntries(list.sizes), { '-x.php': 1, 'a.php': 3, "n/it's файл.php": Buffer.byteLength('ф') });
   assert.equal(list.files.get('d/f.txt'), 1);
   assert.equal(list.files.get("n/it's файл.php"), Buffer.byteLength('ф'));
   assert.deepEqual(fs.readdirSync(server).sort(), before);
@@ -490,6 +555,32 @@ test('--check и worktree: только сверка — есть что заб�
   assert.equal(readMark(outside).sessions.w.result, 'checked');
 });
 
+test('worktree на ветке от старого коммита, шаг основной папки залит (сервер = её HEAD) — сверяется основная папка: код 0; основная недоступна — своя (Р-39)', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'b.php': 'b\n' });
+  const outside = path.join(tmpDir('kit-prod-wt-'), 'w');
+  g(dir, 'worktree', 'add', '-q', '-b', 'old', outside); // ветка от первого коммита
+  writeFiles(dir, { 'a.php': '2 шаг\n' });
+  const s1 = commit(dir, '1.1: правка a.php');
+  writeFiles(dir, { '.claude/docs/deploy-prod.md': planMd([['1.1', s1.slice(0, 9)]]) });
+  commit(dir, '1.1а: план выкладки');
+  writeFiles(server, { 'a.php': '2 шаг\n' }); // шаг залит
+  const r = await run(outside, { sessionId: 'w' });
+  assert.equal(r.code, 0, text(r));
+  assert.ok(r.out.some((l) => l.startsWith('Сверка — по основной папке проекта: ') && l.includes(path.basename(dir))), text(r));
+  assert.match(text(r), /База: [0-9a-f]+ \(«Залито на прод» в \.claude\/docs\/deploy-prod\.md\)/);
+  assert.equal(last(r), '[kit] Вход с прода: прод совпадает с git.');
+  assert.equal(readMark(outside).sessions.w.result, 'checked');
+  assert.ok(!has(dir, '.claude/kit-prod.json'), 'отметка — в папке сессии');
+  assert.equal(read(outside, 'a.php'), '1\n');
+  // основная папка — не kit-проект: сверяется своя, как в 48.3 (на старой ветке залитый шаг — «изменение без нас»)
+  fs.renameSync(path.join(dir, '.claude', 'CLAUDE.md'), path.join(dir, '.claude', 'CLAUDE.off'));
+  const own = await run(outside, { sessionId: 'w2' });
+  fs.renameSync(path.join(dir, '.claude', 'CLAUDE.off'), path.join(dir, '.claude', 'CLAUDE.md'));
+  assert.equal(own.code, 1, text(own));
+  assert.doesNotMatch(text(own), /основной папке проекта:/);
+  assert.match(last(own), /^есть изменения без kit — вход делает общая сессия в основной папке/);
+});
+
 test('«Прод: —» и не kit-проект — код 2, файлов не пишет; «SSH прод» неверный — код 2; без SSH — код 2 «48.5»; не git — код 4; аргументы — код 4', () => {
   const plain = tmpDir('kit-prod-');
   g(plain, 'init', '-q');
@@ -521,6 +612,9 @@ test('«Прод: —» и не kit-проект — код 2, файлов не
   r = runScript('prod-entry.js', { cwd: nogit });
   assert.equal(r.code, 4, r.stdout);
   assert.ok(!has(nogit, '.claude/kit-prod.json'));
+  // М-9: последняя строка — что делать Claude, а не состояние
+  assert.match(r.stdout, /вход не сделан: в репозитории нет коммитов или это не git/);
+  assert.match(r.stdout.trim().split('\n').pop(), /^скажи пользователю: .*\/kit:project-init.*Работать без входа \(`prod-entry\.js --skip`\)$/);
 
   for (const args of [['--нет'], ['--timeout', '0']]) assert.equal(runScript('prod-entry.js', { cwd: ftp.dir, args }).code, 4, args.join(' '));
   for (const flag of ['--skip', '--ftp-done', '--hook']) {
@@ -543,24 +637,509 @@ test('секрет в скачанном файле — код 1, коммита
   assert.match(last(r), /секрет/);
 });
 
-test('путь к забору с незакоммиченной правкой и merge — код 1 «48.4», ничего не записано', { skip: !SH }, async () => {
-  const { dir, server } = site({ 'a.php': '1\n', 'b.php': 'b\n', 'x.php': 'x\n' });
-  writeFiles(dir, { 'b.php': 'b наш\n' });
-  commit(dir, '1.1: правка b.php'); // не залито
-  writeFiles(dir, { 'a.php': 'локальная правка\n' });
-  writeFiles(server, { 'a.php': 'сервер\n', 'b.php': 'b сервер\n', 'x.php': 'x2\n' });
+// ---- Наши правки и совмещение (48.4) -----------------------------------------------------------------------------------
+const FIVE = 'l1\nl2\nl3\nl4\nl5\n';
+const MERGED = 'Совмещено с нашими незакоммиченными правками — проверьте в панели изменений: ';
+const summaryOf = (r) => r.out.find((l) => l.startsWith('[kit] '));
+
+test('незакоммиченная правка уже на сервере — не тронута, в строке и коммите входа её нет', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'b.php': 'b\n', 'c.php': 'c\n', 'd.php': 'd\n' });
+  // наши правки, уже залитые автозаливкой: изменён, изменён (на сервере — с CRLF), удалён
+  writeFiles(dir, { 'a.php': 'моя\n', 'c.php': 'c моя\nвторая\n' });
+  fs.rmSync(path.join(dir, 'd.php'));
+  writeFiles(server, { 'a.php': 'моя\n', 'c.php': 'c моя\r\nвторая\r\n', 'b.php': 'b2\n' });
+  fs.rmSync(path.join(server, 'd.php'));
+  const before = status(dir);
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  const r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir));
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\tb.php']);
+  assert.equal(body(dir), 'изменён: b.php');
+  assert.equal(status(dir), before);
+  assert.equal(read(dir, 'a.php'), 'моя\n');
+  assert.equal(read(dir, 'c.php'), 'c моя\nвторая\n');
+  assert.ok(!has(dir, 'd.php'));
+  assert.equal(last(r), '[kit] Вход с прода: файлов без kit: изменено 1, добавлено 0, удалено 0.');
+  assert.doesNotMatch(lastSent(log), /'a\.php'|'c\.php'/, 'наше на сервере не скачивается');
+  const again = await run(dir, { sessionId: 's2' });
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), '[kit] Вход с прода: прод совпадает с git.');
+  assert.equal(count(dir), 2);
+  // --check (Р-28): своё на сервере — не «есть что забрать»
+  const checked = await run(dir, { sessionId: 's3', check: true });
+  assert.equal(checked.code, 0, text(checked));
+  assert.equal(last(checked), '[kit] Вход с прода: прод совпадает с git.');
+  assert.equal(readMark(dir).sessions.s3.result, 'checked');
+  assert.equal(status(dir), before);
+});
+
+test('новый неотслеживаемый файл, уже залитый на сервер, — не тронут, в строке и коммите его нет (Р-35)', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n' });
+  // mine.zip — своё и под «не забирать» (архив): не называется и там (М-1 проверки 48.4)
+  writeFiles(dir, { 'mine.php': 'моё\n', 'win.php': 'x\ny\n', 'mine.zip': 'PK' });
+  writeFiles(server, { 'mine.php': 'моё\n', 'win.php': 'x\r\ny\r\n', 'b.php': 'b\n', 'mine.zip': 'PK' });
+  const before = status(dir);
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  const r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir));
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['A\tb.php']);
+  assert.equal(status(dir), before);
+  assert.equal(read(dir, 'win.php'), 'x\ny\n');
+  assert.equal(last(r), '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 1, удалено 0.');
+  assert.doesNotMatch(lastSent(log), /mine|win/, 'своё не скачивается');
+  const again = await run(dir, { sessionId: 's2' });
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), '[kit] Вход с прода: прод совпадает с git.');
+});
+
+test('незакоммиченная правка и изменение без нас — совмещено в рабочей копии, в коммите входа пути нет', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': FIVE, 'b.php': 'b\n' });
+  // a.php.999.kit-tmp — временный файл записи после обрыва прошлого входа (М-3 проверки 48.4: убирается и у совмещаемых)
+  writeFiles(dir, { 'a.php': 'L1 наша\nl2\nl3\nl4\nl5\n', 'a.php.999.kit-tmp': 'остаток' });
+  writeFiles(server, { 'a.php': 'l1\nl2\nl3\nl4\nL5 сервер\n', 'b.php': 'b2\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\tb.php']);
+  assert.equal(read(dir, 'a.php'), 'L1 наша\nl2\nl3\nl4\nL5 сервер\n');
+  assert.equal(g(dir, 'show', 'HEAD:a.php'), FIVE, 'в git — прежняя версия');
+  assert.equal(status(dir), ' M a.php\n');
+  assert.equal(last(r), '[kit] Вход с прода: файлов без kit: изменено 1, добавлено 0, удалено 0. ' + MERGED + 'a.php.');
+  const mark = readMark(dir);
+  assert.deepEqual(mark.pending, []);
+  assert.equal(mark.sessions.s1.result, 'done');
+  // --check после совмещения (Р-39): вход ничего не запишет — код 0
+  const checked = await run(dir, { sessionId: 's2', check: true });
+  assert.equal(checked.code, 0, text(checked));
+  assert.equal(last(checked), '[kit] Вход с прода: прод совпадает с git.');
+  assert.equal(readMark(dir).sessions.s2.result, 'checked');
+  assert.equal(status(dir), ' M a.php\n');
+});
+
+test('merge закоммиченного незалитого с изменением без нас — совмещено, коммит входа без этого пути; повторный вход ничего не пишет и не называет', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': FIVE, 'b.php': 'b\n' });
+  writeFiles(dir, { 'a.php': 'L1 наш шаг\nl2\nl3\nl4\nl5\n' });
+  commit(dir, '1.1: правка a.php'); // не залито
+  writeFiles(server, { 'a.php': 'l1\nl2\nl3\nl4\nL5 сервер\n', 'b.php': 'b2\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.equal(count(dir), 3);
+  assert.deepEqual(changed(dir), ['M\tb.php']);
+  assert.equal(read(dir, 'a.php'), 'L1 наш шаг\nl2\nl3\nl4\nL5 сервер\n');
+  assert.equal(status(dir), ' M a.php\n');
+  assert.match(last(r), new RegExp(MERGED + 'a\\.php\\.$'));
+  // повтор (Р-35 п. 6): совмещённое уже в рабочей копии — ничего не пишется и не называется
+  const old = new Date(Date.now() - 3600 * 1000);
+  fs.utimesSync(path.join(dir, 'a.php'), old, old);
+  const mtime = fs.statSync(path.join(dir, 'a.php')).mtimeMs;
+  const again = await run(dir, { sessionId: 's2' });
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), '[kit] Вход с прода: прод совпадает с git.');
+  assert.equal(count(dir), 3);
+  assert.equal(fs.statSync(path.join(dir, 'a.php')).mtimeMs, mtime);
+  assert.equal(read(dir, 'a.php'), 'L1 наш шаг\nl2\nl3\nl4\nL5 сервер\n');
+});
+
+// Папки конфликтов этого проекта в os.tmpdir() (Р-38): kit-prod-<8 знаков md5 пути папки проекта>-*.
+const conflictTag = (dir) => {
+  const key = path.resolve(dir);
+  return 'kit-prod-' + md5(process.platform === 'win32' ? key.toLowerCase() : key).slice(0, 8) + '-';
+};
+const conflictRoots = (dir) => fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith(conflictTag(dir))).sort();
+
+test('конфликт совмещения — код 1, рабочая копия не тронута, версия сервера — во временном файле; остальное — коммитом входа, отметка done; повторный вход — одни конфликты (Р-37), прежняя папка конфликтов убрана (Р-38)', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': FIVE, 'b.php': 'b\n', 'm.php': FIVE });
+  writeFiles(dir, { 'a.php': 'наша\nl2\nl3\nl4\nl5\n', 'm.php': 'M1 наша\nl2\nl3\nl4\nl5\n' });
+  writeFiles(server, { 'a.php': 'сервер\nl2\nl3\nl4\nl5\n', 'b.php': 'b2\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n', 'n.php': 'n\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(changed(dir), ['A\tn.php', 'M\tb.php']);
+  const head = g(dir, 'rev-parse', 'HEAD').trim();
+  assert.equal(r.commit, head);
+  assert.equal(read(dir, 'a.php'), 'наша\nl2\nl3\nl4\nl5\n');
+  assert.equal(read(dir, 'm.php'), 'M1 наша\nl2\nl3\nl4\nM5 сервер\n');
+  const k = conflictOf(r, 'a.php');
+  assert.equal(k.why, 'правки пересекаются');
+  assert.equal(k.ours, path.join(dir, 'a.php'));
+  assert.equal(fs.readFileSync(k.server, 'utf8'), 'сервер\nl2\nl3\nl4\nl5\n');
+  assert.equal(fs.readFileSync(k.base, 'utf8'), FIVE);
+  const first = path.dirname(path.dirname(k.server));
+  assert.equal(path.dirname(first), os.tmpdir());
+  assert.ok(path.basename(first).startsWith(conflictTag(dir)), first);
+  assert.ok(!k.server.startsWith(dir));
+  assert.equal(summaryOf(r), '[kit] Вход с прода: файлов без kit: изменено 1, добавлено 1, удалено 0. ' + MERGED + 'm.php. ' +
+    'Не совместилось само — вопрос ниже: a.php.');
+  assert.ok(r.out.indexOf(summaryOf(r)) < r.out.findIndex((l) => l.startsWith('  a.php — ')));
+  assert.match(last(r), /^вход сделан, кроме этих файлов; спроси пользователя по каждому: Совместить вручную \(.+\) \/ Оставить нашу \(.+\) \/ Взять версию сервера \(.+\)$/);
+  const mark = readMark(dir);
+  assert.deepEqual(mark.pending, []);
+  assert.equal(mark.sessions.s1.result, 'done');
+  assert.equal(mark.sessions.s1.commit, head);
+  assert.deepEqual(mark.named, []);
+  // конфликт называется на каждом входе; совмещённое раньше — нет; одни конфликты — не «совпадает» (Р-37)
+  const again = await run(dir, { sessionId: 's2' });
+  assert.equal(again.code, 1, text(again));
+  assert.equal(count(dir), 2);
+  const k2 = conflictOf(again, 'a.php');
+  assert.equal(k2.why, 'правки пересекаются');
+  assert.equal(summaryOf(again), '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: a.php.');
+  assert.doesNotMatch(text(again), /совпадает/);
+  assert.equal(read(dir, 'a.php'), 'наша\nl2\nl3\nl4\nl5\n');
+  // Р-38: прежняя папка конфликтов этого проекта убрана, осталась одна — новая; пути второго входа ведут на файлы
+  const second = path.dirname(path.dirname(k2.server));
+  assert.notEqual(second, first);
+  assert.ok(!fs.existsSync(first), 'прежняя папка конфликтов убрана: ' + first);
+  assert.deepEqual(conflictRoots(dir), [path.basename(second)]);
+  assert.equal(fs.readFileSync(k2.server, 'utf8'), 'сервер\nl2\nl3\nl4\nl5\n');
+  assert.equal(fs.readFileSync(k2.base, 'utf8'), FIVE);
+  // --check при стоящем конфликте (Р-39): код 0, конфликт назван; папок конфликтов --check не создаёт и не убирает
+  const checked = await run(dir, { sessionId: 's3', check: true });
+  assert.equal(checked.code, 0, text(checked));
+  assert.equal(last(checked), '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместится само — вопрос задаст вход общей сессии: a.php.');
+  assert.equal(readMark(dir).sessions.s3.result, 'checked');
+  assert.deepEqual(conflictRoots(dir), [path.basename(second)]);
+  assert.equal(read(dir, 'a.php'), 'наша\nl2\nl3\nl4\nl5\n');
+});
+
+test('удалён без нас при нашей правке, удалён у нас при изменении без нас, двоичный файл — конфликты, не код 4 (Р-35)', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'd.php': FIVE, 'g.php': FIVE, 'bin.dat': Buffer.from([0, 1, 2, 10, 3]) });
+  writeFiles(dir, { 'd.php': 'наша\nl2\nl3\nl4\nl5\n', 'bin.dat': Buffer.from([0, 1, 2, 10, 4]) });
+  fs.rmSync(path.join(dir, 'g.php'));
+  fs.rmSync(path.join(server, 'd.php'));
+  writeFiles(server, { 'g.php': 'l1\nl2\nсервер\nl4\nl5\n', 'bin.dat': Buffer.from([0, 9, 2, 10, 3]) });
   const before = status(dir);
   const r = await run(dir);
   assert.equal(r.code, 1, text(r));
-  assert.match(text(r), /48\.4/);
-  assert.match(text(r), /a\.php/);
-  assert.match(text(r), /b\.php/);
-  assert.equal(read(dir, 'a.php'), 'локальная правка\n');
-  assert.equal(read(dir, 'x.php'), 'x\n');
+  assert.equal(count(dir), 1);
   assert.equal(status(dir), before);
-  assert.equal(count(dir), 2);
-  assert.deepEqual(readMark(dir).pending, []);
+  const d = conflictOf(r, 'd.php');
+  assert.equal(d.why, 'изменён у нас, удалён на сервере');
+  assert.equal(d.server, null);
+  assert.equal(fs.readFileSync(d.base, 'utf8'), FIVE);
+  const gg = conflictOf(r, 'g.php');
+  assert.equal(gg.why, 'удалён у нас, изменён на сервере');
+  assert.equal(gg.ours, 'нет');
+  assert.equal(fs.readFileSync(gg.server, 'utf8'), 'l1\nl2\nсервер\nl4\nl5\n');
+  assert.ok(!has(dir, 'g.php'));
+  const b = conflictOf(r, 'bin.dat');
+  assert.equal(b.why, 'двоичный файл');
+  assert.deepEqual(fs.readFileSync(b.server), Buffer.from([0, 9, 2, 10, 3]));
+  assert.deepEqual(fs.readFileSync(b.base), Buffer.from([0, 1, 2, 10, 3]));
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'bin.dat')), Buffer.from([0, 1, 2, 10, 4]));
+  assert.equal(readMark(dir).sessions.s1.result, 'done');
+  assert.equal(summaryOf(r), '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: bin.dat, d.php, g.php.');
+});
+
+test('совмещение при CRLF в рабочей копии — результат с CRLF (Р-35)', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': FIVE });
+  writeFiles(dir, { 'a.php': 'L1 наша\r\nl2\r\nl3\r\nl4\r\nl5\r\n' });
+  writeFiles(server, { 'a.php': 'l1\nl2\nl3\nl4\nL5 сервер\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.equal(count(dir), 1);
+  assert.equal(read(dir, 'a.php'), 'L1 наша\r\nl2\r\nl3\r\nl4\r\nL5 сервер\r\n');
+  assert.equal(last(r), '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. ' + MERGED + 'a.php.');
+});
+
+test('рабочая копия отличается от HEAD только \\r — не правка: обычный забор в коммит входа (Р-27)', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': 'a\nb\n' });
+  g(dir, 'config', 'core.autocrlf', 'false');
+  writeFiles(dir, { 'a.php': 'a\r\nb\r\n' });
+  assert.equal(status(dir), ' M a.php\n');
+  writeFiles(server, { 'a.php': 'a2\nb\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(read(dir, 'a.php'), 'a2\nb\n');
+  assert.equal(status(dir), '');
+  assert.equal(last(r), '[kit] Вход с прода: файлов без kit: изменено 1, добавлено 0, удалено 0.');
+});
+
+// ---- File Watchers и предел за вход (48.4) -----------------------------------------------------------------------------
+
+test('Always и .scss среди забираемых — код 1 до скачивания; --watchers-ok — забрано', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'css/s.scss': '$a: 1;\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
+  idea(dir, { always: true, watchers: [['scss', true], ['less', false]] });
+  writeFiles(server, { 'a.php': '2\n', 'css/s.scss': '$a: 2;\n', 'css/n.SCSS': '$n: 1;\n', 'css/x.less': '@x: 1;\n' });
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  const r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir));
+  assert.equal(r.code, 1, text(r));
+  assert.ok(!fetched(log), 'ничего не скачано');
+  assert.equal(read(dir, 'css/s.scss'), '$a: 1;\n');
+  assert.ok(!has(dir, 'css/n.SCSS'));
+  assert.equal(count(dir), 1);
   assert.equal(readMark(dir).sessions.s1, undefined);
+  assert.match(text(r), /File Watchers PhpStorm \(scss\) — среди забираемого 2 файла: css\/n\.SCSS, css\/s\.scss; пересборка перезапишет результат, PhpStorm \(Always\) зальёт его на сервер/);
+  assert.doesNotMatch(text(r), /x\.less|МБ/);
+  assert.match(last(r), /^спроси пользователя одним AskUserQuestion: по вотчерам — Забирать \(`prod-entry\.js --watchers-ok`; .+\) \/ Работать без входа \(`prod-entry\.js --skip`\)$/);
+  const ok = await run(dir, { watchersOk: true });
+  assert.equal(ok.code, 0, text(ok));
+  assert.deepEqual(changed(dir), ['A\tcss/n.SCSS', 'A\tcss/x.less', 'M\ta.php', 'M\tcss/s.scss']);
+  assert.equal(status(dir), '');
+});
+
+test('File Watchers без остановки: без Always, вотчер выключен, своё «наше уже на сервере» .scss (Р-35)', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 's.scss': '$a: 1;\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
+  idea(dir, { always: false, watchers: [['scss', true]] });
+  writeFiles(server, { 's.scss': '$a: 2;\n' });
+  let r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ts.scss']);
+
+  idea(dir, { always: true, watchers: [['scss', false], ['less', true]] });
+  writeFiles(server, { 's.scss': '$a: 3;\n' });
+  r = await run(dir, { sessionId: 's2' });
+  assert.equal(r.code, 0, text(r));
+  assert.equal(read(dir, 's.scss'), '$a: 3;\n');
+
+  idea(dir, { always: true, watchers: [['scss', true]] });
+  writeFiles(dir, { 's.scss': '$a: моя;\n' }); // наша правка, залитая автозаливкой
+  writeFiles(server, { 's.scss': '$a: моя;\n', 'a.php': '2\n' });
+  r = await run(dir, { sessionId: 's3' });
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(read(dir, 's.scss'), '$a: моя;\n');
+  assert.equal(count(dir), 4);
+});
+
+test('больше 50 МБ за вход — код 1 до скачивания; --big-ok — забрано; вместе с File Watchers — одна остановка, флаги вместе', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 's.scss': '$a: 1;\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
+  const nine = Buffer.alloc(9 * 1024 * 1024); // нули: git сжимает их быстро, secret-scan пропускает двоичное
+  writeFiles(server, { 'media/one/x/deep/1.bin': nine, 'media/one/x/deep/2.bin': nine, 'media/one/x/3.bin': nine, 'media/two/4.bin': nine,
+    'video/5.bin': nine, '6.bin': nine, 'a.php': '2\n' });
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  let r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir));
+  assert.equal(r.code, 1, text(r));
+  assert.ok(!fetched(log), 'ничего не скачано');
+  assert.ok(!has(dir, '6.bin') && !has(dir, 'media'));
+  assert.equal(read(dir, 'a.php'), '1\n');
+  assert.equal(readMark(dir).sessions.s1, undefined);
+  assert.ok(text(r).includes('Забрать за вход — 54 МБ (больше 50 МБ); самые тяжёлые папки: media/one/x/ — 27 МБ, 6.bin — 9 МБ, media/two/ — 9 МБ, video/ — 9 МБ, a.php — 1 КБ'), text(r));
+  assert.doesNotMatch(text(r), /File Watchers/);
+  assert.match(last(r), /^спроси пользователя одним AskUserQuestion: по объёму — Забрать всё \(`prod-entry\.js --big-ok`\) \/ Не забирать папки \(.*\.gitignore.*\) \/ Работать без входа \(`prod-entry\.js --skip`\)$/);
+
+  idea(dir, { always: true, watchers: [['scss', true]] });
+  writeFiles(server, { 's.scss': '$a: 2;\n' });
+  r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.match(text(r), /File Watchers PhpStorm \(scss\) — среди забираемого 1 файл: s\.scss;/);
+  assert.match(text(r), /Забрать за вход — 54 МБ/);
+  assert.match(last(r), /по вотчерам — .+; по объёму — .+; оба ответа «забирать» — флаги вместе$/);
+  r = await run(dir, { bigOk: true });
+  assert.equal(r.code, 1, 'File Watchers без своего флага — всё ещё остановка');
+  assert.doesNotMatch(text(r), /МБ/);
+  r = await run(dir, { bigOk: true, watchersOk: true });
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['A\t6.bin', 'A\tmedia/one/x/3.bin', 'A\tmedia/one/x/deep/1.bin', 'A\tmedia/one/x/deep/2.bin', 'A\tmedia/two/4.bin',
+    'A\tvideo/5.bin', 'M\ta.php', 'M\ts.scss']);
+  assert.equal(fs.statSync(path.join(dir, 'media/two/4.bin')).size, nine.length);
+  assert.equal(status(dir), '');
+});
+
+test('вотчеры — по тому, что вход запишет (Р-40): совмещаемый исходник — остановка; уже совмещённый и конфликтный — в следующей сессии без остановки', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'm.scss': FIVE, 'c.scss': FIVE }, { gitignore: GITIGNORE + '/.idea/\n' });
+  idea(dir, { always: true, watchers: [['scss', true]] });
+  writeFiles(dir, { 'm.scss': 'M1 наша\nl2\nl3\nl4\nl5\n', 'c.scss': 'наша\nl2\nl3\nl4\nl5\n' });
+  writeFiles(server, { 'm.scss': 'l1\nl2\nl3\nl4\nM5 сервер\n', 'c.scss': 'сервер\nl2\nl3\nl4\nl5\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.match(text(r), /File Watchers PhpStorm \(scss\) — среди забираемого 1 файл: m\.scss;/, 'конфликтный c.scss вход не запишет — не в счёт');
+  assert.equal(read(dir, 'm.scss'), 'M1 наша\nl2\nl3\nl4\nl5\n', 'ничего не записано');
+  assert.equal(readMark(dir).sessions.s1, undefined);
+  assert.deepEqual(conflictRoots(dir), [], 'до записи — и папки конфликтов нет');
+  const ok = await run(dir, { watchersOk: true });
+  assert.equal(ok.code, 1, text(ok));
+  assert.equal(read(dir, 'm.scss'), 'M1 наша\nl2\nl3\nl4\nM5 сервер\n');
+  assert.equal(conflictOf(ok, 'c.scss').why, 'правки пересекаются');
+  // следующая сессия: m.scss совмещён раньше, c.scss — стоящий конфликт; вход их не пишет — вотчеры не останавливают
+  const next = await run(dir, { sessionId: 's2' });
+  assert.equal(next.code, 1, text(next));
+  assert.doesNotMatch(text(next), /File Watchers/);
+  assert.equal(summaryOf(next), '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: c.scss.');
+  assert.equal(conflictOf(next, 'c.scss').why, 'правки пересекаются');
+  assert.equal(readMark(dir).sessions.s2.result, 'done');
+});
+
+test('удалённые на сервере, «не забирать» и М-6 не входят ни в объём, ни в вотчеры (Р-41); малый предел (opts.entryLimit) — остановка по объёму', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'gone.scss': '$g: 1;\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
+  idea(dir, { always: true, watchers: [['scss', true]] });
+  writeFiles(dir, { 'dir.scss/inner.txt': 'i' }); // М-6: у нас папка на месте нового файла сервера
+  fs.rmSync(path.join(server, 'gone.scss'));
+  const blob = 'x'.repeat(5000);
+  writeFiles(server, { 'a.php': '2\n', 'arch.zip': blob, 'dir.scss': blob });
+  const r = await run(dir, { entryLimit: 1000 });
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['D\tgone.scss', 'M\ta.php']);
+  assert.match(last(r), /Не забрано, осталось на сервере: arch\.zip \(архив\), dir\.scss \(у нас на этом месте папка\)\.$/);
+  // забираемое больше малого предела — остановка по объёму; вотчеров среди него нет
+  writeFiles(server, { 'big.php': blob });
+  const big = await run(dir, { sessionId: 's2', entryLimit: 1000 });
+  assert.equal(big.code, 1, text(big));
+  assert.match(text(big), /Забрать за вход — 5 КБ \(больше 1 КБ\); самые тяжёлые папки: big\.php — 5 КБ$/m);
+  assert.doesNotMatch(text(big), /File Watchers/);
+  assert.ok(!has(dir, 'big.php'));
+});
+
+// ---- Мелкие замечания проверки 48.3 -------------------------------------------------------------------------------------
+
+test('запись мешает локальное (М-6): на месте пути папка, на месте папки файл — не забрано и не совмещено, названо каждый вход', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'c.php': 'c\n' });
+  writeFiles(dir, { 'x.php/inner.txt': 'i', 'new': 'файл' });
+  fs.rmSync(path.join(dir, 'c.php'));
+  writeFiles(dir, { 'c.php/z.txt': 'z' });
+  writeFiles(server, { 'x.php': 'x\n', 'new/n.php': 'n\n', 'c.php': 'c2\n', 'a.php': '2\n' });
+  const before = status(dir);
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(status(dir), before);
+  assert.equal(read(dir, 'new'), 'файл');
+  assert.equal(read(dir, 'x.php/inner.txt'), 'i');
+  assert.match(last(r), /Не забрано, осталось на сервере: c\.php \(у нас на этом месте папка\), new\/n\.php \(у нас файл new на месте папки\), x\.php \(у нас на этом месте папка\)\.$/);
+  const again = await run(dir, { sessionId: 's2' });
+  assert.equal(again.code, 0, text(again));
+  assert.match(last(again), /Не забрано, осталось на сервере: c\.php .+, new\/n\.php .+, x\.php /);
+  assert.deepEqual(readMark(dir).named, []);
+  // --check при М-6 (Р-39): вход ничего не запишет — код 0, пути названы
+  const checked = await run(dir, { sessionId: 's3', check: true });
+  assert.equal(checked.code, 0, text(checked));
+  assert.match(last(checked), /^\[kit\] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0\. Не забрано, осталось на сервере: c\.php \(у нас на этом месте папка\), new\/n\.php .+, x\.php /);
+  assert.equal(readMark(dir).sessions.s3.result, 'checked');
+  assert.equal(status(dir), before);
+});
+
+test('повтор убирает временные файлы <путь>.*.kit-tmp у путей pending (М-7)', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n' });
+  writeFiles(server, { 'a.php': '2\n', 'sub/n.php': 'n\n' });
+  writeFiles(dir, { 'a.php.4242.kit-tmp': '2\n', 'sub/n.php.77.kit-tmp': 'n' });
+  writeMark(dir, { sessions: {}, named: [], pending: ['a.php', 'sub/n.php'] });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['A\tsub/n.php', 'M\ta.php']);
+  assert.ok(!has(dir, 'a.php.4242.kit-tmp'));
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'sub')), ['n.php']);
+  assert.equal(status(dir), '');
+});
+
+test('нет папки сайта на сервере — код 2 с подсказкой проверить «SSH прод», без «Повторить» (М-9)', { skip: !SH }, async () => {
+  const { dir } = site({ 'a.php': '1\n' }, { params: { 'SSH прод': 'sh:/kit-нет-такой-папки/x' } });
+  const r = await run(dir);
+  assert.equal(r.code, 2, text(r));
+  assert.match(text(r), /на сервере нет папки сайта \/kit-нет-такой-папки\/x/);
+  assert.equal(last(r), 'спроси пользователя: Проверить «SSH прод» (/kit:project-init) / Работать без входа (`prod-entry.js --skip`)');
+  assert.ok(!has(dir, '.claude/kit-prod.json'));
+});
+
+test('отслеживаемый файл в отрезанной папке (М-11): размер из сверки — больше 10 МБ не скачан, назван', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'upload/keep.dat': 'k\n' });
+  writeFiles(dir, { '.gitignore': GITIGNORE + '/upload/*\n' });
+  commit(dir, '1.1: upload в .gitignore');
+  assert.equal(g(dir, 'ls-files', 'upload').trim(), 'upload/keep.dat');
+  writeFiles(server, { 'upload/keep.dat': Buffer.alloc(FILE_LIMIT + 1, 120) });
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  const r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir));
+  assert.equal(r.code, 0, text(r));
+  assert.match(lastSent(log), /-path '\.\/upload\/\*'/, 'папка upload отрезана в find');
+  assert.ok(!fetched(log), 'не скачан');
+  assert.equal(read(dir, 'upload/keep.dat'), 'k\n');
+  assert.equal(last(r), '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. Не забрано, осталось на сервере: upload/keep.dat (больше 10 МБ).');
+});
+
+test('окружение «дев» (М-10): «SSH дев», заголовок «Дев: …», строка «Вход с дева»; наложение базы — только коммиты «Дев:»', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'b.php': 'b\n' }, { ssh: 'SSH дев', params: { 'Окружение': 'дев', 'Дев': 'https://dev.alpha.example.com' } });
+  writeFiles(dir, { 'b.php': 'b прод\n' });
+  commit(dir, 'Прод: изменения без kit на 2026-10-01 (1 файл)'); // вход с прода — для дева не база
+  writeFiles(server, { 'a.php': '2\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.match(text(r), /^Сервер: дев — sh:/m);
+  assert.match(text(r), /^База: [0-9a-f]+ \(первый коммит репозитория\)$/m);
+  assert.match(subject(dir), /^Дев: изменения без kit на \d{4}-\d{2}-\d{2} \(1 файл\)$/);
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(read(dir, 'b.php'), 'b прод\n', 'коммит входа с прода не наложен на базу дева: b.php не откатан');
+  assert.equal(last(r), '[kit] Вход с дева: файлов без kit: изменено 1, добавлено 0, удалено 0.');
+  const again = await run(dir, { sessionId: 's2' });
+  assert.equal(again.code, 0, text(again));
+  assert.match(text(again), /\(первый коммит репозитория; поверх — 1 коммит входа\)/);
+  assert.equal(last(again), '[kit] Вход с дева: дев совпадает с git.');
+});
+
+test('kit-commit.js коды 2 и 3 (М-10) → вход код 4, pending остаётся; повтор доводит вход', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n' });
+  const hook = (name, cmd) => fs.writeFileSync(path.join(dir, '.git', 'hooks', name), '#!/bin/sh\n' + cmd + '\n', { mode: 0o755 });
+  writeFiles(server, { 'a.php': '2\n' });
+  hook('pre-commit', 'exit 1');
+  let r = await run(dir);
+  assert.equal(r.code, 4, text(r));
+  assert.match(text(r), /коммит входа не сделан \(kit-commit\.js, код 2\)/);
+  assert.deepEqual(readMark(dir).pending, ['a.php']);
+  assert.equal(readMark(dir).sessions.s1, undefined);
+  assert.equal(count(dir), 1);
+  fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
+  // код 3: коммит есть, самопроверка не сошлась (хук после коммита правит файл)
+  hook('post-commit', 'echo x >> a.php');
+  r = await run(dir);
+  assert.equal(r.code, 4, text(r));
+  assert.match(text(r), /коммит входа сделан, но не проверен \(kit-commit\.js, код 3\)/);
+  assert.equal(count(dir), 2);
+  assert.deepEqual(readMark(dir).pending, ['a.php']);
+  fs.rmSync(path.join(dir, '.git', 'hooks', 'post-commit'));
+  r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.equal(count(dir), 2, 'коммит входа уже есть: повтор вернул a.php к HEAD, забирать нечего');
+  assert.equal(read(dir, 'a.php'), '2\n');
+  assert.equal(status(dir), '');
+  assert.deepEqual(readMark(dir).pending, []);
+  assert.equal(last(r), '[kit] Вход с прода: прод совпадает с git.');
+});
+
+test('повтор после остановки по секрету (М-10): индекс, оставленный kit-commit.js, очищается; новый файл с секретом убран; совмещённое не откатывается (Р-34)', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'cfg.php': '<?php\n', 'a.php': 'a\n', 'm.php': FIVE });
+  const secret = `<?php\nreturn ['password' => '${SECRET}'];\n`;
+  writeFiles(dir, { 'm.php': 'M1 наша\nl2\nl3\nl4\nl5\n' });
+  writeFiles(server, { 'cfg.php': secret, 'new.php': secret, 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(g(dir, 'diff', '--cached', '--name-only').trim().split('\n').sort(), ['cfg.php', 'new.php']);
+  assert.deepEqual(readMark(dir).pending, ['cfg.php', 'new.php']);
+  assert.equal(read(dir, 'm.php'), 'M1 наша\nl2\nl3\nl4\nM5 сервер\n', 'совмещённое записано до коммита и не откатано');
+  assert.ok(r.out.includes('совмещённое с нашими правками осталось в рабочей копии: m.php'), text(r));
+  // на сервере убрали секрет и лишний файл
+  writeFiles(server, { 'cfg.php': '<?php\nreturn [];\n' });
+  fs.rmSync(path.join(server, 'new.php'));
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.deepEqual(changed(dir), ['M\tcfg.php']);
+  assert.equal(read(dir, 'cfg.php'), '<?php\nreturn [];\n');
+  assert.ok(!has(dir, 'new.php'));
+  assert.equal(g(dir, 'diff', '--cached', '--name-only'), '');
+  assert.equal(status(dir), ' M m.php\n');
+  assert.equal(read(dir, 'm.php'), 'M1 наша\nl2\nl3\nl4\nM5 сервер\n');
+  assert.equal(last(again), '[kit] Вход с прода: файлов без kit: изменено 1, добавлено 0, удалено 0.', 'совмещённое раньше — не в строке');
+});
+
+test('find на сервере прочитал не всё (М-10) — строка об этом, вход сделан', async () => {
+  const { dir } = site({ 'a.php': 'a\n' }, { host: 'fixed' });
+  const out = listOut({ hashes: [md5('a\n') + ' '], list: [[2, 'a.php']], findCode: 1 });
+  await withEnv({ FAKE_SSH_OUT: out }, async () => {
+    const r = await run(dir);
+    assert.equal(r.code, 0, text(r));
+    assert.ok(r.out.includes('find на сервере прочитал не всё — новые файлы в нечитаемых папках не сверены'), text(r));
+    assert.equal(last(r), '[kit] Вход с прода: прод совпадает с git.');
+  });
+});
+
+test('имена, совпадающие без учёта регистра (М-10, Windows): с путём git, между новыми, с нашим неотслеживаемым — недопустимое имя', { skip: process.platform !== 'win32' }, async () => {
+  const { dir } = site({ 'a.php': 'a\n' }, { host: 'fixed' });
+  writeFiles(dir, { 'u.php': 'наш\n' });
+  const out = listOut({ hashes: [md5('a\n') + ' '], list: [[2, 'a.php'], [1, 'A.php'], [1, 'N.php'], [1, 'n.php'], [1, 'U.php']] });
+  await withEnv({ FAKE_SSH_OUT: out }, async () => {
+    const r = await run(dir);
+    assert.equal(r.code, 0, text(r));
+    assert.equal(count(dir), 1);
+    assert.equal(read(dir, 'u.php'), 'наш\n');
+    assert.equal(last(r), '[kit] Вход с прода: файлов без kit: изменено 0, добавлено 0, удалено 0. Не забрано, осталось на сервере: ' +
+      'A.php (недопустимое имя), N.php (недопустимое имя), U.php (недопустимое имя), n.php (недопустимое имя).');
+  });
 });
 
 test('много путей: маленький argLimit → несколько коммитов входа подряд, у каждого ENTRY_RE, вместе — все пути', { skip: !SH }, async () => {

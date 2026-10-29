@@ -58,7 +58,8 @@ function main() {
     if (n === Number(process.env.FAKE_SSH_DROP || 2)) return fail('KIT_F 1\nYWJj\n', 'Connection to shdrop closed by remote host.\n');
   }
   if (host === 'sh' || host === 'shdrop') {
-    const r = spawnSync(process.env.FAKE_SH || 'sh', ['-s'], { input: stdin, env: { ...process.env, LC_ALL: process.env.LC_ALL || 'C.UTF-8' } });
+    // maxBuffer: по умолчанию у spawnSync 1 МБ — скачивание входа (до 16 МБ за подключение, в base64) обрезалось бы
+    const r = spawnSync(process.env.FAKE_SH || 'sh', ['-s'], { input: stdin, maxBuffer: 256 * 1024 * 1024, env: { ...process.env, LC_ALL: process.env.LC_ALL || 'C.UTF-8' } });
     process.stdout.write(Buffer.concat([r.stdout || Buffer.alloc(0), Buffer.from(mark(r.status === null ? 255 : r.status))]));
     process.stderr.write(r.stderr || Buffer.alloc(0));
     return 0;

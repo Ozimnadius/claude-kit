@@ -3,20 +3,28 @@
 // Вход с прода (этап 48): сайт на сервере сверяется с git по SSH — что там изменили, добавили и удалили без kit, забирается в
 // рабочую копию байт в байт и коммитится коммитом входа (kit-commit.js, без просмотра и вопросов: прод главный).
 //   node prod-entry.js [--timeout сек]           вход: сверка, забор, коммит входа, отметка сессии done
-//   node prod-entry.js --check [--timeout сек]   только сверка (исполнитель Мэтта; сессия в worktree — всегда так): файлы,
-//                                                индекс и pending не меняются; забирать нечего — отметка checked
-//   --skip, --ftp-done, --hook — режимы шага 48.5; --watchers-ok, --big-ok — шага 48.4 (пока принимаются без действия)
+//   node prod-entry.js --check [--timeout сек]   план входа без записи (исполнитель Мэтта; сессия в worktree — всегда так, и
+//                                                сверяется основная папка проекта): файлы, индекс и pending не меняются;
+//                                                вход ничего не запишет — отметка checked в папке сессии
+//   --watchers-ok — забирать, хотя среди забираемого исходники File Watchers при PhpStorm Always; --big-ok — забирать больше
+//   50 МБ за вход; --skip, --ftp-done, --hook — режимы шага 48.5
 // Папка проекта — корень git текущей папки; сервер — «Окружение» (прод или дев), куда — «SSH прод» / «SSH дев». Три версии
-// файла (база, HEAD, сервер) и правила — lib/prod.js. Сверка — одним подключением, сценарием sh на stdin: состояние и md5
-// отслеживаемых файлов (пачкой, без процесса на файл) и список остальных с размером (find без того, что точно исключает
-// .gitignore); md5 сервера сравнивается у нас с вариантами blob (CRLF и LF — одна версия), неясное скачивается. Скачанное
-// пишется через временный файл; пути забора до записи — в pending отметки (.claude/kit-prod.json): повтор вернёт их к HEAD
-// и доведёт вход до конца. Много путей — несколько коммитов входа подряд.
-// Коды: 0 — вход сделан (или нечего забирать; с --check — забирать нечего); 1 — нужен ответ пользователя (совмещение — шаг
-// 48.4, запрещённый путь или секрет в скачанном; с --check — есть что забрать); 2 — вход не нужен или параметр неверный;
-// 3 — нет подключения, обрыв, вышло время; 4 — аргументы, git, запись. Весь вывод — в stdout; последняя строка — итог для
+// файла (база, HEAD, сервер) и правила — lib/prod.js. Сверка — одним подключением, сценарием sh на stdin: состояние, md5 и
+// размер отслеживаемых файлов (пачкой, без процесса на файл) и список остальных с размером (find без того, что точно исключает
+// .gitignore); md5 сервера сравнивается у нас с вариантами blob (CRLF и LF — одна версия), неясное скачивается. Наши
+// незакоммиченные правки (Т-8): сервер = рабочая копия — наше уже на сервере, не трогаем; менялось и у нас, и без нас —
+// совмещение (git merge-file) в рабочую копию, мимо коммита входа; не совместилось — рабочая копия не тронута, версия сервера —
+// во временной папке. Порядок (Р-40): больше 50 МБ за вход — остановка до любого скачивания; кандидаты на совмещение
+// скачиваются и совмещаются в памяти; File Watchers при PhpStorm Always — остановка по тому, что вход запишет, до записи;
+// затем забор. Скачанное пишется через временный файл; пути забора до записи — в pending отметки (.claude/kit-prod.json):
+// повтор вернёт их к HEAD и доведёт вход до конца. Много путей — несколько коммитов входа подряд.
+// Коды: 0 — вход сделан (или нечего забирать; с --check — вход ничего не запишет); 1 — нужен ответ пользователя (не
+// совместилось — вход сделан без этих файлов; File Watchers или больше 50 МБ — ничего не записано; запрещённый путь или секрет
+// в скачанном; с --check — есть что забрать); 2 — вход не нужен, параметр неверный или на сервере нет папки сайта; 3 — нет
+// подключения, обрыв, вышло время; 4 — аргументы, git, запись. Весь вывод — в stdout; последняя строка — итог для
 // пользователя (код 0) или что делать Claude.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
@@ -26,14 +34,15 @@ const { shq, serverSsh, runSsh, lastLine } = require('./lib/ssh');
 const { skipRules, git } = require('./lib/deploy');
 const { projectRoot } = require('./lib/matt');
 const { writeFilesAtomic } = require('./lib/atomic');
+const { readDeployment } = require('./lib/deployment');
 const { safePath } = require('./ssh-deploy');
 const { BASE_FORBIDDEN } = require('./secret-scan');
 const {
-  plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake, oursPaths, pendingDelete, inPending, summaryLine,
-  readMark, writeMark, markSession, lastNeed,
+  ENTRY_LIMIT, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake, oursPaths, pendingDelete, inPending,
+  watcherExts, mergeVersions, listOf, summaryLine, readMark, writeMark, markSession, lastNeed,
 } = require('./lib/prod');
 
-const USAGE = 'Использование: node prod-entry.js [--check] [--timeout сек]';
+const USAGE = 'Использование: node prod-entry.js [--check] [--watchers-ok] [--big-ok] [--timeout сек]';
 // Меньше предела инструмента Bash (120 с): зависший сервер — код 3, а не оборванный вызов. Срок — общий на все подключения входа.
 const DEFAULT_TIMEOUT = 100;
 // Пути одного вызова kit-commit.js: сумма длин плюс 3 знака на путь (предел командной строки Windows — 32 767 на весь вызов,
@@ -43,7 +52,9 @@ const FETCH_LIMIT = 16 * 1024 * 1024; // скачивание за одно по
 const UNKNOWN_SIZE = 1024 * 1024;
 const REGULAR = new Set(['100644', '100755']); // ссылки (120000) и подмодули (160000) — вне сверки
 const KIT_COMMIT = path.join(__dirname, 'kit-commit.js');
-const ASK = 'спроси пользователя: Повторить / Работать без входа (`prod-entry.js --skip`)';
+const SKIP = 'Работать без входа (`prod-entry.js --skip`)';
+const ASK = 'спроси пользователя: Повторить / ' + SKIP;
+const NO_ROOT = 'нет папки сайта'; // KIT_ERR сценариев: «SSH <окружение>» указывает не туда — код 2, а не «Повторить»
 const KIND = { changed: 'изменён', added: 'добавлен', removed: 'удалён' };
 // Отрезается на сервере всегда: папки с этими именами на любой глубине и служебные папки в корне (как ALWAYS_SKIP выкладки).
 const PRUNE_NAMES = ['.git', '.idea'];
@@ -69,12 +80,15 @@ const REPLACEMENT = String.fromCharCode(0xfffd); // имя на сервере �
 const WIN_RESERVED = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/i;
 
 // Путь нельзя безопасно записать в рабочую копию и отдать kit-commit.js: не safePath, «\» (kit-commit.js читает его как «/»),
-// имя не в UTF-8; на Windows ещё <>:"|?*, CON, PRN, AUX, NUL, COM1–9, LPT1–9 (и с расширением), точка или пробел в конце части.
+// имя не в UTF-8, пробел в начале или в конце части (самопроверка kit-commit.js обрезает пробелы, М-5); на Windows ещё
+// <>:"|?*, CON, PRN, AUX, NUL, COM1–9, LPT1–9 (и с расширением), точка в конце части.
 function badName(p, win = process.platform === 'win32') {
   const s = String(p);
   if (!safePath(s) || s.includes('\\') || s.includes(REPLACEMENT)) return true;
+  const segs = s.split('/');
+  if (segs.some((seg) => /^ | $/.test(seg))) return true;
   if (!win) return false;
-  return /[<>:"|?*]/.test(s) || s.split('/').some((seg) => WIN_RESERVED.test(seg) || /[. ]$/.test(seg));
+  return /[<>:"|?*]/.test(s) || segs.some((seg) => WIN_RESERVED.test(seg) || /\.$/.test(seg));
 }
 
 // ---- Отрезание на сервере (Р-11) ----------------------------------------------------------------------------------------
@@ -109,7 +123,8 @@ const globName = (x) => new RegExp('^' + x.replace(/[.+^${}()|\\]/g, '\\$&').rep
 // отрезается лишь то, откуда git ничего не вернёт; сомнение — не отрезать. Из корневого .gitignore — строки без «!», от корня,
 // с буквальным путём P: «/P», «/P/» — P целиком, если её (или папку над ней) не возвращает отрицание; «/P/*», «/P/**» — дети P,
 // кроме возвращённых отрицаниями «!/P/C…» и имён «!X». Отрицание со звёздочкой у P или над ней, «!/P/**» — P не трогаем. Есть
-// свой P/.gitignore (hasOwnIgnore(P), Р-25) — детей P не отрезать: его «!» могут вернуть их; P целиком git и не читает.
+// .gitignore в папке от первой части P до P (hasOwnIgnore, Р-25 и М-1) — не отрезать: его «!» важнее корневого и может вернуть
+// детей P или саму P; для «P целиком» — до родителя P (свой P/.gitignore git не читает).
 // → [{ name } | { path } | { path, dir: true } | { path, children: true, keep: [дети], names: [маски имён] }].
 function pruneRules(text, hasOwnIgnore = () => false) {
   const rules = [...PRUNE_NAMES.map((name) => ({ name })), ...ALWAYS_PRUNE.map((p) => ({ path: p }))];
@@ -130,7 +145,9 @@ function pruneRules(text, hasOwnIgnore = () => false) {
     const key = (l.deep ? '*' : '') + p;
     if (covered(p) || seen.has(key)) continue;
     seen.add(key);
-    let blocked = l.deep ? odd || hasOwnIgnore(p) : loose.some((x) => /[[\\]/.test(x) || globName(x).test(p.split('/').pop()));
+    const segs = p.split('/');
+    const owners = segs.slice(0, l.deep ? segs.length : segs.length - 1).map((x, i) => segs.slice(0, i + 1).join('/'));
+    let blocked = (l.deep ? odd : loose.some((x) => /[[\\]/.test(x) || globName(x).test(segs[segs.length - 1]))) || owners.some(hasOwnIgnore);
     const keep = new Set();
     for (const n of tied) {
       if (!n.literal) {
@@ -165,9 +182,10 @@ function findPrune(rules) {
 
 // Сверка для «sh -s», только чтение. Отслеживаемые (tracked) — состояние встроенными командами оболочки, по номерам: KIT_S <n> N
 // (нет; ближайшая существующая папка выше — папка, читается и проходима), U (не читается), O (не обычный файл); «есть» — без
-// строки, их md5 как есть — пачкой (xargs -0 md5sum), по порядку номеров, между KIT_H и KIT_L. Затем find остальных обычных
-// файлов с отрезанием — «размер путь\0» в base64 до KIT_LE <код find>. Список для md5sum — во временной папке mktemp -d, вне
-// папки сайта; убирается по выходу.
+// строки, их md5 как есть — пачкой (xargs -0 md5sum), по порядку номеров, между KIT_H и KIT_Z, их размеры — так же пачкой
+// (find … -maxdepth 0 на пачку; М-11: и в отрезанных папках) до KIT_L. Затем find остальных обычных файлов с отрезанием —
+// «размер путь\0» в base64 до KIT_LE <код find>; rules = null — без find (md5 только по списку). Список для md5sum — во
+// временной папке mktemp -d, вне папки сайта; убирается по выходу.
 function listScript(root, tracked, rules) {
   return [
     'cd ' + shq(root) + " || { echo 'KIT_ERR нет папки сайта'; exit 0; }",
@@ -194,8 +212,10 @@ function listScript(root, tracked, rules) {
     '} 3> "$T/z"',
     'echo KIT_H',
     'if [ -s "$T/z" ]; then <"$T/z" xargs -0 md5sum | cut -c1-33; fi',
+    'echo KIT_Z',
+    'if [ -s "$T/z" ]; then <"$T/z" xargs -0 sh -c \'find "$@" -maxdepth 0 -printf "%s\\n"\' sh; fi',
     'echo KIT_L',
-    'find . ' + findPrune(rules) + " -o -type f -printf '%s %P\\0' > \"$T/f\" 2>/dev/null",
+    rules ? 'find . ' + findPrune(rules) + " -o -type f -printf '%s %P\\0' > \"$T/f\" 2>/dev/null" : ': > "$T/f"',
     'r=$?',
     'base64 < "$T/f"',
     'echo "KIT_LE $r"',
@@ -209,13 +229,15 @@ const B64 = /^[A-Za-z0-9+/]*={0,2}$/;
 const STATES = { N: 'absent', U: 'unreadable', O: 'notfile' };
 
 // Ответ сверки → { err (KIT_ERR), bad (не разобран — как обрыв), state: Map<путь, file | absent | unreadable | notfile>,
-// md5: Map<путь, md5 как есть>, files: Map<путь, размер> — все обычные файлы из find, findFailed }. Хеши сопоставляются с путями
-// по порядку; имена из вывода md5sum не разбираются (строка может начинаться с «\» — хеш после него).
+// md5: Map<путь, md5 как есть>, sizes: Map<путь, размер> — отслеживаемых «есть», files: Map<путь, размер> — все обычные файлы
+// из find, findFailed }. Хеши и размеры сопоставляются с путями по порядку; имена из вывода md5sum не разбираются (строка может
+// начинаться с «\» — хеш после него).
 function parseList(stdout, tracked) {
-  const r = { err: null, bad: null, state: new Map(), md5: new Map(), files: new Map(), findFailed: false };
+  const r = { err: null, bad: null, state: new Map(), md5: new Map(), sizes: new Map(), files: new Map(), findFailed: false };
   const fail = (why) => Object.assign(r, { bad: why });
   let sec = 'states';
   const hashes = [];
+  const sizes = [];
   const b64 = [];
   let ended = false;
   for (const line of lines(stdout)) {
@@ -231,8 +253,11 @@ function parseList(stdout, tracked) {
         r.state.set(p, STATES[m[2]]);
       } else if (line === 'KIT_H') sec = 'hashes';
     } else if (sec === 'hashes') {
-      if (line === 'KIT_L') sec = 'list';
+      if (line === 'KIT_Z') sec = 'sizes';
       else if (line) hashes.push(line);
+    } else if (sec === 'sizes') {
+      if (line === 'KIT_L') sec = 'list';
+      else if (line) sizes.push(line);
     } else if (sec === 'list') {
       if ((m = /^KIT_LE (\d+)$/.exec(line))) {
         r.findFailed = m[1] !== '0';
@@ -243,11 +268,14 @@ function parseList(stdout, tracked) {
   if (!ended) return fail('ответ оборван');
   const present = tracked.filter((p) => !r.state.has(p));
   if (hashes.length !== present.length) return fail(`хешей ${hashes.length}, а файлов ${present.length}`);
+  if (sizes.length !== present.length) return fail(`размеров ${sizes.length}, а файлов ${present.length}`);
   for (let i = 0; i < present.length; i++) {
     const m = /^\\?([0-9a-f]{32})(?: |$)/.exec(hashes[i]);
     if (!m) return fail('строка хеша ' + (i + 1) + ' не разобрана');
+    if (!/^\d+$/.test(sizes[i])) return fail('строка размера ' + (i + 1) + ' не разобрана');
     r.state.set(present[i], 'file');
     r.md5.set(present[i], m[1]);
+    r.sizes.set(present[i], Number(sizes[i]));
   }
   const raw = b64.join('');
   if (!B64.test(raw)) return fail('список файлов не в base64');
@@ -450,6 +478,75 @@ function dirtyPaths(dir) {
   return new Set(r.out.split('\0').filter((x) => x.length > 3).map((x) => x.slice(3)));
 }
 
+// Файл рабочей копии; нет файла (или на его месте папка, или над ним файл) — null. Другая ошибка чтения — исключение.
+function readWork(dir, rel) {
+  try {
+    return fs.readFileSync(path.join(dir, rel));
+  } catch (e) {
+    if (['ENOENT', 'ENOTDIR', 'EISDIR'].includes(e.code)) return null;
+    throw e;
+  }
+}
+
+// Наши незакоммиченные правки (Р-27): путь из git status, у которого версия рабочей копии (md5 без \r; файла нет — null) ≠
+// версии HEAD (headVer); отличие только в \r — не правка. same(p, raw) — сырой md5 сервера (null — файла нет) совпал с файлом
+// рабочей копии как есть или в варианте переводов строк (Р-28: наше уже на сервере). Файлы читаются по запросу, один раз.
+function workCopy(dir, headVer) {
+  const status = dirtyPaths(dir);
+  const seen = new Map();
+  const info = (p) => {
+    if (!seen.has(p)) {
+      const b = readWork(dir, p);
+      seen.set(p, b === null ? null : { noCr: md5NoCr(b), raws: new Set([md5(b), md5Eol(b, false), md5Eol(b, true)]) });
+    }
+    return seen.get(p);
+  };
+  const noCr = (p) => (info(p) ? info(p).noCr : null);
+  return {
+    status,
+    noCr,
+    dirty: (p) => status.has(p) && noCr(p) !== headVer(p),
+    same: (p, raw) => (raw === null ? info(p) === null : !!info(p) && info(p).raws.has(raw)),
+  };
+}
+
+// М-6: записать путь мешает локальное — на его месте папка или над ним файл. → причина | null. Ссылку на папку над путём
+// считаем папкой (stat идёт по ссылке).
+function blockedOnDisk(dir, rel) {
+  try {
+    if (fs.lstatSync(path.join(dir, rel)).isDirectory()) return 'у нас на этом месте папка';
+  } catch (e) {
+    // нет — не мешает
+  }
+  const segs = rel.split('/');
+  for (let i = 1; i < segs.length; i++) {
+    const up = segs.slice(0, i).join('/');
+    let st;
+    try {
+      st = fs.statSync(path.join(dir, up));
+    } catch (e) {
+      return null; // папки нет — запись её создаст
+    }
+    if (!st.isDirectory()) return 'у нас файл ' + up + ' на месте папки';
+  }
+  return null;
+}
+
+// М-7: временные файлы записи (<путь>.<pid>.kit-tmp, lib/atomic.js), оставшиеся после обрыва.
+function dropTmp(dir, rel) {
+  const abs = path.join(dir, rel);
+  const name = path.basename(abs);
+  let list;
+  try {
+    list = fs.readdirSync(path.dirname(abs));
+  } catch (e) {
+    return;
+  }
+  for (const f of list) {
+    if (f.startsWith(name + '.') && /^\.\d+\.kit-tmp$/.test(f.slice(name.length))) fs.rmSync(path.join(path.dirname(abs), f), { force: true });
+  }
+}
+
 // Части по сумме длин путей плюс 3 знака на путь; путь длиннее предела — отдельной частью.
 function byLength(paths, limit) {
   const parts = [];
@@ -482,7 +579,9 @@ function removeLocal(dir, rel) {
 }
 
 // Прошлый вход оборвался после записи (Т-12): его пути — к HEAD. Есть в HEAD — git checkout HEAD; нет — из индекса и с диска.
+// Временные файлы записи рядом с путями — убрать (М-7).
 function restore(dir, paths, argLimit) {
+  for (const p of paths) dropTmp(dir, p);
   const head = treeOf(dir, 'HEAD');
   const inHead = paths.filter((p) => head.has(p));
   const gone = paths.filter((p) => !head.has(p));
@@ -574,9 +673,12 @@ async function download(c, items) {
   return { data, failed };
 }
 
-// Сверка: подключение 1 — состояние, md5 и список сервера; версии по Т-5 (Р-13); что не забирать (Р-17); скачивание неясных и
-// (кроме --check) забираемых. → { fail } | { take: [{ path, kind: changed | added | removed, size, data? }], merge: [путь],
-// once: [{ path, why }] — называются один раз, each: [{ path, why }] — каждый вход, waiting: [запись], findFailed }.
+// Сверка без скачивания: подключение 1 — состояние, md5, размеры и список сервера; версии по Т-5 (Р-13); наши правки и «наше
+// уже на сервере» (Р-27, Р-28; md5 новых на сервере, которые есть и у нас, — подключением 2); что не забирать (Р-17); М-6.
+// → { fail } | { items: [{ path, kind: unclear | changed | added | removed | merge, side: take | merge, size, gone — на сервере
+// файла нет, raw }],
+// once: [{ path, why }] — называются один раз, each: [{ path, why }] — каждый вход, waiting: [запись], findFailed,
+// judge(путь, версия сервера), work — наши правки (null — кандидатов нет), baseOid(путь) — blob базы или null }.
 async function survey(c) {
   const { dir } = c;
   const site = (p) => !matchRules(p, c.rules);
@@ -627,22 +729,22 @@ async function survey(c) {
     }
   }
   const variants = await blobVariants(dir, [...new Set(loose.flatMap((p) => [baseF.get(p), headF.get(p)]).filter(Boolean))]);
-  const cands = [];
+  const items = [];
   for (const p of loose) {
     const raw = list.md5.get(p);
     const hit = [baseF.get(p), headF.get(p)].find((oid) => oid && variants.get(oid).has(raw));
     if (hit) server.set(p, ver(hit));
-    else cands.push({ path: p, kind: 'unclear', size: list.files.get(p) }); // неясный: решит содержимое
+    else items.push({ path: p, kind: 'unclear', size: list.sizes.get(p), gone: false, raw }); // неясный: решит содержимое
   }
-  const merge = [];
   for (const [p, v] of server) {
     const k = judge(p, v);
-    if (k === 'take') cands.push({ path: p, kind: v === null ? 'removed' : 'changed', size: list.files.get(p) });
-    else if (k === 'merge') merge.push(p);
+    if (k !== 'take' && k !== 'merge') continue;
+    const gone = v === null;
+    items.push({ path: p, kind: k === 'merge' ? 'merge' : gone ? 'removed' : 'changed', size: list.sizes.get(p), gone, raw: gone ? null : list.md5.get(p) });
   }
 
   // Новые на сервере: нет ни в HEAD, ни в базе, файлы сайта, не под путём из git (подмодуль, ссылка, файл вместо папки) и не
-  // исключены .gitignore.
+  // исключены .gitignore. md5 сервера у них нет — «наше ли» решает подключение 2.
   const known = new Set([...head.keys(), ...base.keys()]);
   const under = (p) => {
     for (let i = p.indexOf('/'); i > 0; i = p.indexOf('/', i + 1)) if (known.has(p.slice(0, i))) return true;
@@ -654,47 +756,218 @@ async function survey(c) {
     if (ignored.has(p)) continue;
     const w = pendingEntry(pend, p);
     if (w) waiting.add(w);
-    else cands.push({ path: p, kind: 'added', size: list.files.get(p) });
+    else items.push({ path: p, kind: 'added', size: list.files.get(p), gone: false });
+  }
+
+  // Наши правки — только если есть кандидаты (М-4). Сервер = рабочая копия — наше уже на сервере (Р-28): не скачивать, не
+  // совмещать, не забирать, в строку и в проверки File Watchers и 50 МБ не включать.
+  const work = items.length ? workCopy(dir, (p) => ver(headF.get(p))) : null;
+  let left = items.filter((it) => it.kind === 'added' || !(work.dirty(it.path) && work.same(it.path, it.gone ? null : it.raw)));
+
+  // Подключение 2 — только если новый на сервере есть и у нас (неотслеживаемый): md5 по списку, без обхода папки сайта. До «не
+  // забирать»: своё на сервере не называется и там.
+  const probe = left.filter((it) => it.kind === 'added' && work.dirty(it.path)).map((it) => it.path);
+  if (probe.length) {
+    const res2 = await remote(c, listScript(c.target.root, probe, null));
+    if (res2.fail) return res2;
+    const h = parseList(res2.stdout, probe);
+    if (h.err) return { fail: h.err };
+    if (h.bad) return unparsed(h.bad);
+    const drop = new Set(probe.filter((p) => h.state.get(p) === 'absent' || (h.md5.has(p) && work.same(p, h.md5.get(p)))));
+    left = left.filter((it) => !drop.has(it.path));
   }
 
   // Что не забирается (Р-17): недопустимое имя, запрещённое к коммиту, архив, больше 10 МБ. Windows не различает регистр: новый
-  // путь, совпавший без регистра с путём git или с другим новым, затёр бы чужой файл — тоже недопустимое имя.
+  // путь, совпавший без регистра с путём git, с другим новым или с нашим неотслеживаемым, затёр бы чужой файл — тоже
+  // недопустимое имя. Затем М-6 — по диску, до проверок объёма и вотчеров: такой путь не забирается, не совмещается и называется
+  // каждый вход.
   const forbid = parseRules([...BASE_FORBIDDEN, ...c.info.params.list('Не коммитить')]);
   const win = process.platform === 'win32';
-  const lower = new Map();
-  if (win) for (const p of [...known, ...cands.filter((it) => it.kind === 'added').map((it) => it.path)]) lower.set(p.toLowerCase(), (lower.get(p.toLowerCase()) || 0) + 1);
+  const spell = new Map(); // нижний регистр → написания
+  if (win) {
+    for (const p of [...known, ...(work ? work.status : []), ...left.filter((it) => it.kind === 'added').map((it) => it.path)]) {
+      const k = p.toLowerCase();
+      if (!spell.has(k)) spell.set(k, new Set());
+      spell.get(k).add(p);
+    }
+  }
   const whyNot = (it) => {
-    if (badName(it.path) || (win && it.kind === 'added' && lower.get(it.path.toLowerCase()) > 1)) return 'недопустимое имя';
+    if (badName(it.path) || (win && it.kind === 'added' && spell.get(it.path.toLowerCase()).size > 1)) return 'недопустимое имя';
     if (matchRules(it.path, forbid)) return 'запрещён к коммиту';
     return skipTake(it.path, it.size);
   };
+  // Сторона: совмещение — наша правка, merge или неясный при HEAD ≠ базе (по содержимому станет merge или «ничего»); остальное —
+  // забор (неясный при HEAD = базе станет забором или «ничего»).
+  const side = (it) => (work.dirty(it.path) || it.kind === 'merge' || (it.kind === 'unclear' && ver(headF.get(it.path)) !== ver(baseF.get(it.path)))
+    ? 'merge' : 'take');
   const once = [];
   const keep = [];
-  for (const it of cands) {
+  for (const it of left) {
     const why = whyNot(it);
+    const blocked = why ? null : blockedOnDisk(dir, it.path);
     if (why) once.push({ path: it.path, why });
-    else keep.push(it);
+    else if (blocked) each.push({ path: it.path, why: blocked });
+    else keep.push({ ...it, side: side(it) });
   }
+  return {
+    items: keep.sort(byPath), once, each, waiting: [...waiting].sort(), findFailed: list.findFailed, judge, work,
+    baseOid: (p) => baseF.get(p) || null,
+  };
+}
 
-  const got = await download(c, keep.filter((it) => it.kind === 'unclear' || (!c.check && it.kind !== 'removed')));
+// Забор: скачать (кроме удалённых на сервере; all = false — только неясные, для --check) и разобрать по содержимому (Р-13):
+// неясный решается точно, изменённый мог смениться после сверки, вернувшийся к базе — не забирается.
+// → { fail } | { take: [{ path, kind: changed | added | removed, size, gone, data }], each: [{ path, why }] }.
+async function collect(c, s, items, all = true) {
+  const want = (it) => !it.gone && (all || it.kind === 'unclear');
+  const got = await download(c, items.filter(want));
   if (got.fail) return got;
   const take = [];
-  for (const it of keep) {
+  const each = [];
+  for (const it of items) {
     if (got.failed.has(it.path)) {
       each.push({ path: it.path, why: 'не читается' });
       continue;
     }
-    const data = got.data.get(it.path);
-    if (!data || it.kind === 'added') {
-      take.push(data ? { ...it, data } : it);
+    const data = want(it) ? got.data.get(it.path) : null;
+    if (!it.gone && !want(it)) { // --check: как нашла сверка
+      take.push({ path: it.path, kind: it.kind, size: it.size, gone: false, data: null });
       continue;
     }
-    // Скачанный отслеживаемый — версия сервера по содержимому: неясный решается точно, изменённый мог смениться после сверки.
-    const k = judge(it.path, md5NoCr(data));
-    if (k === 'take') take.push({ ...it, kind: 'changed', data });
-    else if (k === 'merge') merge.push(it.path);
+    if (it.kind !== 'added' && s.judge(it.path, data ? md5NoCr(data) : null) !== 'take') continue;
+    take.push({ path: it.path, kind: it.kind === 'added' ? 'added' : data ? 'changed' : 'removed', size: it.size, gone: !data, data });
   }
-  return { take: take.sort(byPath), merge: merge.sort(), once, each, waiting: [...waiting].sort(), findFailed: list.findFailed };
+  return { take, each };
+}
+
+// Совмещение в памяти (Р-29, Р-39, Р-40): скачать кандидатов (кроме удалённых на сервере) и совместить во временной папке вне
+// проекта — в проект ничего не пишется. Наша — файл с диска, база — blob известного состояния сервера, их — скачанное. Сервер =
+// рабочая копия без \r — наше уже на сервере; сервер вернулся к базе или к HEAD — ничего; результат равен нашей — совмещено
+// раньше. → { fail } | { merged: [{ path, result }] — вход запишет, conflicts: [{ path, why, ours, theirs, base }] — версии
+// (Buffer | null), each: [{ path, why }] }.
+async function mergePlan(c, s, items) {
+  const merged = [];
+  const conflicts = [];
+  const each = [];
+  if (!items.length) return { merged, conflicts, each };
+  const got = await download(c, items.filter((it) => !it.gone));
+  if (got.fail) return got;
+  const bases = new Map();
+  await catBlobs(c.dir, [...new Set(items.map((it) => s.baseOid(it.path)).filter(Boolean))], (oid, buf) => bases.set(oid, Buffer.from(buf)));
+  for (const it of items) {
+    if (got.failed.has(it.path)) {
+      each.push({ path: it.path, why: 'не читается' });
+      continue;
+    }
+    const theirs = it.gone ? null : got.data.get(it.path);
+    const v = theirs ? md5NoCr(theirs) : null;
+    const mine = s.work.dirty(it.path);
+    if (mine && v === s.work.noCr(it.path)) continue; // наше уже на сервере
+    const k = it.kind === 'added' ? 'take' : s.judge(it.path, v);
+    if (k !== 'merge' && !(k === 'take' && mine)) continue; // сервер вернулся к базе или к нашему
+    const ours = readWork(c.dir, it.path);
+    const oid = s.baseOid(it.path);
+    const base = oid ? bases.get(oid) : null;
+    const r = mergeVersions({ ours, base, theirs });
+    if (r.conflict) conflicts.push({ path: it.path, why: r.conflict, ours, theirs, base });
+    else if (r.result && !(ours && r.result.equals(ours))) merged.push({ path: it.path, result: r.result });
+  }
+  return { merged, conflicts, each };
+}
+
+// Размер для пользователя: меньше 1 МБ — в КБ (с округлением вверх), иначе в МБ до десятых, с запятой.
+const mb = (n) => (n < 1024 * 1024 ? Math.max(1, Math.ceil(n / 1024)) + ' КБ' : String(Math.round(n / 104857.6) / 10).replace('.', ',') + ' МБ');
+
+// File Watchers при PhpStorm Always (Т-14, Р-31): пути, которые пересоберёт вотчер. Always — .idea/deployment.xml (нет или не
+// разобран — не Always), расширения — watcherExts. → { exts: [расширения], hits: [пути] }.
+function watcherHits(dir, paths) {
+  const none = { exts: [], hits: [] };
+  if (!paths.length) return none;
+  const exts = watcherExts(dir);
+  if (!exts.size || !readDeployment(readText(path.join(dir, '.idea', 'deployment.xml'))).always) return none;
+  const extOf = (p) => {
+    const name = p.split('/').pop();
+    const i = name.lastIndexOf('.');
+    return i < 0 ? '' : name.slice(i + 1).toLowerCase();
+  };
+  return { exts: [...exts].sort(), hits: paths.filter((p) => exts.has(extOf(p))).sort() };
+}
+
+// Объём за вход (Р-31): сумма размеров (неизвестный — UNKNOWN_SIZE) больше предела → { total, top: [[папка, размер]] — до 5
+// самых тяжёлых: папка файла, обрезанная до трёх уровней, файл в корне — сам по себе } | null.
+function bigOf(items, limit) {
+  const size = (it) => (Number.isFinite(it.size) ? it.size : UNKNOWN_SIZE);
+  const total = items.reduce((n, it) => n + size(it), 0);
+  if (total <= limit) return null;
+  const dirs = new Map();
+  for (const it of items) {
+    const segs = it.path.split('/');
+    const key = segs.length > 1 ? segs.slice(0, Math.min(3, segs.length - 1)).join('/') + '/' : it.path;
+    dirs.set(key, (dirs.get(key) || 0) + size(it));
+  }
+  return { total, top: [...dirs].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 5) };
+}
+
+// Остановка (Р-31, Р-40): вотчеры и объём — одной остановкой, одним вопросом; последняя строка — что делать Claude.
+function stopLines(w, big, limit) {
+  const said = [];
+  const ask = [];
+  if (w && w.hits.length) {
+    said.push(`File Watchers PhpStorm (${w.exts.join(', ')}) — среди забираемого ${w.hits.length} ${plural(w.hits.length, 'файл', 'файла', 'файлов')}: ` +
+      `${listOf(w.hits)}; пересборка перезапишет результат, PhpStorm (Always) зальёт его на сервер`);
+    ask.push('по вотчерам — Забирать (`prod-entry.js --watchers-ok`; лучше выключить вотчеры на время входа) / ' + SKIP);
+  }
+  if (big) {
+    said.push(`Забрать за вход — ${mb(big.total)} (больше ${mb(limit)}); самые тяжёлые папки: ${big.top.map(([d, n]) => clean(d) + ' — ' + mb(n)).join(', ')}`);
+    ask.push('по объёму — Забрать всё (`prod-entry.js --big-ok`) / Не забирать папки (допиши их в .gitignore и повтори вход) / ' + SKIP);
+  }
+  return ['Вход остановлен, ничего не записано:', ...said.map((l) => '  ' + l),
+    'спроси пользователя одним AskUserQuestion: ' + ask.join('; ') + (ask.length > 1 ? '; оба ответа «забирать» — флаги вместе' : '')];
+}
+
+// Папка конфликтов (Р-38): kit-prod-<8 знаков md5 пути папки проекта (на Windows — в нижнем регистре)>-* в os.tmpdir().
+// Прежние папки этого проекта убираются перед созданием новой; ошибки — молча (занятые остаются, чужие проекты не трогаются).
+function conflictDir(dir) {
+  const key = path.resolve(dir);
+  const tag = 'kit-prod-' + md5(process.platform === 'win32' ? key.toLowerCase() : key).slice(0, 8) + '-';
+  let old = [];
+  try {
+    old = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith(tag));
+  } catch (e) {
+    // список не прочитан — убирать нечего
+  }
+  for (const f of old) {
+    try {
+      fs.rmSync(path.join(os.tmpdir(), f), { recursive: true, force: true });
+    } catch (e) {
+      // занята — остаётся
+    }
+  }
+  return fs.mkdtempSync(path.join(os.tmpdir(), tag));
+}
+
+// Запись совмещения (Р-29, Р-30): временные файлы записи у кандидатов на совмещение (cands) — убрать (М-7); совмещённое — через
+// временный файл со сверкой md5; конфликтам — версии сервера и базы во временную папку вне проекта (conflictDir: её читает
+// Claude, убирает следующий конфликт). → { wrong: [путь — md5 не совпал], conflicts: [{ path, why, ours, server, base }] —
+// полные пути или null }.
+function applyMerges(dir, mp, cands) {
+  for (const it of cands) dropTmp(dir, it.path);
+  const writes = mp.merged.map((m) => ({ file: path.join(dir, m.path), text: m.result, label: m.path }));
+  if (writes.length) writeFilesAtomic(writes, { mkdir: true });
+  const wrong = writes.filter((w) => md5(fs.readFileSync(w.file)) !== md5(w.text)).map((w) => w.label);
+  let tmp = null;
+  const conflicts = mp.conflicts.map((k) => {
+    tmp = tmp || conflictDir(dir);
+    const put = (side, buf) => {
+      if (!buf) return null;
+      const file = path.join(tmp, side, ...k.path.split('/'));
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, buf);
+      return file;
+    };
+    return { path: k.path, why: k.why, ours: k.ours ? path.join(dir, k.path) : null, server: put('server', k.theirs), base: put('base', k.base) };
+  });
+  return { wrong, conflicts };
 }
 
 // Коммит(ы) входа через kit-commit.js (Р-16): по части путей на вызов, --push — у последней. → { code: 0, commit } | { code, lines }.
@@ -723,12 +996,22 @@ function commitEntry(dir, env, take, remoteName, argLimit, out) {
     if (r.status === 1) {
       return { code: 1, lines: [...shown, 'kit-commit.js остановил коммит входа (запрещённый путь или секрет в скачанном) — разбери с пользователем, как у шагов; ' + again] };
     }
-    return { code: 4, lines: [...shown, `коммит входа не сделан (kit-commit.js, код ${r.status}) — ${again}; не проходит — скажи пользователю`] };
+    const what = r.status === 3 ? 'коммит входа сделан, но не проверен' : 'коммит входа не сделан';
+    return { code: 4, lines: [...shown, `${what} (kit-commit.js, код ${r.status}) — ${again}; не проходит — скажи пользователю`] };
   }
   return { code: 0, commit };
 }
 
-// Вход для тестов и main. opts: { check, env, timeoutMs, sessionId, argLimit, watchersOk, bigOk (48.4) }.
+// Основная папка годится для сверки из worktree (Р-39): есть, kit-проект, git с коммитами.
+function usableHome(p) {
+  try {
+    return fs.statSync(p).isDirectory() && kitInfo(p).isKit && git(p, ['rev-parse', '--verify', '--quiet', 'HEAD']).ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Вход для тестов и main. opts: { check, env, timeoutMs, sessionId, argLimit, entryLimit, watchersOk, bigOk }.
 // → { code, out: [строки], commit? (хеш последнего коммита входа) }.
 async function entry(dir, opts = {}) {
   const out = [];
@@ -745,7 +1028,12 @@ async function enter(dir, opts, out) {
     out.push(...more);
     return { code, out };
   };
-  const info = kitInfo(dir);
+  // Р-39: сессия в worktree сверяет основную папку — её параметры, базу, HEAD, рабочую копию и pending отметки: «есть что
+  // забрать» значит «вход общей сессии что-то сделает». Основная недоступна (нет, не git, не kit-проект) — своя, как в 48.3.
+  // Отметка сессии (checked) — всегда в папке сессии (dir).
+  const wt = mainFolder(dir);
+  const home = wt !== null && usableHome(wt) ? wt : dir;
+  const info = kitInfo(home);
   if (!info.isKit) return stop(2, 'вход не нужен: не kit-проект');
   const env = opts.env || serverEnv(info.params);
   const addrKey = env === 'дев' ? 'Дев' : 'Прод';
@@ -757,22 +1045,23 @@ async function enter(dir, opts, out) {
     if (!v) return stop(2, 'без SSH: вход по FTP — шаг 48.5');
     return stop(2, `параметр «${sshKey}» неверный: ${v} — нужно хост:/абсолютная/папка`, 'исправь его через /kit:project-init или ' + ASK);
   }
-  const b = entryBase(dir, info, env);
-  if (b.error) return stop(4, 'вход не сделан: ' + b.error);
-  out.push(`Сервер: ${env} — ${target.host}:${target.root}`, `База: ${git(dir, ['rev-parse', '--short', b.base]).out.trim()} (${b.source})`);
+  const b = entryBase(home, info, env);
+  if (b.error) return stop(4, 'вход не сделан: ' + b.error, 'скажи пользователю: вход — после первого коммита исходников сайта (/kit:project-init); до того — ' + SKIP);
+  out.push(`Сервер: ${env} — ${target.host}:${target.root}`, `База: ${git(home, ['rev-parse', '--short', b.base]).out.trim()} (${b.source})`);
+  if (home !== dir) out.push('Сверка — по основной папке проекта: ' + home);
 
-  const wt = mainFolder(dir);
   const check = !!opts.check || wt !== null;
   const timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT * 1000;
   const argLimit = opts.argLimit || ARG_LIMIT;
-  const c = { dir, info, env, target, b, check, rules: skipRules(info), deadline: Date.now() + timeoutMs, timeoutSec: Math.round(timeoutMs / 1000) };
+  const entryLimit = opts.entryLimit || ENTRY_LIMIT;
+  const c = { dir: home, info, env, target, b, check, rules: skipRules(info), deadline: Date.now() + timeoutMs, timeoutSec: Math.round(timeoutMs / 1000) };
   const sid = opts.sessionId || process.env.KIT_SESSION_ID || lastNeed(dir) || null;
   const noMark = 'отметка не поставлена: хук не пустит правки — перезапусти сессию';
-  const saveMark = (fn) => {
+  const saveMark = (fn) => { // только обычный вход: там home — папка сессии
     try {
-      const m = readMark(dir); // заново прямо перед записью: чужие записи сессий целы
+      const m = readMark(home); // заново прямо перед записью: чужие записи сессий целы
       fn(m);
-      writeMark(dir, m);
+      writeMark(home, m);
       return null;
     } catch (e) {
       return stop(4, 'отметка входа не записана: ' + e.message + ' — повтор prod-entry.js безопасен');
@@ -792,52 +1081,94 @@ async function enter(dir, opts, out) {
   };
 
   // Р-14 п.1: прошлый вход оборвался после записи — его пути вернуть к HEAD (к забору шли только пути без наших правок).
-  const pendingBefore = readMark(dir).pending;
+  const pendingBefore = readMark(home).pending;
   if (!check && pendingBefore.length) {
-    restore(dir, pendingBefore.filter((p) => safePath(p) && !matchRules(p, c.rules)), argLimit);
+    restore(home, pendingBefore.filter((p) => safePath(p) && !matchRules(p, c.rules)), argLimit);
     const bad = saveMark((m) => { m.pending = []; });
     if (bad) return bad;
   }
 
+  // Нет папки сайта на сервере — неверный «SSH <окружение>», повтор не поможет (М-9); остальное — связь: код 3.
+  const failed = (why) => (why === NO_ROOT
+    ? stop(2, `сверка не сделана: на сервере нет папки сайта ${target.root}`, `спроси пользователя: Проверить «${sshKey}» (/kit:project-init) / ${SKIP}`)
+    : stop(3, 'сверка не сделана: ' + why + ' — повтор безопасен', ASK));
   const s = await survey(c);
-  if (s.fail) return stop(3, 'сверка не сделана: ' + s.fail + ' — повтор безопасен', ASK);
+  if (s.fail) return failed(s.fail);
   if (s.findFailed) out.push('find на сервере прочитал не всё — новые файлы в нечитаемых папках не сверены');
-  const ours = oursPaths(dir);
-  const pick = (kind) => s.take.filter((it) => it.kind === kind).map((it) => it.path);
-  const [changed, added, removed] = ['changed', 'added', 'removed'].map(pick);
-  const named = new Set(readMark(dir).named);
-  const skipped = [...s.once.filter((it) => !named.has(it.path)), ...s.each].sort(byPath);
-  const line = () => summaryLine({ env, changed, added, removed, ours: [...changed, ...removed].filter((p) => ours.has(p)).sort(), skipped, waiting: s.waiting });
+  const named = new Set(readMark(home).named);
+  const each = [...s.each];
+  // Строка (Р-33, Р-37): числа — забранное коммитом входа (в --check — что вход запишет); наши доработки — только при непустом
+  // заборе (М-4); extra — merged, conflicts или conflictsAhead.
+  const line = (take, extra = {}) => {
+    const kindOf = (it) => (it.kind === 'added' ? 'added' : it.gone ? 'removed' : 'changed');
+    const [changed, added, removed] = ['changed', 'added', 'removed'].map((k) => take.filter((it) => kindOf(it) === k).map((it) => it.path));
+    const ours = changed.length || removed.length ? oursPaths(home) : new Set();
+    const skipped = [...s.once.filter((it) => !named.has(it.path)), ...each].sort(byPath);
+    return summaryLine({ env, changed, added, removed, ours: [...changed, ...removed].filter((p) => ours.has(p)).sort(), skipped, waiting: s.waiting, ...extra });
+  };
+  const takeSide = s.items.filter((it) => it.side === 'take');
+  const mergeSide = s.items.filter((it) => it.side === 'merge');
 
   if (check) {
-    if (s.take.length || s.merge.length || readMark(dir).pending.length) {
-      return stop(1, line(), `есть изменения без kit — вход делает общая сессия в основной папке (${wt || projectRoot(dir)})`);
+    // Р-39: план входа без записи — неясные скачиваются, кандидаты на совмещение совмещаются в памяти; в проект ничего не пишется.
+    // «Есть что забрать» — только то, что вход запишет: забор и совмещённое ≠ рабочей копии; конфликт, М-6, своё на сервере,
+    // совмещённое раньше и «не забирать» — названы, но не держат.
+    const got = await collect(c, s, takeSide, false);
+    if (got.fail) return failed(got.fail);
+    const mp = await mergePlan(c, s, mergeSide);
+    if (mp.fail) return failed(mp.fail);
+    each.push(...got.each, ...mp.each);
+    const writes = [...got.take, ...mp.merged.map((m) => ({ path: m.path, kind: 'changed', gone: false }))].sort(byPath);
+    const sum = line(writes, { conflictsAhead: mp.conflicts.map((k) => k.path) });
+    if (writes.length || readMark(home).pending.length) {
+      return stop(1, sum, `есть изменения без kit — вход делает общая сессия в основной папке (${wt || projectRoot(dir)})`);
     }
-    return markDone('checked') || stop(0, line());
+    return markDone('checked') || stop(0, sum);
   }
 
-  // Р-14 п.3 (до 48.4): путь к забору с незакоммиченной правкой или «менялось и у нас, и без нас» — стоп, ничего не записано.
-  const dirty = dirtyPaths(dir);
-  const busy = s.take.filter((it) => dirty.has(it.path)).map((it) => it.path);
-  if (busy.length || s.merge.length) {
-    return stop(1, 'Совмещение — шаг 48.4; вход остановлен, ничего не записано:',
-      ...busy.map((p) => '  ' + clean(p) + ' — незакоммиченная правка, а на сервере изменён без нас'),
-      ...s.merge.map((p) => '  ' + clean(p) + ' — менялся и у нас, и без нас'),
-      'совмещение — шаг 48.4: назови пользователю эти файлы и ' + ASK);
+  // Р-40 (1): объём — по всем кандидатам (забор и совмещение), до любого скачивания; остановка по объёму — сразу и вотчеры по всем
+  // кандидатам, одним вопросом.
+  const sized = s.items.filter((it) => !it.gone);
+  const big = opts.bigOk ? null : bigOf(sized, entryLimit);
+  if (big) return stop(1, ...stopLines(opts.watchersOk ? null : watcherHits(home, sized.map((it) => it.path)), big, entryLimit));
+  // (2) кандидатов на совмещение — скачать и совместить в памяти.
+  const mp = await mergePlan(c, s, mergeSide);
+  if (mp.fail) return failed(mp.fail);
+  // (3) вотчеры — по тому, что вход запишет: забор (кроме удалений) и совмещённое ≠ рабочей копии; до скачивания остального забора
+  // и до любой записи — ничего не записано, отметка не меняется.
+  if (!opts.watchersOk) {
+    const w = watcherHits(home, [...takeSide.filter((it) => !it.gone).map((it) => it.path), ...mp.merged.map((m) => m.path)]);
+    if (w.hits.length) return stop(1, ...stopLines(w, null, entryLimit));
   }
-
-  let commit;
-  if (s.take.length) {
-    // Р-14 п.4–6: pending до записи, удаления, запись через временный файл со сверкой md5, коммит(ы) входа.
-    const failed = saveMark((m) => { m.pending = s.take.map((it) => it.path); });
-    if (failed) return failed;
-    for (const it of s.take) if (it.kind === 'removed') removeLocal(dir, it.path);
-    const files = s.take.filter((it) => it.data);
-    writeFilesAtomic(files.map((it) => ({ file: path.join(dir, it.path), text: it.data, label: it.path })), { mkdir: true });
-    const wrong = files.filter((it) => md5(fs.readFileSync(path.join(dir, it.path))) !== md5(it.data)).map((it) => clean(it.path));
+  // (4) забор: скачать, записать.
+  const got = await collect(c, s, takeSide);
+  if (got.fail) return failed(got.fail);
+  each.push(...got.each, ...mp.each);
+  const take = got.take;
+  if (take.length) {
+    // Р-14 п.4–6: pending до записи, удаления, запись через временный файл со сверкой md5.
+    const bad = saveMark((m) => { m.pending = take.map((it) => it.path); });
+    if (bad) return bad;
+    for (const it of take) if (it.kind === 'removed') removeLocal(home, it.path);
+    const files = take.filter((it) => it.data);
+    writeFilesAtomic(files.map((it) => ({ file: path.join(home, it.path), text: it.data, label: it.path })), { mkdir: true });
+    const wrong = files.filter((it) => md5(fs.readFileSync(path.join(home, it.path))) !== md5(it.data)).map((it) => clean(it.path));
     if (wrong.length) return stop(4, 'записано не то, что скачано (md5 не совпал): ' + wrong.join(', '), 'вход не сделан — повтор prod-entry.js вернёт файлы к HEAD и заберёт заново');
-    const r = commitEntry(dir, env, s.take, info.params.get('Удалённый репозиторий') || null, argLimit, out);
-    if (r.code) return stop(r.code, ...r.lines);
+  }
+  // Совмещённое — в рабочую копию, мимо pending и коммита входа (Р-26, Р-29); пишется до коммита — его остановка совмещённое не
+  // откатывает (Р-34): повтор совместит заново с тем же результатом.
+  const ap = applyMerges(home, mp, mergeSide);
+  if (ap.wrong.length) return stop(4, 'записано не то, что совмещено (md5 не совпал): ' + ap.wrong.map(clean).join(', '), 'вход не сделан — повтор prod-entry.js совместит заново');
+  // Р-30: не совместилось — по каждому пути причина, наша, версии сервера и базы (временные файлы); конфликт — на каждом входе.
+  const at = (v) => v || 'нет';
+  const conflicts = ap.conflicts.length ? [`Не совместилось само — рабочая копия этих файлов не тронута (${ap.conflicts.length}):`,
+    ...ap.conflicts.map((k) => `  ${clean(k.path)} — ${k.why}; наша — ${at(k.ours)}; сервера — ${at(k.server)}; база — ${at(k.base)}`)] : [];
+  const merged = mp.merged.map((m) => m.path);
+  let commit;
+  if (take.length) {
+    const r = commitEntry(home, env, take, info.params.get('Удалённый репозиторий') || null, argLimit, out);
+    const kept = merged.length ? ['совмещённое с нашими правками осталось в рабочей копии: ' + listOf(merged)] : [];
+    if (r.code) return stop(r.code, ...kept, ...conflicts, ...r.lines);
     commit = r.commit;
   }
   const bad = saveMark((m) => {
@@ -847,8 +1178,14 @@ async function enter(dir, opts, out) {
   if (bad) return bad;
   const unmarked = markDone('done', commit);
   if (unmarked) return unmarked;
-  out.push(line());
-  return commit ? { code: 0, out, commit } : { code: 0, out };
+  out.push(line(take, { merged, conflicts: ap.conflicts.map((k) => k.path) }));
+  const done = commit ? { out, commit } : { out };
+  if (!conflicts.length) return { code: 0, ...done };
+  out.push(...conflicts,
+    'вход сделан, кроме этих файлов; спроси пользователя по каждому: Совместить вручную (правь рабочую копию по версии сервера) / ' +
+    'Оставить нашу (на следующем входе вопрос повторится, пока наша версия не залита) / Взять версию сервера (скопируй её в рабочую ' +
+    'копию; «сервера — нет» — удали файл)');
+  return { code: 1, ...done };
 }
 
 async function main(argv) {

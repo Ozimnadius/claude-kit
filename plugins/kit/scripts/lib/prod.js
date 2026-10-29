@@ -1,10 +1,13 @@
 'use strict';
 // Вход с прода (этап 48): правила сверки сервера с git — три версии файла (база, HEAD, сервер), база входа, что не забирать,
-// наши доработки, ждущее удаления, строка для пользователя и отметка входа. Только чистые правила и git; сервер, скачивание и
-// коммит — в prod-entry.js. Отметка — `.claude/kit-prod.json`: читается без исключений, пишется атомарно.
+// наши доработки, ждущее удаления, совмещение (git merge-file), File Watchers PhpStorm, строка для пользователя и отметка
+// входа. Только чистые правила и git; сервер, скачивание и коммит — в prod-entry.js. Отметка — `.claude/kit-prod.json`:
+// читается без исключений, пишется атомарно.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { spawnSync } = require('child_process');
 const { git, isSsh, baseFromPlan, sectionOf } = require('./deploy');
 const { getSection, parseTable } = require('./md');
 const { writeFilesAtomic } = require('./atomic');
@@ -215,7 +218,82 @@ function inPending(pending, rel) {
   return false;
 }
 
-// Строка для пользователя (Т-7). Массивы путей; skipped — [{ path, why }]. Числа — изменено/добавлено/удалено без kit.
+// Расширения включённых File Watchers PhpStorm (Т-14): .idea/watcherTasks.xml, задачи <TaskOptions …> без isEnabled="false",
+// их <option name="fileExtension" value="…" /> — без точки, нижним регистром. Нет файла или не разобран — пустое множество.
+function watcherExts(dir) {
+  const out = new Set();
+  let xml;
+  try {
+    xml = fs.readFileSync(path.join(dir, '.idea', 'watcherTasks.xml'), 'utf8');
+  } catch (e) {
+    return out;
+  }
+  const re = /<TaskOptions\b([^>]*?)(\/?)>/g;
+  let m;
+  while ((m = re.exec(xml))) {
+    if (m[2]) continue; // <TaskOptions /> — задача без настроек
+    const end = xml.indexOf('</TaskOptions>', re.lastIndex);
+    if (end < 0) break; // обрезанный файл
+    const body = xml.slice(re.lastIndex, end);
+    re.lastIndex = end;
+    if (/\bisEnabled="false"/i.test(m[1])) continue;
+    for (const o of body.matchAll(/<option\b([^>]*?)\/?>/g)) {
+      const v = /\bname="fileExtension"/.test(o[1]) && /\bvalue="([^"]*)"/.exec(o[1]);
+      const ext = v ? v[1].trim().replace(/^\.+/, '').toLowerCase() : '';
+      if (ext) out.add(ext);
+    }
+  }
+  return out;
+}
+
+// \r\n → \n (одиночный \r остаётся) и обратно: каждый \n → \r\n (в буфере нет \r\n).
+function toLf(buf) {
+  if (!buf.includes(13)) return buf;
+  const out = Buffer.alloc(buf.length);
+  let n = 0;
+  for (let i = 0; i < buf.length; i++) if (buf[i] !== 13 || buf[i + 1] !== 10) out[n++] = buf[i];
+  return out.subarray(0, n);
+}
+function toCrlf(buf) {
+  let lf = 0;
+  for (const b of buf) if (b === 10) lf++;
+  const out = Buffer.alloc(buf.length + lf);
+  let n = 0;
+  for (const b of buf) {
+    if (b === 10) out[n++] = 13;
+    out[n++] = b;
+  }
+  return out;
+}
+
+// Трёхстороннее совмещение (Т-8, Р-29): версии — Buffer или null (файла нет). git merge-file -p над файлами во временной
+// папке вне проекта (убирается всегда); CRLF → LF до совмещения, результат — в стиле нашей версии (в ней есть CRLF — каждый
+// перевод строки CRLF). Базы нет (добавлен и у нас, и без нас) — пустой файл. → { result: Buffer | null (удалён у обоих) } |
+// { conflict: причина }; ошибка git — тоже конфликт, не исключение.
+function mergeVersions({ ours = null, base = null, theirs = null } = {}) {
+  if (ours === null && theirs === null) return { result: null };
+  if (ours === null) return { conflict: 'удалён у нас, изменён на сервере' };
+  if (theirs === null) return { conflict: 'изменён у нас, удалён на сервере' };
+  if ([ours, base, theirs].some((b) => b && b.includes(0))) return { conflict: 'двоичный файл' };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-merge-'));
+  try {
+    const names = ['ours', 'base', 'theirs'];
+    [ours, base || Buffer.alloc(0), theirs].forEach((b, i) => fs.writeFileSync(path.join(tmp, names[i]), toLf(b)));
+    const r = spawnSync('git', ['merge-file', '-p', '-L', 'наша', '-L', 'база', '-L', 'сервер', ...names],
+      { cwd: tmp, maxBuffer: 256 * 1024 * 1024, windowsHide: true });
+    if (r.status === 0) return { result: ours.includes('\r\n') ? toCrlf(r.stdout) : r.stdout };
+    if (r.status > 0 && r.status < 128) return { conflict: 'правки пересекаются' }; // число конфликтов (не больше 127)
+    const why = String(r.stderr || r.error || '').trim().split('\n').pop();
+    return { conflict: 'git merge-file не совместил' + (why ? ': ' + why : '') };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+// Строка для пользователя (Т-7). Массивы путей; skipped — [{ path, why }]. Числа — изменено/добавлено/удалено без kit (только
+// забранное коммитом входа); merged — совмещённое с нашими незакоммиченными правками в этом входе (Р-33); conflicts — не
+// совместилось само (Р-37: подробности и вопрос — строками ниже); conflictsAhead — не совместится само (--check, Р-39: вопрос
+// задаст вход общей сессии). «Совпадает с git» — только если всё пусто.
 const cleanText = (s) => String(s).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '?');
 const listOf = (items, fmt = cleanText) => items.slice(0, LIST_LIMIT).map(fmt).join(', ') +
   (items.length > LIST_LIMIT ? ' и ещё ' + (items.length - LIST_LIMIT) : '');
@@ -223,12 +301,17 @@ const listOf = (items, fmt = cleanText) => items.slice(0, LIST_LIMIT).map(fmt).j
 function summaryLine(input = {}) {
   const list = (v) => (Array.isArray(v) ? v : []);
   const { env } = input;
-  const [changed, added, removed, ours, skipped, waiting] = ['changed', 'added', 'removed', 'ours', 'skipped', 'waiting'].map((k) => list(input[k]));
+  const keys = ['changed', 'added', 'removed', 'ours', 'merged', 'conflicts', 'conflictsAhead', 'skipped', 'waiting'];
+  const all = keys.map((k) => list(input[k]));
+  const [changed, added, removed, ours, merged, conflicts, ahead, skipped, waiting] = all;
   const dev = env === 'дев';
   const head = '[kit] ' + (dev ? 'Вход с дева: ' : 'Вход с прода: ');
-  if (![changed, added, removed, ours, skipped, waiting].some((a) => a.length)) return head + (dev ? 'дев' : 'прод') + ' совпадает с git.';
+  if (!all.some((a) => a.length)) return head + (dev ? 'дев' : 'прод') + ' совпадает с git.';
   const parts = [`файлов без kit: изменено ${changed.length}, добавлено ${added.length}, удалено ${removed.length}.`];
   if (ours.length) parts.push(`Наши прошлые доработки среди изменённых (проверьте, не затёрты ли): ${listOf(ours)}.`);
+  if (merged.length) parts.push(`Совмещено с нашими незакоммиченными правками — проверьте в панели изменений: ${listOf(merged)}.`);
+  if (conflicts.length) parts.push(`Не совместилось само — вопрос ниже: ${listOf(conflicts)}.`);
+  if (ahead.length) parts.push(`Не совместится само — вопрос задаст вход общей сессии: ${listOf(ahead)}.`);
   if (skipped.length) parts.push(`Не забрано, осталось на сервере: ${listOf(skipped, (s) => cleanText(s.path) + ' (' + cleanText(s.why) + ')')}.`);
   if (waiting.length) parts.push(`Ждёт удаления с сервера: ${listOf(waiting)}.`);
   return head + parts.join(' ');
@@ -315,5 +398,6 @@ function lastNeed(dir) {
 
 module.exports = {
   ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake,
-  oursPaths, pendingDelete, inPending, summaryLine, readMark, writeMark, markSession, sessionDone, lastNeed,
+  oursPaths, pendingDelete, inPending, watcherExts, mergeVersions, listOf, summaryLine, readMark, writeMark, markSession, sessionDone,
+  lastNeed,
 };
