@@ -12,6 +12,9 @@
 // первый путь в одинарных кавычках ('<php>', в том числе внутри «timeout -k 5 N '<php>'») выполняется локальным PHP:
 // stdin → php, затем метка с кодом php (как настоящий сервер).
 // FAKE_SSH_LOG — файл для проверок: { opts, host, command, stdin }.
+// FAKE_SSH_TOUCH — JSON { match, file, text } или список таких (хосты sh и shdrop): сценарий совпал с match (регулярное
+// выражение, флаг m) — до его выполнения записать text в file (пользователь сохранил файл, пока синхронизация скачивала, —
+// prod-sync.js, 48.7).
 // Выход — через process.exitCode, а не process.exit(): на Windows запись в канал асинхронная и обрезалась бы.
 const fs = require('fs');
 const { spawnSync } = require('child_process');
@@ -58,6 +61,9 @@ function main() {
     if (n === Number(process.env.FAKE_SSH_DROP || 2)) return fail('KIT_F 1\nYWJj\n', 'Connection to shdrop closed by remote host.\n');
   }
   if (host === 'sh' || host === 'shdrop') {
+    for (const t of [].concat(process.env.FAKE_SSH_TOUCH ? JSON.parse(process.env.FAKE_SSH_TOUCH) : [])) {
+      if (new RegExp(t.match, 'm').test(stdin.toString('utf8'))) fs.writeFileSync(t.file, t.text);
+    }
     // maxBuffer: по умолчанию у spawnSync 1 МБ — скачивание синхронизации (до 16 МБ за подключение, в base64) обрезалось бы
     const r = spawnSync(process.env.FAKE_SH || 'sh', ['-s'], { input: stdin, maxBuffer: 256 * 1024 * 1024, env: { ...process.env, LC_ALL: process.env.LC_ALL || 'C.UTF-8' } });
     process.stdout.write(Buffer.concat([r.stdout || Buffer.alloc(0), Buffer.from(mark(r.status === null ? 255 : r.status))]));

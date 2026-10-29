@@ -10,7 +10,7 @@ const { kitInfo } = require('../plugins/kit/scripts/lib/project');
 const prod = require('../plugins/kit/scripts/lib/prod');
 
 const { ENTRY_RE, entrySubject, md5NoCr, classify, entryBase, baseTree, FILE_LIMIT, ENTRY_LIMIT, skipTake, oursPaths, pendingDelete, inPending,
-  summaryLine, MARK_FILE, readMark, writeMark, markSession, sessionDone, lastNeed, watcherExts, mergeVersions, bigOf, stopLines, md5Eol } = prod;
+  summaryLine, MARK_FILE, readMark, writeMark, watcherExts, mergeVersions, bigOf, stopLines, md5Eol } = prod;
 
 const PARAMS = { 'Режим': 'общий', 'Прод': 'https://alpha.example.com', 'Выкладка': 'вручную', 'План выкладки': 'plan.md' };
 const ENTRY = 'Прод: изменения без kit на 2026-10-29 (1 файл)';
@@ -461,119 +461,63 @@ test('summaryLine: не больше 10 путей в части, дальше �
   assert.match(bad, /x.y.+z.+\.php/);
 });
 
-test('отметка: две сессии не мешают друг другу, битый файл — пустая, старше 7 дней убираются, lastNeed — последняя need', () => {
+test('отметка (48.7): только named и pending; старый файл с sessions читается без ошибки, при записи поле пропадает', () => {
   const dir = makeProject({});
-  const empty = { sessions: {}, named: [], pending: [] };
+  const empty = { named: [], pending: [] };
   assert.deepEqual(readMark(dir), empty, 'файла нет');
-  markSession(dir, 'A', 'need');
-  markSession(dir, 'B', 'done', 'abc1234');
-  const m = readMark(dir);
-  assert.deepEqual(Object.keys(m.sessions).sort(), ['A', 'B']);
-  assert.equal(m.sessions.A.result, 'need');
-  assert.equal(m.sessions.B.result, 'done');
-  assert.equal(m.sessions.B.commit, 'abc1234');
-  assert.ok(!('commit' in m.sessions.A));
-  assert.ok(!Number.isNaN(Date.parse(m.sessions.A.at)));
-  assert.ok(!sessionDone(dir, 'A'));
-  assert.ok(sessionDone(dir, 'B'));
-  assert.equal(lastNeed(dir), 'A');
+  writeMark(dir, { named: ['x.zip'], pending: ['old.php'], sessions: { A: { at: new Date().toISOString(), result: 'need' } } });
+  assert.deepEqual(readMark(dir), { named: ['x.zip'], pending: [{ path: 'old.php' }] }, 'строка — md5 неизвестен');
+  const file = path.join(dir, MARK_FILE);
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { named: ['x.zip'], pending: ['old.php'] }, 'sessions не пишется');
 
-  // named и pending и записи других сессий сохраняются
-  writeMark(dir, { ...readMark(dir), named: ['x.zip'], pending: ['old.php'] });
-  markSession(dir, 'A', 'skipped');
-  const m2 = readMark(dir);
-  assert.deepEqual(m2.named, ['x.zip']);
-  assert.deepEqual(m2.pending, ['old.php']);
-  assert.equal(m2.sessions.B.commit, 'abc1234');
-  assert.ok(sessionDone(dir, 'A'));
-  markSession(dir, 'C', 'checked');
-  assert.ok(sessionDone(dir, 'C'));
-  assert.equal(lastNeed(dir), null);
-  assert.ok(!sessionDone(dir, 'нет такой'));
-
-  // lastNeed — самая поздняя need
-  const t = (ms) => new Date(Date.now() - ms).toISOString();
-  writeMark(dir, { sessions: { P: { at: t(3000), result: 'need' }, Q: { at: t(1000), result: 'need' }, R: { at: t(500), result: 'done' }, S: { at: t(2000), result: 'need' } },
-    named: [], pending: [] });
-  assert.equal(lastNeed(dir), 'Q');
+  // файл первой редакции (с записями сессий) — читается, при записи sessions пропадает
+  fs.writeFileSync(file, JSON.stringify({ sessions: { s1: { at: new Date().toISOString(), result: 'done', commit: 'abc1234' }, s2: { at: 'x', result: 'need' } },
+    named: ['a.zip'], pending: ['p.php'] }));
+  const old = readMark(dir);
+  assert.deepEqual(old, { named: ['a.zip'], pending: [{ path: 'p.php' }] });
+  writeMark(dir, { ...old, pending: [] });
+  assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify({ named: ['a.zip'], pending: [] }, null, 2) + '\n');
 
   // файл — UTF-8 без BOM, LF
-  const raw = fs.readFileSync(path.join(dir, MARK_FILE));
+  const raw = fs.readFileSync(file);
   assert.notEqual(raw[0], 0xef);
   assert.ok(!raw.includes(13));
   assert.equal(raw[raw.length - 1], 10);
 
-  // битый файл — пустая отметка
-  fs.writeFileSync(path.join(dir, MARK_FILE), '{ не json');
+  // битый файл — пустая отметка; запись после него работает
+  fs.writeFileSync(file, '{ не json');
   assert.deepEqual(readMark(dir), empty);
-  assert.equal(lastNeed(dir), null);
-  markSession(dir, 'N', 'need');
-  assert.deepEqual(Object.keys(readMark(dir).sessions), ['N'], 'после битого файла запись снова работает');
+  writeMark(dir, { named: [], pending: ['n.php'] });
+  assert.deepEqual(readMark(dir), { named: [], pending: [{ path: 'n.php' }] });
 });
 
-test('отметка: записи старше 7 дней и с нечитаемым at убираются при записи; поля не того типа — пустые', () => {
+test('отметка (Р-57): элемент pending — { path, md5 }: md5 записанного (md5NoCr), null — синхронизация файл удаляет; строка первой редакции — md5 неизвестен; битые элементы отброшены', () => {
   const dir = makeProject({});
-  const day = 24 * 3600 * 1000;
-  writeMark(dir, { sessions: {
-    old: { at: new Date(Date.now() - 8 * day).toISOString(), result: 'done' },
-    edge: { at: new Date(Date.now() - 6 * day).toISOString(), result: 'done' },
-    bad: { at: 'вчера', result: 'done' },
-    noat: { result: 'done' },
-  }, named: ['a'], pending: [] });
-  assert.deepEqual(Object.keys(readMark(dir).sessions), ['edge']);
-
   const file = path.join(dir, MARK_FILE);
-  fs.writeFileSync(file, JSON.stringify({ sessions: { ok: { at: new Date().toISOString(), result: 'need' }, str: 'x', nul: null, noRes: { at: 'x' }, num: { result: 5 } },
-    named: ['a', 3, null, 'b'], pending: 'нет' }));
-  const m = readMark(dir);
-  assert.deepEqual(Object.keys(m.sessions), ['ok']);
-  assert.deepEqual(m.named, ['a', 'b']);
-  assert.deepEqual(m.pending, []);
+  const h = md5('a2' + String.fromCharCode(10));
+  writeMark(dir, { named: [], pending: [{ path: 'a.php', md5: h }, { path: 'gone.php', md5: null }, 'old.php', { path: 'x.php' }] });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).pending,
+    [{ path: 'a.php', md5: h }, { path: 'gone.php', md5: null }, 'old.php', 'x.php'], 'md5 неизвестен — строкой, как в первой редакции');
+  assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: h }, { path: 'gone.php', md5: null }, { path: 'old.php' }, { path: 'x.php' }]);
+  fs.writeFileSync(file, JSON.stringify({ named: [], pending: [{ path: 'a.php', md5: 5 }, { md5: h }, null, 7, { path: 3 }, [], { path: 'b.php', md5: 'abc' }] }));
+  assert.deepEqual(readMark(dir).pending, [{ path: 'a.php' }, { path: 'b.php', md5: 'abc' }], 'md5 не строка и не null — неизвестен; без пути — отброшен');
+});
+
+test('отметка: поля не того типа — пустые; BOM не мешает; записей сессий и функций для них нет (48.7)', () => {
+  const dir = makeProject({});
+  const file = path.join(dir, MARK_FILE);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, JSON.stringify({ sessions: { ok: { at: new Date().toISOString(), result: 'need' } }, named: ['a', 3, null, 'b'], pending: 'нет' }));
+  assert.deepEqual(readMark(dir), { named: ['a', 'b'], pending: [] });
   for (const raw of ['[]', 'null', '5', '"s"', '{"sessions":[1],"named":{}}']) {
     fs.writeFileSync(file, raw);
-    assert.deepEqual(readMark(dir), { sessions: {}, named: [], pending: [] }, raw);
+    assert.deepEqual(readMark(dir), { named: [], pending: [] }, raw);
   }
-  fs.writeFileSync(file, '\uFEFF' + JSON.stringify({ sessions: { z: { at: new Date().toISOString(), result: 'done' } } }));
-  assert.ok(sessionDone(dir, 'z'), 'BOM не мешает');
-});
-
-test('отметка: id сессии — внешний ввод: __proto__, constructor, toString; пустой и не строка — ничего не пишет', () => {
-  const dir = makeProject({});
-  for (const bad of ['', null, undefined, 5, {}]) {
-    markSession(dir, bad, 'done');
-    assert.ok(!sessionDone(dir, bad));
-  }
-  assert.ok(!fs.existsSync(path.join(dir, MARK_FILE)), 'ничего не записано');
-  for (const id of ['__proto__', 'constructor', 'toString', 'hasOwnProperty']) {
-    assert.ok(!sessionDone(dir, id), id + ': до записи — нет');
-  }
-  markSession(dir, 'x', 'need');
-  assert.ok(!sessionDone(dir, '__proto__'), 'чужая запись не видна под __proto__');
-  assert.ok(!sessionDone(dir, 'constructor'));
-  markSession(dir, '__proto__', 'done');
-  markSession(dir, 'constructor', 'skipped');
-  markSession(dir, 'toString', 'checked');
-  assert.ok(sessionDone(dir, '__proto__'));
-  assert.ok(sessionDone(dir, 'constructor'));
-  assert.ok(sessionDone(dir, 'toString'));
-  assert.equal(Object.getPrototypeOf(readMark(dir).sessions), Object.prototype, 'прототип не подменён');
-  assert.deepEqual(Object.keys(readMark(dir).sessions).sort(), ['__proto__', 'constructor', 'toString', 'x']);
-  assert.equal(Object.prototype.polluted, undefined);
-  assert.equal(lastNeed(dir), 'x');
-  markSession(dir, '__proto__', 'need');
-  assert.equal(lastNeed(dir), '__proto__');
-  assert.equal(({}).result, undefined, 'Object.prototype не загрязнён');
-});
-
-test('markSession: неверный результат не пишется; commit — только если передан', () => {
-  const dir = makeProject({});
-  markSession(dir, 's', 'bogus');
-  assert.ok(!fs.existsSync(path.join(dir, MARK_FILE)));
-  markSession(dir, 's', 'done', 'abc');
-  markSession(dir, 's', 'checked');
-  const rec = readMark(dir).sessions.s;
-  assert.equal(rec.result, 'checked');
-  assert.ok(!('commit' in rec), 'запись сессии заменяется целиком');
+  fs.writeFileSync(file, String.fromCharCode(0xfeff) + JSON.stringify({ named: ['z.zip'] }));
+  assert.deepEqual(readMark(dir), { named: ['z.zip'], pending: [] }, 'BOM не мешает');
+  for (const name of ['markSession', 'sessionDone', 'lastNeed']) assert.equal(prod[name], undefined, name);
+  const src = fs.readFileSync(require.resolve('../plugins/kit/scripts/lib/prod'), 'utf8');
+  assert.doesNotMatch(src, /sessions|MARK_TTL/, 'записей сессий в lib/prod.js нет');
 });
 
 test('правила без SSH — в lib/prod.js (48.6): имя пути, вотчеры и объём, папка конфликтов, blob и его варианты; lib/prod.js не берёт lib/prod-ssh.js', () => {

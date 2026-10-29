@@ -21,7 +21,6 @@ const FILE_LIMIT = 10 * 1024 * 1024; // файл больше — не заби�
 const ENTRY_LIMIT = 50 * 1024 * 1024; // за одну синхронизацию больше — стоп и вопрос
 const UNKNOWN_SIZE = 1024 * 1024; // размер файла неизвестен — для объёма за раз и порций скачивания
 const MARK_FILE = '.claude/kit-prod.json';
-const MARK_TTL_MS = 7 * 24 * 3600 * 1000;
 const LIST_LIMIT = 10;
 
 function plural(n, one, few, many) {
@@ -526,28 +525,23 @@ async function blobVariants(dir, oids) {
 }
 
 // ---- Отметка синхронизации --------------------------------------------------------------------------------------
-// Ключи сессий — внешний ввод (`__proto__`, `constructor`): запись в объект — через defineProperty, поиск — по собственным свойствам.
-const hasOwn = (o, k) => Object.prototype.hasOwnProperty.call(o, k);
-const setOwn = (o, k, v) => Object.defineProperty(o, k, { value: v, enumerable: true, writable: true, configurable: true });
+// Только named — уже названные в строке файлы «не забирать» (Т-11) — и pending — пути незаконченной синхронизации (Т-12).
+// Записей сессий нет (с 48.7): синхронизация — только по просьбе пользователя; поле первой редакции читается без ошибки и при
+// записи пропадает. Элемент pending (Р-57) — { path, md5 }: md5NoCr того, что синхронизация пишет в путь (null — удаляет);
+// без md5 — неизвестно (строка первой редакции или md5 не строка и не null): в файле — строкой, путь — к HEAD, как прежде.
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const strings = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === 'string') : []);
-const RESULTS = ['need', 'done', 'skipped', 'checked'];
+const hasMd5 = (e) => Object.prototype.hasOwnProperty.call(e, 'md5');
+
+function pendingOf(v) {
+  if (typeof v === 'string') return { path: v };
+  if (!isObj(v) || typeof v.path !== 'string') return null;
+  return typeof v.md5 === 'string' || v.md5 === null ? { path: v.path, md5: v.md5 } : { path: v.path };
+}
 
 function cleanMark(raw) {
-  const mark = { sessions: {}, named: [], pending: [] };
-  if (!isObj(raw)) return mark;
-  if (isObj(raw.sessions)) {
-    for (const id of Object.keys(raw.sessions)) {
-      const r = raw.sessions[id];
-      if (!isObj(r) || typeof r.result !== 'string') continue;
-      const rec = { at: typeof r.at === 'string' ? r.at : '', result: r.result };
-      if (typeof r.commit === 'string') rec.commit = r.commit;
-      setOwn(mark.sessions, id, rec);
-    }
-  }
-  mark.named = strings(raw.named);
-  mark.pending = strings(raw.pending);
-  return mark;
+  if (!isObj(raw)) return { named: [], pending: [] };
+  return { named: strings(raw.named), pending: Array.isArray(raw.pending) ? raw.pending.map(pendingOf).filter(Boolean) : [] };
 }
 
 // Нет файла, битый JSON, поля не того типа — пустое значение этого поля. Не бросает.
@@ -559,54 +553,15 @@ function readMark(dir) {
   }
 }
 
-// Атомарная запись; записи сессий старше 7 дней и с нечитаемым `at` убираются. Ошибку записи бросает — решает вызывающий.
+// Атомарная запись — только named и pending (элемент без md5 — строкой). Ошибку записи бросает — решает вызывающий.
 function writeMark(dir, mark) {
-  const clean = cleanMark(mark);
-  const sessions = {};
-  const oldest = Date.now() - MARK_TTL_MS;
-  for (const id of Object.keys(clean.sessions)) {
-    const at = Date.parse(clean.sessions[id].at);
-    if (Number.isFinite(at) && at >= oldest) setOwn(sessions, id, clean.sessions[id]);
-  }
-  const text = JSON.stringify({ sessions, named: clean.named, pending: clean.pending }, null, 2) + '\n';
+  const { named, pending } = cleanMark(mark);
+  const text = JSON.stringify({ named, pending: pending.map((e) => (hasMd5(e) ? e : e.path)) }, null, 2) + '\n';
   writeFilesAtomic([{ file: path.join(dir, MARK_FILE), text }], { mkdir: true });
-}
-
-// Запись своей сессии: файл читается заново прямо перед записью, чужие записи, named и pending сохраняются.
-function markSession(dir, id, result, commit) {
-  if (typeof id !== 'string' || !id || !RESULTS.includes(result)) return;
-  const mark = readMark(dir);
-  const rec = { at: new Date().toISOString(), result };
-  if (commit) rec.commit = commit;
-  setOwn(mark.sessions, id, rec);
-  writeMark(dir, mark);
-}
-
-function sessionDone(dir, id) {
-  if (typeof id !== 'string' || !id) return false;
-  const { sessions } = readMark(dir);
-  return hasOwn(sessions, id) && ['done', 'skipped', 'checked'].includes(sessions[id].result);
-}
-
-// Сессия последней записи `need` (с самым поздним `at`); нет — null.
-function lastNeed(dir) {
-  const { sessions } = readMark(dir);
-  let best = null;
-  let bestAt = -Infinity;
-  for (const id of Object.keys(sessions)) {
-    if (sessions[id].result !== 'need') continue;
-    const at = Date.parse(sessions[id].at);
-    if (Number.isFinite(at) && at >= bestAt) {
-      best = id;
-      bestAt = at;
-    }
-  }
-  return best;
 }
 
 module.exports = {
   ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake,
-  oursPaths, pendingDelete, inPending, watcherExts, mergeVersions, listOf, summaryLine, readMark, writeMark, markSession, sessionDone,
-  lastNeed, UNKNOWN_SIZE, SKIP, readText, clean, badName, watcherHits, bigOf, stopLines, conflictDir, md5Eol, catBlobs, blobHashes,
-  blobVariants,
+  oursPaths, pendingDelete, inPending, watcherExts, mergeVersions, listOf, summaryLine, readMark, writeMark, hasMd5, UNKNOWN_SIZE, SKIP,
+  readText, clean, badName, watcherHits, bigOf, stopLines, conflictDir, md5Eol, catBlobs, blobHashes, blobVariants,
 };

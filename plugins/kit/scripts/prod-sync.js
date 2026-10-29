@@ -2,13 +2,17 @@
 'use strict';
 // Синхронизация с продом (этап 48): сайт на сервере сверяется с git по SSH — что там изменили, добавили и удалили без kit,
 // забирается в рабочую копию байт в байт и коммитится коммитом синхронизации (kit-commit.js, без просмотра и вопросов: прод
-// главный).
-//   node prod-sync.js [--timeout сек]           синхронизация: сверка, забор, коммит синхронизации, отметка сессии done
+// главный). Запускается только по просьбе пользователя (/kit:sync): ни хуков, ни записей сессий.
+//   node prod-sync.js [--timeout сек]           синхронизация: сверка, забор, коммит синхронизации; в отметке — named и
+//                                               pending = []
 //   node prod-sync.js --check [--timeout сек]   план синхронизации без записи (исполнитель Мэтта; сессия в worktree — всегда
-//                                               так, и сверяется основная папка проекта): файлы, индекс и pending не
-//                                               меняются; синхронизация ничего не запишет — отметка checked в папке сессии
+//                                               так, и сверяется основная папка проекта): файлы, индекс и отметка не меняются
+//   node prod-sync.js --abort [--timeout сек]   отмена незаконченной синхронизации (Т-10): пути pending — к HEAD (и их
+//                                               временные *.kit-tmp), кроме изменённых после остановки; pending = []; к
+//                                               серверу не подключается; наши правки и совмещённое не трогает (их в pending
+//                                               нет); в worktree — «отменять нечего»
 //   --watchers-ok — забирать, хотя среди забираемого исходники File Watchers при PhpStorm Always; --big-ok — забирать больше
-//   50 МБ за раз; --skip, --hook и --ftp-done — пока код 4 (первые два уберёт шаг 48.7, FTP сделает 48.8)
+//   50 МБ за раз; --ftp-done — пока код 4 (FTP сделает шаг 48.8); --abort с --check, --ftp-done, --watchers-ok, --big-ok — код 4
 // Папка проекта — корень git текущей папки; сервер — «Окружение» (прод или дев), куда — «SSH прод» / «SSH дев». Три версии
 // файла (база, HEAD, сервер) и правила без SSH — lib/prod.js; сценарии для сервера и разбор их ответа — lib/prod-ssh.js. Сверка —
 // одним подключением, сценарием sh на stdin: состояние, md5 и размер отслеживаемых файлов (пачкой, без процесса на файл) и
@@ -18,13 +22,20 @@
 // не совместилось — рабочая копия не тронута, версия сервера — во временной папке. Порядок (Р-40): больше 50 МБ за раз —
 // остановка до любого скачивания; кандидаты на совмещение скачиваются и совмещаются в памяти; File Watchers при PhpStorm
 // Always — остановка по тому, что синхронизация запишет, до записи; затем забор. Скачанное пишется через временный файл; пути
-// забора до записи — в pending отметки (.claude/kit-prod.json): повтор вернёт их к HEAD и доведёт синхронизацию до конца.
-// Много путей — несколько коммитов синхронизации подряд.
-// Коды: 0 — синхронизация сделана (или нечего забирать; с --check — синхронизация ничего не запишет); 1 — нужен ответ
-// пользователя (не совместилось — синхронизация сделана без этих файлов; File Watchers или больше 50 МБ — ничего не записано;
-// запрещённый путь или секрет в скачанном; с --check — есть что забрать); 2 — синхронизировать не с чем, параметр неверный или
-// на сервере нет папки сайта; 3 — нет подключения, обрыв, вышло время; 4 — аргументы, git, запись. Весь вывод — в stdout;
-// последняя строка — итог для пользователя (код 0) или что делать Claude.
+// забора до записи — в pending отметки (.claude/kit-prod.json) с md5 записываемого: повтор вернёт их к HEAD и доведёт
+// синхронизацию до конца, отмена (--abort) — вернёт к HEAD; файл, изменённый после остановки (на диске не записанное и не
+// HEAD), оба не трогают (Р-57). Много путей — несколько коммитов синхронизации подряд; закоммиченная часть уходит из pending.
+// Файл с секретом (Т-11): скачанное для забора и версия сервера совмещаемого до записи проверяются secretFindings
+// (secret-scan.js — те же находки, что у --cached в kit-commit.js); находка — путь не пишется, не совмещается, не коммитится и
+// называется один раз (named). Файл забора и «наша» совмещаемого пишутся, только если на диске то, что видела сверка
+// (Р-58); иначе — «изменён во время синхронизации», каждый раз.
+// Коды: 0 — синхронизация сделана (или нечего забирать; с --check — синхронизация ничего не запишет; с --abort — отменено или
+// отменять нечего); 1 — нужен ответ пользователя (не совместилось — синхронизация сделана без этих файлов; File Watchers или
+// больше 50 МБ — ничего не записано; остановка после записи — kit-commit.js не сделал или не проверил коммит, записано не то,
+// что скачано: «Повторить / Отменить»; записано не то, что совмещено, а забора не было — «Повторить / Отложить»; с --check —
+// есть что забрать); 2 — синхронизировать не с чем, параметр неверный или на сервере нет папки сайта; 3 — нет подключения,
+// обрыв, вышло время («Повторить / Отложить»); 4 — аргументы, git, отметка не записана. Весь вывод — в stdout; последняя
+// строка — итог для пользователя (код 0) или что делать Claude.
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
@@ -36,15 +47,15 @@ const { skipRules, git } = require('./lib/deploy');
 const { projectRoot } = require('./lib/matt');
 const { writeFilesAtomic } = require('./lib/atomic');
 const { safePath } = require('./ssh-deploy');
-const { BASE_FORBIDDEN } = require('./secret-scan');
+const { BASE_FORBIDDEN, secretFindings } = require('./secret-scan');
 const { NO_ROOT, pruneRules, listScript, parseList, fetchScript, parseFetch } = require('./lib/prod-ssh');
 const {
   ENTRY_LIMIT, UNKNOWN_SIZE, SKIP, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake, oursPaths,
-  pendingDelete, inPending, mergeVersions, listOf, summaryLine, readMark, writeMark, markSession, lastNeed, readText, clean, badName,
-  watcherHits, bigOf, stopLines, conflictDir, md5Eol, catBlobs, blobHashes, blobVariants,
+  pendingDelete, inPending, mergeVersions, listOf, summaryLine, readMark, writeMark, hasMd5, readText, clean, badName, watcherHits,
+  bigOf, stopLines, conflictDir, md5Eol, catBlobs, blobHashes, blobVariants,
 } = require('./lib/prod');
 
-const USAGE = 'Использование: node prod-sync.js [--check] [--watchers-ok] [--big-ok] [--timeout сек]';
+const USAGE = 'Использование: node prod-sync.js [--check] [--watchers-ok] [--big-ok] [--timeout сек] | --abort [--timeout сек]';
 // Меньше предела инструмента Bash (120 с): зависший сервер — код 3, а не оборванный вызов. Срок — общий на все подключения
 // синхронизации.
 const DEFAULT_TIMEOUT = 100;
@@ -54,13 +65,22 @@ const ARG_LIMIT = 24000;
 const FETCH_LIMIT = 16 * 1024 * 1024; // скачивание за одно подключение — по размеру файлов
 const REGULAR = new Set(['100644', '100755']); // ссылки (120000) и подмодули (160000) — вне сверки
 const KIT_COMMIT = path.join(__dirname, 'kit-commit.js');
+// Не дошло до записи (нет связи, обрыв, вышло время) — повторить или отложить.
 const ASK = 'спроси пользователя: Повторить / ' + SKIP;
+// Остановка после записи (Т-10, Р-51): pending остаётся — по нему работают и повтор, и отмена.
+const AGAIN = 'спроси пользователя: Повторить / Отменить (`prod-sync.js --abort`)';
+const KEPT = 'записанное синхронизацией — в pending: «Повторить» вернёт эти файлы к HEAD и доведёт синхронизацию до конца, ' +
+  '«Отменить» вернёт их к HEAD; изменённые после остановки, наши правки и совмещённое оба ответа не тронут';
+const NOTHING = '[kit] Отменять нечего: незаконченной синхронизации нет';
+const SECRET_WHY = 'секрет — заливка нашей правки этого файла затрёт серверную'; // Т-11: называется один раз
+const MOVED_WHY = 'изменён во время синхронизации — повтори'; // файл поменялся до записи забора или совмещённого: каждый раз
+const UNTOUCHED_WHY = 'изменён после остановки синхронизации — не тронут'; // Р-57: отмена и повтор его не откатывают
 const KIND = { changed: 'изменён', added: 'добавлен', removed: 'удалён' };
 
-const FLAGS = { '--check': 'check', '--ftp-done': 'ftpDone', '--skip': 'skip', '--hook': 'hook', '--watchers-ok': 'watchersOk', '--big-ok': 'bigOk' };
+const FLAGS = { '--check': 'check', '--ftp-done': 'ftpDone', '--abort': 'abort', '--watchers-ok': 'watchersOk', '--big-ok': 'bigOk' };
 
 function parseArgs(argv) {
-  const o = { check: false, ftpDone: false, skip: false, hook: false, watchersOk: false, bigOk: false, timeout: DEFAULT_TIMEOUT };
+  const o = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, timeout: DEFAULT_TIMEOUT };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (Object.prototype.hasOwnProperty.call(FLAGS, a)) o[FLAGS[a]] = true;
@@ -70,6 +90,8 @@ function parseArgs(argv) {
       o.timeout = Number(v);
     } else throw new Error('неизвестный аргумент ' + a);
   }
+  // Р-53: отмена ничего не сверяет и не забирает — с режимами синхронизации не сочетается
+  if (o.abort && (o.check || o.ftpDone || o.watchersOk || o.bigOk)) throw new Error('--abort — только сам или с --timeout');
   return o;
 }
 
@@ -220,6 +242,44 @@ function restore(dir, paths, argLimit) {
   for (const p of gone) removeLocal(dir, p);
 }
 
+// Версия файла рабочей копии: md5 без \r; нет файла — null.
+function diskVer(dir, rel) {
+  const b = readWork(dir, rel);
+  return b === null ? null : md5NoCr(b);
+}
+
+// Откат незаконченной синхронизации (отмена и повтор, Т-12, Р-57): entries — элементы pending. К HEAD — путь, на диске у которого
+// то, что записала синхронизация (md5 из pending), или уже версия HEAD (не успела записать); элемент без md5 (первая
+// редакция) — к HEAD, как прежде. Иначе файл изменили после остановки: не трогать, только снять из индекса поставленное туда
+// kit-commit.js (git reset — рабочая копия цела), назвать. Временные файлы записи — убрать у всех (М-7). → { back, kept }.
+async function rollback(dir, entries, argLimit) {
+  const head = treeOf(dir, 'HEAD');
+  const oidOf = (p) => (head.has(p) && REGULAR.has(head.get(p).mode) ? head.get(p).oid : null);
+  const blobs = await blobHashes(dir, [...new Set(entries.filter(hasMd5).map((e) => oidOf(e.path)).filter(Boolean))]);
+  const back = [];
+  const kept = [];
+  for (const e of entries) {
+    if (!hasMd5(e)) {
+      back.push(e.path);
+      continue;
+    }
+    const disk = diskVer(dir, e.path);
+    const oid = oidOf(e.path);
+    const headVer = !head.has(e.path) ? null : oid ? blobs.get(oid).noCr : undefined;
+    (disk === e.md5 || disk === headVer ? back : kept).push(e.path);
+  }
+  restore(dir, back, argLimit);
+  for (const p of kept) dropTmp(dir, p);
+  for (const part of byLength(kept, argLimit)) {
+    const r = git(dir, ['--literal-pathspecs', 'reset', '-q', '--', ...part]);
+    if (!r.ok) throw new Error('git reset: ' + r.err);
+  }
+  return { back, kept };
+}
+
+// «a.php (изменён после остановки синхронизации — не тронут), …» — для строки отмены и повтора (Р-57).
+const untouched = (paths) => listOf(paths, (p) => clean(p) + ' (' + UNTOUCHED_WHY + ')');
+
 // Основная папка, если dir — worktree: <проект>/.claude/worktrees/<имя> или связанный git worktree в другом месте; иначе null.
 function mainFolder(dir) {
   const root = projectRoot(dir);
@@ -302,7 +362,8 @@ async function download(c, items) {
 // → { fail } | { items: [{ path, kind: unclear | changed | added | removed | merge, side: take | merge, size, gone — на сервере
 // файла нет, raw }],
 // once: [{ path, why }] — называются один раз, each: [{ path, why }] — каждый раз, waiting: [запись], findFailed,
-// judge(путь, версия сервера), work — наши правки (null — кандидатов нет), baseOid(путь) — blob базы или null }.
+// judge(путь, версия сервера), work — наши правки (null — кандидатов нет), baseOid(путь) и headOid(путь) — blob базы и HEAD
+// или null, headVer(путь) — версия HEAD (md5 без \r; нет в HEAD — null) }.
 async function survey(c) {
   const { dir } = c;
   const site = (p) => !matchRules(p, c.rules);
@@ -435,15 +496,31 @@ async function survey(c) {
   }
   return {
     items: keep.sort(byPath), once, each, waiting: [...waiting].sort(), findFailed: list.findFailed, judge, work,
-    baseOid: (p) => baseF.get(p) || null,
+    baseOid: (p) => baseF.get(p) || null, headOid: (p) => headF.get(p) || null, headVer: (p) => ver(headF.get(p)),
   };
 }
 
-// Забор: скачать (кроме удалённых на сервере; all = false — только неясные, для --check) и разобрать по содержимому (Р-13):
-// неясный решается точно, изменённый мог смениться после сверки, вернувшийся к базе — не забирается.
-// → { fail } | { take: [{ path, kind: changed | added | removed, size, gone, data }], each: [{ path, why }] }.
-async function collect(c, s, items, all = true) {
-  const want = (it) => !it.gone && (all || it.kind === 'unclear');
+// Файлы с секретом (Т-11, Р-54): versions — [{ path, data }] скачанного (data null — удалён на сервере, не проверяется);
+// secretFindings против HEAD-версии файла (нет в HEAD — все строки), с доп. шаблонами «Секреты» проекта, как --cached у
+// kit-commit.js. HEAD читается только для текстовых (двоичное secretFindings не проверяет). → Set путей с находкой.
+async function secretPaths(c, s, versions) {
+  const texts = versions.filter((v) => v.data && !v.data.subarray(0, 8000).includes(0));
+  const heads = new Map();
+  await catBlobs(c.dir, [...new Set(texts.map((v) => s.headOid(v.path)).filter(Boolean))], (oid, buf) => heads.set(oid, Buffer.from(buf)));
+  const out = new Set();
+  for (const v of texts) {
+    const oid = s.headOid(v.path);
+    if (secretFindings(v.data, oid ? heads.get(oid) : null, v.path, c.secrets).length) out.add(v.path);
+  }
+  return out;
+}
+
+// Забор: скачать (кроме удалённых на сервере; pick — что скачать, без него — всё: --check скачивает только неясные и названные
+// раньше) и разобрать по содержимому (Р-13): неясный решается точно, изменённый мог смениться после сверки, вернувшийся к базе —
+// не забирается; скачанное с секретом (Т-11) — не забирается. → { fail } | { take: [{ path, kind: changed | added | removed, size,
+// gone, data }], each: [{ path, why }], secret: [{ path, why }] }.
+async function collect(c, s, items, pick = null) {
+  const want = (it) => !it.gone && (!pick || pick(it));
   const got = await download(c, items.filter(want));
   if (got.fail) return got;
   const take = [];
@@ -461,23 +538,27 @@ async function collect(c, s, items, all = true) {
     if (it.kind !== 'added' && s.judge(it.path, data ? md5NoCr(data) : null) !== 'take') continue;
     take.push({ path: it.path, kind: it.kind === 'added' ? 'added' : data ? 'changed' : 'removed', size: it.size, gone: !data, data });
   }
-  return { take, each };
+  const bad = await secretPaths(c, s, take);
+  return { take: take.filter((it) => !bad.has(it.path)), each, secret: [...bad].map((p) => ({ path: p, why: SECRET_WHY })) };
 }
 
 // Совмещение в памяти (Р-29, Р-39, Р-40): скачать кандидатов (кроме удалённых на сервере) и совместить во временной папке вне
 // проекта — в проект ничего не пишется. Наша — файл с диска, база — blob известного состояния сервера, их — скачанное. Сервер =
-// рабочая копия без \r — наше уже на сервере; сервер вернулся к базе или к HEAD — ничего; результат равен нашей — совмещено
-// раньше. → { fail } | { merged: [{ path, result }] — синхронизация запишет, conflicts: [{ path, why, ours, theirs, base }] —
-// версии (Buffer | null), each: [{ path, why }] }.
+// рабочая копия без \r — наше уже на сервере; сервер вернулся к базе или к HEAD — ничего; версия сервера с секретом (Т-11) —
+// не совмещается и в папку конфликтов не пишется; результат равен нашей — совмещено раньше. → { fail } | { merged: [{ path,
+// result, ours }] — синхронизация запишет (ours — «наша», с которой совмещено), conflicts: [{ path, why, ours, theirs, base }] —
+// версии (Buffer | null), each: [{ path, why }], secret: [{ path, why }] }.
 async function mergePlan(c, s, items) {
   const merged = [];
   const conflicts = [];
   const each = [];
-  if (!items.length) return { merged, conflicts, each };
+  const secret = [];
+  if (!items.length) return { merged, conflicts, each, secret };
   const got = await download(c, items.filter((it) => !it.gone));
   if (got.fail) return got;
   const bases = new Map();
   await catBlobs(c.dir, [...new Set(items.map((it) => s.baseOid(it.path)).filter(Boolean))], (oid, buf) => bases.set(oid, Buffer.from(buf)));
+  const bad = await secretPaths(c, s, [...got.data].map(([p, data]) => ({ path: p, data })));
   for (const it of items) {
     if (got.failed.has(it.path)) {
       each.push({ path: it.path, why: 'не читается' });
@@ -489,23 +570,35 @@ async function mergePlan(c, s, items) {
     if (mine && v === s.work.noCr(it.path)) continue; // наше уже на сервере
     const k = it.kind === 'added' ? 'take' : s.judge(it.path, v);
     if (k !== 'merge' && !(k === 'take' && mine)) continue; // сервер вернулся к базе или к нашему
+    if (theirs && bad.has(it.path)) {
+      secret.push({ path: it.path, why: SECRET_WHY });
+      continue;
+    }
     const ours = readWork(c.dir, it.path);
     const oid = s.baseOid(it.path);
     const base = oid ? bases.get(oid) : null;
     const r = mergeVersions({ ours, base, theirs });
     if (r.conflict) conflicts.push({ path: it.path, why: r.conflict, ours, theirs, base });
-    else if (r.result && !(ours && r.result.equals(ours))) merged.push({ path: it.path, result: r.result });
+    else if (r.result && !(ours && r.result.equals(ours))) merged.push({ path: it.path, result: r.result, ours });
   }
-  return { merged, conflicts, each };
+  return { merged, conflicts, each, secret };
 }
 
-// Запись совмещения (Р-29, Р-30): временные файлы записи у кандидатов на совмещение (cands) — убрать (М-7); совмещённое — через
-// временный файл со сверкой md5; конфликтам — версии сервера и базы во временную папку вне проекта (conflictDir: её читает
-// Claude, убирает следующий конфликт). → { wrong: [путь — md5 не совпал], conflicts: [{ path, why, ours, server, base }] —
-// полные пути или null }.
+// Запись совмещения (Р-29, Р-30): временные файлы записи у кандидатов на совмещение (cands) — убрать (М-7); совмещённое — только
+// если файл на диске всё ещё та «наша», с которой совмещено (пользователь мог сохранить его, пока скачивался забор: иначе его
+// правка затёрлась бы), через временный файл со сверкой md5; конфликтам — версии сервера и базы во временную папку вне проекта
+// (conflictDir: её читает Claude, убирает следующий конфликт). → { written: [путь], moved: [путь — «наша» поменялась, не
+// записан], wrong: [путь — md5 не совпал], conflicts: [{ path, why, ours, server, base }] — полные пути или null }.
 function applyMerges(dir, mp, cands) {
   for (const it of cands) dropTmp(dir, it.path);
-  const writes = mp.merged.map((m) => ({ file: path.join(dir, m.path), text: m.result, label: m.path }));
+  const ready = [];
+  const moved = [];
+  for (const m of mp.merged) {
+    const now = readWork(dir, m.path);
+    if (now && now.equals(m.ours)) ready.push(m);
+    else moved.push(m.path);
+  }
+  const writes = ready.map((m) => ({ file: path.join(dir, m.path), text: m.result, label: m.path }));
   if (writes.length) writeFilesAtomic(writes, { mkdir: true });
   const wrong = writes.filter((w) => md5(fs.readFileSync(w.file)) !== md5(w.text)).map((w) => w.label);
   let tmp = null;
@@ -520,12 +613,13 @@ function applyMerges(dir, mp, cands) {
     };
     return { path: k.path, why: k.why, ours: k.ours ? path.join(dir, k.path) : null, server: put('server', k.theirs), base: put('base', k.base) };
   });
-  return { wrong, conflicts };
+  return { written: ready.map((m) => m.path), moved, wrong, conflicts };
 }
 
-// Коммит(ы) синхронизации через kit-commit.js (Р-16): по части путей на вызов, --push — у последней. → { code: 0, commit } |
-// { code, lines }.
-function commitEntry(dir, env, take, remoteName, argLimit, out) {
+// Коммит(ы) синхронизации через kit-commit.js (Р-16): по части путей на вызов, --push — у последней; после каждой
+// закоммиченной части — onPart(её пути) (М-1: убрать их из pending). → { code: 0, commit } | { code: 1, lines } — остановка
+// после записи (Р-51): вывод kit-commit.js, причина, «Повторить / Отменить».
+function commitEntry(dir, env, take, remoteName, argLimit, out, onPart) {
   const kind = new Map(take.map((it) => [it.path, it.kind]));
   const parts = byLength(take.map((it) => it.path), argLimit);
   let commit = null;
@@ -543,15 +637,18 @@ function commitEntry(dir, env, take, remoteName, argLimit, out) {
       commit = git(dir, ['rev-parse', 'HEAD']).out.trim();
       out.push(`Коммит синхронизации: ${git(dir, ['rev-parse', '--short', 'HEAD']).out.trim()} (${part.length} ${plural(part.length, 'файл', 'файла', 'файлов')})`);
       if (r.status === 4) out.push('коммит синхронизации не отправлен: ' + ((/kit-commit: не отправлено — (.+)$/m.exec(text) || [])[1] || lastLine(text)));
+      onPart(part);
       continue;
     }
     const shown = text ? text.split('\n') : [];
-    const again = 'файлы записаны и остались в pending — повтор prod-sync.js вернёт их к HEAD и заберёт заново';
-    if (r.status === 1) {
-      return { code: 1, lines: [...shown, 'kit-commit.js остановил коммит синхронизации (запрещённый путь или секрет в скачанном) — разбери с пользователем, как у шагов; ' + again] };
-    }
-    const what = r.status === 3 ? 'коммит синхронизации сделан, но не проверен' : 'коммит синхронизации не сделан';
-    return { code: 4, lines: [...shown, `${what} (kit-commit.js, код ${r.status}) — ${again}; не проходит — скажи пользователю`] };
+    const why = r.status === 1
+      ? 'kit-commit.js остановил коммит синхронизации (запрещённый путь или секрет в скачанном) — разбери с пользователем, как у шагов; ' +
+        '«Повторить» поможет, только если файл на сервере поправят'
+      : r.status === 3
+        ? 'коммит синхронизации сделан, но не проверен (kit-commit.js, код 3) — историю не чинить (без amend, reset и revert): ' +
+          'повтор и отмена коммит не трогают'
+        : `коммит синхронизации не сделан (kit-commit.js, код ${r.status})`;
+    return { code: 1, lines: [...shown, why, KEPT, AGAIN] };
   }
   return { code: 0, commit };
 }
@@ -565,30 +662,66 @@ function usableHome(p) {
   }
 }
 
-// Синхронизация для тестов и main. opts: { check, env, timeoutMs, sessionId, argLimit, entryLimit, watchersOk, bigOk }.
+// Отмена незаконченной синхронизации (Т-10, Р-53): пути pending — к HEAD (rollback: и из индекса, и временные файлы записи),
+// изменённое после остановки — не тронуто и названо (Р-57); pending = [], named не трогается. К серверу не подключается; наших
+// правок и совмещённого в pending нет — они целы.
+async function abortSync(dir, info, argLimit, out) {
+  const { pending } = readMark(dir);
+  if (!pending.length) {
+    out.push(NOTHING);
+    return { code: 0, out };
+  }
+  const rules = skipRules(info);
+  let r;
+  try {
+    r = await rollback(dir, pending.filter((e) => safePath(e.path) && !matchRules(e.path, rules)), argLimit);
+    const m = readMark(dir); // заново прямо перед записью
+    m.pending = [];
+    writeMark(dir, m);
+  } catch (e) {
+    out.push('отмена не сделана: ' + e.message + ' — повтор prod-sync.js --abort безопасен; не проходит — скажи пользователю');
+    return { code: 4, out };
+  }
+  const n = r.back.length;
+  const said = `[kit] Синхронизация отменена: к HEAD ${plural(n, 'возвращён', 'возвращено', 'возвращено')} ${n} ${plural(n, 'файл', 'файла', 'файлов')}`;
+  out.push(r.kept.length ? said + '; ' + untouched(r.kept) : said);
+  return { code: 0, out };
+}
+
+// Синхронизация (и отмена) для тестов и main. opts: { check, abort, env, timeoutMs, argLimit, entryLimit, watchersOk, bigOk }.
 // → { code, out: [строки], commit? (хеш последнего коммита синхронизации) }.
 async function entry(dir, opts = {}) {
   const out = [];
+  const st = { written: false }; // пути забора уже в pending, запись началась — до отметки с pending = []
   try {
-    return await enter(dir, opts, out);
+    return await enter(dir, opts, out, st);
   } catch (e) {
+    // Р-51: остановка после записи — по pending работают и повтор, и отмена
+    if (st.written) {
+      out.push('синхронизация остановилась после записи: ' + e.message, KEPT, AGAIN);
+      return { code: 1, out };
+    }
     out.push('синхронизация не сделана: ' + e.message + ' — повтор prod-sync.js безопасен; не проходит — скажи пользователю');
     return { code: 4, out };
   }
 }
 
-async function enter(dir, opts, out) {
+async function enter(dir, opts, out, st) {
   const stop = (code, ...more) => {
     out.push(...more);
     return { code, out };
   };
   // Р-39: сессия в worktree сверяет основную папку — её параметры, базу, HEAD, рабочую копию и pending отметки: «есть что
   // забрать» значит «синхронизация в основной папке что-то сделает». Основная недоступна (нет, не git, не kit-проект) — своя,
-  // как в 48.3. Отметка сессии (checked) — всегда в папке сессии (dir).
+  // как в 48.3. Р-52: --check и worktree ничего не пишут — ни файлов, ни отметки.
   const wt = mainFolder(dir);
+  // Р-53: в worktree синхронизация не пишет — отменять в нём нечего; основная папка не трогается
+  if (opts.abort && wt !== null) return stop(0, NOTHING);
   const home = wt !== null && usableHome(wt) ? wt : dir;
   const info = kitInfo(home);
   if (!info.isKit) return stop(2, 'синхронизировать не с чем: не kit-проект');
+  const argLimit = opts.argLimit || ARG_LIMIT;
+  if (opts.abort) return abortSync(home, info, argLimit, out);
   const env = opts.env || serverEnv(info.params);
   const addrKey = env === 'дев' ? 'Дев' : 'Прод';
   const sshKey = 'SSH ' + env;
@@ -596,7 +729,7 @@ async function enter(dir, opts, out) {
   const target = serverSsh(info.params, env);
   if (!target) {
     const v = info.params.get(sshKey);
-    if (!v) return stop(2, 'без SSH: синхронизация по FTP — шаг 48.5');
+    if (!v) return stop(2, 'без SSH: синхронизация по FTP — шаг 48.8');
     return stop(2, `параметр «${sshKey}» неверный: ${v} — нужно хост:/абсолютная/папка`, 'исправь его через /kit:project-init или ' + ASK);
   }
   const b = entryBase(home, info, env);
@@ -606,14 +739,14 @@ async function enter(dir, opts, out) {
 
   const check = !!opts.check || wt !== null;
   const timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT * 1000;
-  const argLimit = opts.argLimit || ARG_LIMIT;
   const entryLimit = opts.entryLimit || ENTRY_LIMIT;
-  const c = { dir: home, info, env, target, b, check, rules: skipRules(info), deadline: Date.now() + timeoutMs, timeoutSec: Math.round(timeoutMs / 1000) };
-  const sid = opts.sessionId || process.env.KIT_SESSION_ID || lastNeed(dir) || null;
-  const noMark = 'отметка не поставлена: хук не пустит правки — перезапусти сессию';
-  const saveMark = (fn) => { // только обычная синхронизация: там home — папка сессии
+  const c = {
+    dir: home, info, env, target, b, check, rules: skipRules(info), secrets: info.params.list('Секреты'), deadline: Date.now() + timeoutMs,
+    timeoutSec: Math.round(timeoutMs / 1000),
+  };
+  const saveMark = (fn) => { // только обычная синхронизация: --check и worktree отметку не пишут (Р-52)
     try {
-      const m = readMark(home); // заново прямо перед записью: чужие записи сессий целы
+      const m = readMark(home); // заново прямо перед записью
       fn(m);
       writeMark(home, m);
       return null;
@@ -621,26 +754,15 @@ async function enter(dir, opts, out) {
       return stop(4, 'отметка синхронизации не записана: ' + e.message + ' — повтор prod-sync.js безопасен');
     }
   };
-  const markDone = (result, commit) => {
-    if (!sid) {
-      out.push(noMark);
-      return null;
-    }
-    try {
-      markSession(dir, sid, result, commit);
-      return null;
-    } catch (e) {
-      return stop(4, 'отметка синхронизации не записана: ' + e.message + ' — повтор prod-sync.js безопасен');
-    }
-  };
 
   // Р-14 п.1: прошлая синхронизация оборвалась после записи — её пути вернуть к HEAD (к забору шли только пути без наших
-  // правок).
+  // правок). Р-57: изменённое после остановки не трогается и дальше сверяется как наша правка.
   const pendingBefore = readMark(home).pending;
   if (!check && pendingBefore.length) {
-    restore(home, pendingBefore.filter((p) => safePath(p) && !matchRules(p, c.rules)), argLimit);
+    const { kept } = await rollback(home, pendingBefore.filter((e) => safePath(e.path) && !matchRules(e.path, c.rules)), argLimit);
     const bad = saveMark((m) => { m.pending = []; });
     if (bad) return bad;
+    if (kept.length) out.push('Повтор после остановки: ' + untouched(kept) + '; дальше — как наша правка');
   }
 
   // Нет папки сайта на сервере — неверный «SSH <окружение>», повтор не поможет (М-9); остальное — связь: код 3.
@@ -652,13 +774,14 @@ async function enter(dir, opts, out) {
   if (s.findFailed) out.push('find на сервере прочитал не всё — новые файлы в нечитаемых папках не сверены');
   const named = new Set(readMark(home).named);
   const each = [...s.each];
+  const once = [...s.once]; // и файлы с секретом — они находятся после скачивания (Т-11)
   // Строка (Р-33, Р-37): числа — забранное коммитом синхронизации (в --check — что синхронизация запишет); наши доработки —
   // только при непустом заборе (М-4); extra — merged, conflicts или conflictsAhead.
   const line = (take, extra = {}) => {
     const kindOf = (it) => (it.kind === 'added' ? 'added' : it.gone ? 'removed' : 'changed');
     const [changed, added, removed] = ['changed', 'added', 'removed'].map((k) => take.filter((it) => kindOf(it) === k).map((it) => it.path));
     const ours = changed.length || removed.length ? oursPaths(home) : new Set();
-    const skipped = [...s.once.filter((it) => !named.has(it.path)), ...each].sort(byPath);
+    const skipped = [...once.filter((it) => !named.has(it.path)), ...each].sort(byPath);
     return summaryLine({ env, changed, added, removed, ours: [...changed, ...removed].filter((p) => ours.has(p)).sort(), skipped, waiting: s.waiting, ...extra });
   };
   const takeSide = s.items.filter((it) => it.side === 'take');
@@ -667,18 +790,20 @@ async function enter(dir, opts, out) {
   if (check) {
     // Р-39: план синхронизации без записи — неясные скачиваются, кандидаты на совмещение совмещаются в памяти; в проект ничего
     // не пишется. «Есть что забрать» — только то, что синхронизация запишет: забор и совмещённое ≠ рабочей копии; конфликт, М-6,
-    // своё на сервере, совмещённое раньше и «не забирать» — названы, но не держат.
-    const got = await collect(c, s, takeSide, false);
+    // своё на сервере, совмещённое раньше и «не забирать» (и файл с секретом) — названы, но не держат. Названные раньше тоже
+    // скачиваются: среди них файлы с секретом — их синхронизация снова не заберёт.
+    const got = await collect(c, s, takeSide, (it) => it.kind === 'unclear' || named.has(it.path));
     if (got.fail) return failed(got.fail);
     const mp = await mergePlan(c, s, mergeSide);
     if (mp.fail) return failed(mp.fail);
     each.push(...got.each, ...mp.each);
+    once.push(...got.secret, ...mp.secret);
     const writes = [...got.take, ...mp.merged.map((m) => ({ path: m.path, kind: 'changed', gone: false }))].sort(byPath);
     const sum = line(writes, { conflictsAhead: mp.conflicts.map((k) => k.path) });
     if (writes.length || readMark(home).pending.length) {
       return stop(1, sum, `есть изменения без kit — синхронизация в основной папке проекта (${wt || projectRoot(dir)})`);
     }
-    return markDone('checked') || stop(0, sum);
+    return stop(0, sum);
   }
 
   // Р-40 (1): объём — по всем кандидатам (забор и совмещение), до любого скачивания; остановка по объёму — сразу и вотчеры по всем
@@ -695,45 +820,64 @@ async function enter(dir, opts, out) {
     const w = watcherHits(home, [...takeSide.filter((it) => !it.gone).map((it) => it.path), ...mp.merged.map((m) => m.path)]);
     if (w.hits.length) return stop(1, ...stopLines(w, null, entryLimit));
   }
-  // (4) забор: скачать, записать.
+  // (4) забор: скачать (файлы с секретом — не забираются, Т-11), записать.
   const got = await collect(c, s, takeSide);
   if (got.fail) return failed(got.fail);
   each.push(...got.each, ...mp.each);
-  const take = got.take;
+  once.push(...got.secret, ...mp.secret);
+  // Р-58: файл забора на диске — тот, что видела сверка (версия HEAD; у нового — файла нет)? Пользователь мог сохранить его, пока
+  // шло скачивание: такой путь не пишется и не коммитится, называется каждый раз.
+  const moved = new Set(got.take.filter((it) => blockedOnDisk(home, it.path) || diskVer(home, it.path) !== s.headVer(it.path)).map((it) => it.path));
+  each.push(...[...moved].map((p) => ({ path: p, why: MOVED_WHY })));
+  const take = got.take.filter((it) => !moved.has(it.path));
   if (take.length) {
-    // Р-14 п.4–6: pending до записи, удаления, запись через временный файл со сверкой md5.
-    const bad = saveMark((m) => { m.pending = take.map((it) => it.path); });
+    // Р-14 п.4–6: pending до записи (Р-57: с md5 того, что будет записано; удаление — null), удаления, запись через временный
+    // файл со сверкой md5. Остановка дальше — после записи (Р-51).
+    const bad = saveMark((m) => { m.pending = take.map((it) => ({ path: it.path, md5: it.data ? md5NoCr(it.data) : null })); });
     if (bad) return bad;
+    st.written = true;
     for (const it of take) if (it.kind === 'removed') removeLocal(home, it.path);
     const files = take.filter((it) => it.data);
     writeFilesAtomic(files.map((it) => ({ file: path.join(home, it.path), text: it.data, label: it.path })), { mkdir: true });
     const wrong = files.filter((it) => md5(fs.readFileSync(path.join(home, it.path))) !== md5(it.data)).map((it) => clean(it.path));
-    if (wrong.length) return stop(4, 'записано не то, что скачано (md5 не совпал): ' + wrong.join(', '), 'синхронизация не сделана — повтор prod-sync.js вернёт файлы к HEAD и заберёт заново');
+    if (wrong.length) return stop(1, 'записано не то, что скачано (md5 не совпал): ' + wrong.join(', '), KEPT, AGAIN);
   }
   // Совмещённое — в рабочую копию, мимо pending и коммита синхронизации (Р-26, Р-29); пишется до коммита — его остановка
-  // совмещённое не откатывает (Р-34): повтор совместит заново с тем же результатом.
+  // совмещённое не откатывает (Р-34): повтор совместит заново с тем же результатом. «Наша» поменялась после чтения — не
+  // пишется, называется каждый раз.
   const ap = applyMerges(home, mp, mergeSide);
-  if (ap.wrong.length) return stop(4, 'записано не то, что совмещено (md5 не совпал): ' + ap.wrong.map(clean).join(', '), 'синхронизация не сделана — повтор prod-sync.js совместит заново');
+  each.push(...ap.moved.map((p) => ({ path: p, why: MOVED_WHY })));
+  if (ap.wrong.length) {
+    // М-2: забора не было — pending пуст, отменять нечего
+    return stop(1, 'записано не то, что совмещено (md5 не совпал): ' + ap.wrong.map(clean).join(', ') +
+      ' — проверь эти файлы вручную: в них наши правки; повтор совместит заново', ...(take.length ? [KEPT, AGAIN] : [ASK]));
+  }
   // Р-30: не совместилось — по каждому пути причина, наша, версии сервера и базы (временные файлы); конфликт — при каждой
   // синхронизации.
   const at = (v) => v || 'нет';
   const conflicts = ap.conflicts.length ? [`Не совместилось само — рабочая копия этих файлов не тронута (${ap.conflicts.length}):`,
     ...ap.conflicts.map((k) => `  ${clean(k.path)} — ${k.why}; наша — ${at(k.ours)}; сервера — ${at(k.server)}; база — ${at(k.base)}`)] : [];
-  const merged = mp.merged.map((m) => m.path);
+  const merged = ap.written;
   let commit;
   if (take.length) {
-    const r = commitEntry(home, env, take, info.params.get('Удалённый репозиторий') || null, argLimit, out);
+    // М-1: закоммиченная часть — из pending сразу (отмена после сбоя следующей части вернёт к HEAD только незакоммиченное)
+    const onPart = (part) => {
+      const done = new Set(part);
+      const m = readMark(home);
+      m.pending = m.pending.filter((e) => !done.has(e.path));
+      writeMark(home, m);
+    };
+    const r = commitEntry(home, env, take, info.params.get('Удалённый репозиторий') || null, argLimit, out, onPart);
     const kept = merged.length ? ['совмещённое с нашими правками осталось в рабочей копии: ' + listOf(merged)] : [];
     if (r.code) return stop(r.code, ...kept, ...conflicts, ...r.lines);
     commit = r.commit;
   }
   const bad = saveMark((m) => {
     m.pending = [];
-    m.named = [...new Set(s.once.map((it) => it.path))].sort(); // названное один раз; исчезнувшее с сервера — забывается
+    m.named = [...new Set(once.map((it) => it.path))].sort(); // названное один раз; исчезнувшее с сервера — забывается
   });
   if (bad) return bad;
-  const unmarked = markDone('done', commit);
-  if (unmarked) return unmarked;
+  st.written = false;
   out.push(line(take, { merged, conflicts: ap.conflicts.map((k) => k.path) }));
   const done = commit ? { out, commit } : { out };
   if (!conflicts.length) return { code: 0, ...done };
@@ -752,15 +896,14 @@ async function main(argv) {
     console.log('prod-sync: ' + e.message + '\n' + USAGE);
     return 4;
   }
-  const later = [['--skip', o.skip], ['--ftp-done', o.ftpDone], ['--hook', o.hook]].find(([, on]) => on);
-  if (later) {
-    console.log('prod-sync: режим ' + later[0] + ' — в шаге 48.5');
+  if (o.ftpDone) {
+    console.log('prod-sync: режим --ftp-done — в шаге 48.8');
     return 4;
   }
   const cwd = process.cwd();
   const top = git(cwd, ['rev-parse', '--show-toplevel']);
   const dir = top.ok && top.out.trim() ? path.resolve(top.out.trim()) : cwd;
-  const r = await entry(dir, { check: o.check, timeoutMs: o.timeout * 1000, watchersOk: o.watchersOk, bigOk: o.bigOk });
+  const r = await entry(dir, { check: o.check, abort: o.abort, timeoutMs: o.timeout * 1000, watchersOk: o.watchersOk, bigOk: o.bigOk });
   console.log(r.out.join('\n'));
   return r.code;
 }

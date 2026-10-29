@@ -15,6 +15,7 @@
 //                                             репозиторий): добавленные строки каждого коммита и пути, бывшие в истории
 // Код 0 — чисто, 1 — есть находки, 2 — ошибка запуска.
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { readParams } = require('./lib/params');
@@ -137,6 +138,56 @@ function scanLine(line, extra, file = '') {
   return found;
 }
 
+// Двоичное для git diff: NUL в первых 8000 байтах — его строки --cached не проверяет («Binary files differ»).
+const isBinary = (buf) => buf.subarray(0, 8000).includes(0);
+const asBuffer = (v) => (Buffer.isBuffer(v) ? v : Buffer.from(String(v), 'utf8'));
+
+// Скачанное с сервера (prod-sync.js, с 48.7) — те же находки, что у --cached в kit-commit.js: добавленные строки диффа
+// HEAD-версии файла (headText null — новый файл, все строки) и скачанной, той же scanLine. Быстрый путь без git: ни одна строка
+// скачанного не ловится scanLine — находок нет; ловящиеся строки, которых нет среди строк HEAD-версии, заведомо добавлены —
+// находки сразу. Ловящаяся строка есть и в HEAD (её повторили или перенесли) — решает настоящий дифф (diffFindings, Р-59).
+// Двоичная скачанная или HEAD-версия — без проверки, как у git diff. CRLF и LF — одна строка (kit-проект — core.autocrlf=input:
+// в индексе LF). text и headText — Buffer или строка; extra — доп. шаблоны «Секреты» проекта (`params.list('Секреты')`, их же
+// берёт --cached). → [«путь:строка: находка»], значения — mask.
+function secretFindings(text, headText, rel, extra = []) {
+  const buf = asBuffer(text);
+  const head = headText === null || headText === undefined ? null : asBuffer(headText);
+  if (isBinary(buf) || (head && isBinary(head))) return [];
+  const lines = buf.toString('utf8').split(/\r?\n/);
+  const hits = lines.map((line) => scanLine(line, extra, rel));
+  if (!hits.some((found) => found.length)) return [];
+  const known = new Set(head ? head.toString('utf8').split(/\r?\n/) : []);
+  if (lines.some((line, i) => hits[i].length && known.has(line))) return diffFindings(head, buf, rel, extra);
+  const out = [];
+  hits.forEach((found, i) => {
+    for (const f of found) out.push(rel + ':' + (i + 1) + ': ' + f);
+  });
+  return out;
+}
+
+// \r\n → \n побайтно (latin1 — без перекодировки).
+const lf = (buf) => Buffer.from(buf.toString('latin1').replace(/\r\n/g, '\n'), 'latin1');
+
+// Настоящий дифф (Р-59): `git diff --no-index` HEAD-версии и скачанного во временной папке вне проекта (убирается всегда), с
+// флагами --cached, и тот же разбор добавленных строк — scanDiff (файл в находках — rel). Ошибку git бросает.
+function diffFindings(head, buf, rel, extra) {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kit-scan-'));
+  try {
+    fs.writeFileSync(path.join(tmp, 'head'), lf(head));
+    fs.writeFileSync(path.join(tmp, 'next'), lf(buf));
+    const r = spawnSync('git', ['-c', 'core.quotepath=false', 'diff', '--no-index', '-U0', '--no-color', '--no-ext-diff', '--', 'head', 'next'],
+      { cwd: tmp, encoding: 'utf8', maxBuffer: 512 * 1024 * 1024, windowsHide: true });
+    if (r.error) throw r.error;
+    if (r.status === 0) return []; // без разницы
+    if (r.status !== 1) throw new Error('git diff --no-index: ' + String(r.stderr || '').trim());
+    const out = [];
+    scanDiff(r.stdout, extra, out, rel);
+    return out;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 // Вывод `git show` одного коммита в --history; KIT_SCAN_SHOW_MAX_BUFFER — только для тестов (огромный коммит).
 const SHOW_MAX_BUFFER = Number(process.env.KIT_SCAN_SHOW_MAX_BUFFER) || 512 * 1024 * 1024;
 
@@ -170,7 +221,8 @@ function expandDirs(root, list) {
   return { files: [...new Set([...list.filter((p) => !dirs.includes(p)), ...inside])], idle: dirs.filter((d) => !under(d)) };
 }
 
-function scanDiff(diff, extra, out) {
+// name — имя файла в находках вместо заголовка диффа (secretFindings: дифф временных файлов, с 48.7).
+function scanDiff(diff, extra, out, name = null) {
   let file = null;
   let lineNo = 0;
   // «+++ » — заголовок файла только до первой @@-строки: добавленная строка «++ x» в самом диффе тоже выглядит как «+++ x».
@@ -181,7 +233,8 @@ function scanDiff(diff, extra, out) {
       continue;
     }
     if (inHeader && line.startsWith('+++ ')) {
-      file = line.slice(4).replace(/\t.*$/, '').replace(/^b\//, '').trim();
+      const f = line.slice(4).replace(/\t.*$/, '').replace(/^b\//, '').trim();
+      file = name !== null && f !== '/dev/null' ? name : f;
       continue;
     }
     if (line.startsWith('@@')) {
@@ -284,4 +337,4 @@ if (require.main === module) {
     process.exitCode = 2;
   }
 }
-module.exports = { scanLine, looksSecret, listItemSecret, BASE_FORBIDDEN };
+module.exports = { scanLine, looksSecret, listItemSecret, secretFindings, BASE_FORBIDDEN };

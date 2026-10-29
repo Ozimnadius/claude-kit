@@ -1,8 +1,8 @@
 'use strict';
-// Синхронизация с продом по SSH (шаги 48.3–48.4, 48.6): prod-sync.js — сверка «сервера» (временная папка через заглушку
-// fake-ssh.js, хост sh) с git, забор изменённого без нас, коммит синхронизации через kit-commit.js, отметка .claude/kit-prod.json;
-// наши незакоммиченные правки и совмещение, File Watchers PhpStorm и предел 50 МБ за раз. Сценарии сервера и их разбор —
-// lib/prod-ssh.js, правила без SSH — lib/prod.js.
+// Синхронизация с продом по SSH (шаги 48.3–48.4, 48.6–48.7): prod-sync.js — сверка «сервера» (временная папка через заглушку
+// fake-ssh.js, хост sh) с git, забор изменённого без нас, коммит синхронизации через kit-commit.js, отметка .claude/kit-prod.json
+// (named и pending); наши незакоммиченные правки и совмещение, File Watchers PhpStorm и предел 50 МБ за раз; отмена --abort,
+// файлы с секретом. Сценарии сервера и их разбор — lib/prod-ssh.js, правила без SSH — lib/prod.js.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -22,7 +22,8 @@ const SH = (() => {
   const r = sh && spawnSync(sh, ['-c', "find . -maxdepth 0 -printf '' && command -v xargs && command -v cut && command -v mktemp"], { encoding: 'utf8' });
   return r && r.status === 0 ? sh : null;
 })();
-// Заглушка ssh и автор коммитов kit-commit.js — для entry() в этом процессе и для дочерних; KIT_SESSION_ID разработчика не влияет.
+// Заглушка ssh и автор коммитов kit-commit.js — для entry() в этом процессе и для дочерних; переменные заглушки разработчика не
+// влияют (KIT_SESSION_ID синхронизация с 48.7 не читает — убирается на всякий случай).
 Object.assign(process.env, {
   KIT_SSH: path.join(__dirname, 'fake-ssh.js'), FAKE_SH: SH || '',
   GIT_AUTHOR_NAME: 'kit', GIT_AUTHOR_EMAIL: 'kit@test.local', GIT_COMMITTER_NAME: 'kit', GIT_COMMITTER_EMAIL: 'kit@test.local',
@@ -57,6 +58,10 @@ const changed = (dir, rev = 'HEAD') => g(dir, 'diff-tree', '--no-commit-id', '--
 const status = (dir) => g(dir, 'status', '--porcelain=v1', '-uall');
 const read = (dir, rel) => fs.readFileSync(path.join(dir, rel), 'utf8');
 const has = (dir, rel) => fs.existsSync(path.join(dir, rel));
+// Текст отметки .claude/kit-prod.json как есть (нет файла — null): --check и worktree её не пишут (Р-52).
+const markOf = (dir) => (has(dir, '.claude/kit-prod.json') ? read(dir, '.claude/kit-prod.json') : null);
+// Пути pending отметки (элементы — { path, md5 }, Р-57).
+const pendingOf = (dir) => readMark(dir).pending.map((e) => e.path);
 const text = (r) => r.out.join('\n');
 const last = (r) => r.out[r.out.length - 1];
 
@@ -79,7 +84,7 @@ function noEntryWord(lines) {
   assert.deepEqual(bad, [], 'слово «вход» в выводе синхронизации');
 }
 const run = async (dir, opts = {}) => {
-  const r = await ps.entry(dir, { sessionId: 's1', ...opts });
+  const r = await ps.entry(dir, opts);
   noEntryWord(r.out);
   return r;
 };
@@ -155,14 +160,36 @@ function conflictOf(r, rel) {
 
 // ---- Разбор и правила ---------------------------------------------------------------------------------------------------
 
-test('parseArgs: все флаги этапа, --timeout 1…600 (по умолчанию 100); неизвестное и неверное — исключение', () => {
-  const base = { check: false, ftpDone: false, skip: false, hook: false, watchersOk: false, bigOk: false, timeout: 100 };
+test('parseArgs: --check, --ftp-done, --abort, --watchers-ok, --big-ok, --timeout 1…600 (по умолчанию 100); неизвестное и неверное — исключение; --abort — только с --timeout (Р-53)', () => {
+  const base = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, timeout: 100 };
   assert.deepEqual(ps.parseArgs([]), base);
-  assert.deepEqual(ps.parseArgs(['--check', '--ftp-done', '--skip', '--hook', '--watchers-ok', '--big-ok', '--timeout', '7']),
-    { check: true, ftpDone: true, skip: true, hook: true, watchersOk: true, bigOk: true, timeout: 7 });
-  for (const bad of [['--нет'], ['x'], ['--timeout'], ['--timeout', '0'], ['--timeout', '601'], ['--timeout', '1.5'], ['--timeout', '-3']]) {
+  assert.deepEqual(ps.parseArgs(['--check', '--ftp-done', '--watchers-ok', '--big-ok', '--timeout', '7']),
+    { ...base, check: true, ftpDone: true, watchersOk: true, bigOk: true, timeout: 7 });
+  assert.deepEqual(ps.parseArgs(['--abort']), { ...base, abort: true });
+  assert.deepEqual(ps.parseArgs(['--timeout', '5', '--abort']), { ...base, abort: true, timeout: 5 });
+  for (const bad of [['--нет'], ['x'], ['--skip'], ['--hook'], ['--timeout'], ['--timeout', '0'], ['--timeout', '601'], ['--timeout', '1.5'], ['--timeout', '-3'],
+    ['--abort', '--check'], ['--ftp-done', '--abort'], ['--abort', '--watchers-ok'], ['--big-ok', '--abort']]) {
     assert.throws(() => ps.parseArgs(bad), bad.join(' '));
   }
+});
+
+test('--skip и --hook — код 4 (неизвестный флаг); --abort с --check и др. — код 4; --ftp-done — код 4 «в шаге 48.8»', () => {
+  const ftp = site({ 'a.php': '1' }, { params: { 'SSH прод': '—' } });
+  for (const args of [['--skip'], ['--hook'], ['--check', '--hook']]) {
+    const r = cli({ cwd: ftp.dir, args });
+    assert.equal(r.code, 4, args.join(' '));
+    assert.ok(r.stdout.startsWith('prod-sync: неизвестный аргумент ' + args[args.length - 1]), r.stdout);
+    assert.ok(r.stdout.includes('Использование: node prod-sync.js [--check]'), r.stdout);
+  }
+  for (const args of [['--abort', '--check'], ['--abort', '--ftp-done'], ['--abort', '--watchers-ok'], ['--abort', '--big-ok']]) {
+    const r = cli({ cwd: ftp.dir, args });
+    assert.equal(r.code, 4, args.join(' '));
+    assert.match(r.stdout, /^prod-sync: --abort — только сам или с --timeout/, r.stdout);
+  }
+  const r = cli({ cwd: ftp.dir, args: ['--ftp-done'] });
+  assert.equal(r.code, 4);
+  assert.equal(r.stdout.trim(), 'prod-sync: режим --ftp-done — в шаге 48.8');
+  assert.ok(!has(ftp.dir, '.claude/kit-prod.json'));
 });
 
 test('badName: небезопасный путь — везде; на Windows ещё <>:"|?*, CON/NUL/COM1/LPT1 (и с расширением), точка или пробел в конце части', () => {
@@ -307,7 +334,7 @@ test('listScript на локальном sh: есть, нет, папка, не�
 
 // ---- Синхронизация по SSH ----------------------------------------------------------------------------------------------
 
-test('изменён, добавлен, удалён без нас → один коммит синхронизации с ENTRY_RE, строка с тремя числами, отметка done', { skip: !SH }, async () => {
+test('изменён, добавлен, удалён без нас → один коммит синхронизации с ENTRY_RE, строка с тремя числами, отметка — pending пуст', { skip: !SH }, async () => {
   const { dir, server } = site({ 'a.php': 'a\n', 'b.php': 'b\n', 'c.php': 'c\n' });
   writeFiles(server, { 'a.php': 'a2\n', 'new/n.php': 'n\n' });
   fs.rmSync(path.join(server, 'c.php'));
@@ -328,21 +355,32 @@ test('изменён, добавлен, удалён без нас → один 
   assert.match(text(r), /^Сервер: прод — sh:/m);
   assert.match(text(r), /^База: [0-9a-f]{7,} \(первый коммит репозитория\)$/m);
   assert.match(text(r), new RegExp('^Коммит синхронизации: ' + head.slice(0, 7) + '[0-9a-f]* \\(3 файла\\)$', 'm'));
-  const mark = readMark(dir);
-  assert.deepEqual(mark.pending, []);
-  assert.equal(mark.sessions.s1.result, 'done');
-  assert.equal(mark.sessions.s1.commit, head);
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
 });
 
-test('ничего не поменялось → коммита нет, «прод совпадает с git», отметка done', { skip: !SH }, async () => {
+test('ничего не поменялось → коммита нет, «прод совпадает с git», отметка — named и pending', { skip: !SH }, async () => {
   const { dir } = site({ 'a.php': 'a\n', 'папка/b.php': 'b\n' });
   const r = await run(dir);
   assert.equal(r.code, 0, text(r));
   assert.equal(count(dir), 1);
   assert.equal(last(r), '[kit] Синхронизация с продом: прод совпадает с git.');
   assert.equal(r.commit, undefined);
-  assert.equal(readMark(dir).sessions.s1.result, 'done');
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
   assert.equal(status(dir), '');
+});
+
+test('отметка: после синхронизации в kit-prod.json только named и pending; старый файл с sessions читается и переписывается без них', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n' });
+  writeFiles(server, { 'a.php': '2\n', 'old.zip': 'PK' });
+  // файл первой редакции: записи сессий, названное раньше (с сервера уже исчезло)
+  writeFiles(dir, { '.claude/kit-prod.json': JSON.stringify({ sessions: { s1: { at: new Date().toISOString(), result: 'need' } }, named: ['gone.zip'], pending: [] }) });
+  assert.deepEqual(readMark(dir), { named: ['gone.zip'], pending: [] });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.match(last(r), /Не забрано, осталось на сервере: old\.zip \(архив\)\.$/);
+  assert.doesNotMatch(text(r), /отметка|хук/);
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: ['old.zip'], pending: [] });
 });
 
 test('закоммиченный, но не залитый шаг (база — заливка до него) — не откатан, коммита синхронизации нет', { skip: !SH }, async () => {
@@ -370,7 +408,7 @@ test('незалитый шаг не откатывается второй си�
   const r1 = await run(dir);
   assert.equal(r1.code, 0, text(r1));
   assert.deepEqual(changed(dir), ['M\tb.php']);
-  const r2 = await run(dir, { sessionId: 's2' });
+  const r2 = await run(dir);
   assert.equal(r2.code, 0, text(r2));
   assert.equal(count(dir), 3, 'второго коммита синхронизации нет');
   assert.equal(read(dir, 'a.php'), '2 наш шаг\n');
@@ -383,7 +421,7 @@ test('незалитый шаг не откатывается второй си�
   writeFiles(server, { 'a.php': '2 наш шаг\n', 'c.php': 'c\n' });
   writeFiles(dir, { '.claude/docs/deploy-prod.md': planMd([['1.2', s12.slice(0, 9)]]) });
   commit(dir, '1.2а: план выкладки');
-  const r3 = await run(dir, { sessionId: 's3' });
+  const r3 = await run(dir);
   assert.equal(r3.code, 0, text(r3));
   assert.match(text(r3), /^База: [0-9a-f]+ \(«Залито на прод» в \.claude\/docs\/deploy-prod\.md\)$/m);
   assert.equal(last(r3), '[kit] Синхронизация с продом: прод совпадает с git.');
@@ -429,7 +467,7 @@ test('архив и файл больше 10 МБ — не забраны и н�
   assert.ok(!has(dir, 'backup.zip') && !has(dir, 'files/big.dat'));
   assert.match(last(r), /Не забрано, осталось на сервере: backup\.zip \(архив\), files\/big\.dat \(больше 10 МБ\)\./);
   assert.deepEqual(readMark(dir).named, ['backup.zip', 'files/big.dat']);
-  const again = await run(dir, { sessionId: 's2' });
+  const again = await run(dir);
   assert.equal(again.code, 0, text(again));
   assert.equal(last(again), '[kit] Синхронизация с продом: прод совпадает с git.');
   assert.deepEqual(readMark(dir).named, ['backup.zip', 'files/big.dat']);
@@ -471,7 +509,7 @@ test('нечитаемый файл на сервере — не удалён, �
     assert.equal(read(dir, 'b.php'), 'b\n');
     assert.equal(read(dir, 'c.php'), 'c\n');
     assert.match(last(r), /Не забрано, осталось на сервере: b\.php \(не читается\), c\.php \(не файл\)\./);
-    const again = await run(dir, { sessionId: 's2' });
+    const again = await run(dir);
     assert.match(last(again), /b\.php \(не читается\), c\.php \(не файл\)/);
   });
 });
@@ -513,8 +551,7 @@ test('нет подключения — код 3 с причиной и вопр
     assert.match(text(r), /closed by remote host/);
     assert.equal(read(dir, 'a.php'), '1\n');
     assert.ok(!has(dir, 'n.php'));
-    assert.deepEqual(readMark(dir).pending, []);
-    assert.equal(readMark(dir).sessions.s1, undefined);
+    assert.ok(!has(dir, '.claude/kit-prod.json'), 'отметка не записана');
     assert.equal(count(dir), 1);
     const again = await run(dir);
     assert.equal(again.code, 0, text(again));
@@ -527,17 +564,17 @@ test('повтор (ревью 5): pending, часть файлов записа
   writeFiles(server, { 'a.php': '2\n', 'b.php': 'b2\n', 'n.php': 'n\n' }); // c.php на сервере вернули к базе
   // прошлая синхронизация оборвалась после записи: a.php и n.php записаны, c.php — прежней версией сервера
   writeFiles(dir, { 'a.php': '2\n', 'n.php': 'n\n', 'c.php': 'c старая версия сервера\n' });
-  writeMark(dir, { sessions: {}, named: [], pending: ['a.php', 'b.php', 'c.php', 'n.php'] });
+  writeMark(dir, { named: [], pending: ['a.php', 'b.php', 'c.php', 'n.php'] });
   const r = await run(dir);
   assert.equal(r.code, 0, text(r));
   assert.equal(count(dir), 2);
   assert.deepEqual(changed(dir), ['A\tn.php', 'M\ta.php', 'M\tb.php']);
   assert.equal(read(dir, 'c.php'), 'c\n');
   assert.equal(status(dir), '');
-  assert.deepEqual(readMark(dir).pending, []);
+  assert.deepEqual(pendingOf(dir), []);
 });
 
-test('--check и worktree: только сверка — есть что забрать — код 1, ничего не записано; забирать нечего — checked', { skip: !SH }, async () => {
+test('--check и worktree: только сверка — есть что забрать — код 1, ничего не записано; забирать нечего — код 0; отметку не пишут (Р-52)', { skip: !SH }, async () => {
   const { dir, server } = site({ 'a.php': '1\n' });
   writeFiles(server, { 'a.php': '2\n' });
   const r = await run(dir, { check: true });
@@ -567,10 +604,10 @@ test('--check и worktree: только сверка — есть что заб�
   const ok = await run(dir, { check: true });
   assert.equal(ok.code, 0, text(ok));
   assert.equal(last(ok), '[kit] Синхронизация с продом: прод совпадает с git.');
-  assert.equal(readMark(dir).sessions.s1.result, 'checked');
-  const okWt = await run(outside, { sessionId: 'w' });
+  assert.ok(!has(dir, '.claude/kit-prod.json'), '--check отметку не пишет');
+  const okWt = await run(outside);
   assert.equal(okWt.code, 0, text(okWt));
-  assert.equal(readMark(outside).sessions.w.result, 'checked');
+  assert.ok(!has(outside, '.claude/kit-prod.json') && !has(dir, '.claude/kit-prod.json'), 'worktree отметку не пишет');
 });
 
 test('worktree на ветке от старого коммита, шаг основной папки залит (сервер = её HEAD) — сверяется основная папка: код 0; основная недоступна — своя (Р-39)', { skip: !SH }, async () => {
@@ -582,24 +619,23 @@ test('worktree на ветке от старого коммита, шаг осн
   writeFiles(dir, { '.claude/docs/deploy-prod.md': planMd([['1.1', s1.slice(0, 9)]]) });
   commit(dir, '1.1а: план выкладки');
   writeFiles(server, { 'a.php': '2 шаг\n' }); // шаг залит
-  const r = await run(outside, { sessionId: 'w' });
+  const r = await run(outside);
   assert.equal(r.code, 0, text(r));
   assert.ok(r.out.some((l) => l.startsWith('Сверка — по основной папке проекта: ') && l.includes(path.basename(dir))), text(r));
   assert.match(text(r), /База: [0-9a-f]+ \(«Залито на прод» в \.claude\/docs\/deploy-prod\.md\)/);
   assert.equal(last(r), '[kit] Синхронизация с продом: прод совпадает с git.');
-  assert.equal(readMark(outside).sessions.w.result, 'checked');
-  assert.ok(!has(dir, '.claude/kit-prod.json'), 'отметка — в папке сессии');
+  assert.ok(!has(outside, '.claude/kit-prod.json') && !has(dir, '.claude/kit-prod.json'), 'отметку не пишет ни в одной папке (Р-52)');
   assert.equal(read(outside, 'a.php'), '1\n');
   // основная папка — не kit-проект: сверяется своя, как в 48.3 (на старой ветке залитый шаг — «изменение без нас»)
   fs.renameSync(path.join(dir, '.claude', 'CLAUDE.md'), path.join(dir, '.claude', 'CLAUDE.off'));
-  const own = await run(outside, { sessionId: 'w2' });
+  const own = await run(outside);
   fs.renameSync(path.join(dir, '.claude', 'CLAUDE.off'), path.join(dir, '.claude', 'CLAUDE.md'));
   assert.equal(own.code, 1, text(own));
   assert.doesNotMatch(text(own), /основной папке проекта:/);
   assert.match(last(own), /^есть изменения без kit — синхронизация в основной папке проекта/);
 });
 
-test('«Прод: —» и не kit-проект — код 2, файлов не пишет; «SSH прод» неверный — код 2; без SSH — код 2 «48.5»; не git — код 4; аргументы — код 4', () => {
+test('«Прод: —» и не kit-проект — код 2, файлов не пишет; «SSH прод» неверный — код 2; без SSH — код 2 «48.8»; не git — код 4; аргументы — код 4', () => {
   const plain = tmpDir('kit-prod-');
   g(plain, 'init', '-q');
   writeFiles(plain, { 'a.php': '1' });
@@ -624,7 +660,7 @@ test('«Прод: —» и не kit-проект — код 2, файлов не
   const ftp = site({ 'a.php': '1' }, { params: { 'SSH прод': '—' } });
   r = cli({ cwd: ftp.dir });
   assert.equal(r.code, 2);
-  assert.match(r.stdout, /без SSH: синхронизация по FTP — шаг 48\.5/);
+  assert.equal(r.stdout.trim(), 'без SSH: синхронизация по FTP — шаг 48.8');
 
   const nogit = writeFiles(tmpDir('kit-prod-'), { '.claude/CLAUDE.md': paramsMd({ ...PARAMS, 'SSH прод': 'sh:/srv/site' }), 'a.php': '1' });
   r = cli({ cwd: nogit });
@@ -639,24 +675,6 @@ test('«Прод: —» и не kit-проект — код 2, файлов не
     assert.equal(r.code, 4, args.join(' '));
     assert.ok(r.stdout.startsWith('prod-sync: ') && r.stdout.includes('Использование: node prod-sync.js [--check]'), r.stdout);
   }
-  for (const flag of ['--skip', '--ftp-done', '--hook']) {
-    r = cli({ cwd: ftp.dir, args: [flag] });
-    assert.equal(r.code, 4, flag);
-    assert.match(r.stdout, new RegExp('режим ' + flag + ' — в шаге 48\\.5'));
-  }
-});
-
-test('секрет в скачанном файле — код 1, коммита нет, вывод kit-commit.js в out, pending остаётся', { skip: !SH }, async () => {
-  const { dir, server } = site({ 'cfg.php': '<?php\n', 'a.php': 'a\n' });
-  writeFiles(server, { 'cfg.php': `<?php\nreturn ['password' => '${SECRET}'];\n` });
-  const r = await run(dir);
-  assert.equal(r.code, 1, text(r));
-  assert.match(text(r), /kit-commit: стоп — найдены секреты/);
-  assert.doesNotMatch(text(r), new RegExp(SECRET.replace(/[!]/g, '\\$&')));
-  assert.equal(count(dir), 1);
-  assert.deepEqual(readMark(dir).pending, ['cfg.php']);
-  assert.equal(readMark(dir).sessions.s1, undefined);
-  assert.match(last(r), /секрет/);
 });
 
 // ---- Наши правки и совмещение (48.4) -----------------------------------------------------------------------------------
@@ -683,15 +701,16 @@ test('незакоммиченная правка уже на сервере —
   assert.ok(!has(dir, 'd.php'));
   assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0.');
   assert.doesNotMatch(lastSent(log), /'a\.php'|'c\.php'/, 'наше на сервере не скачивается');
-  const again = await run(dir, { sessionId: 's2' });
+  const again = await run(dir);
   assert.equal(again.code, 0, text(again));
   assert.equal(last(again), '[kit] Синхронизация с продом: прод совпадает с git.');
   assert.equal(count(dir), 2);
   // --check (Р-28): своё на сервере — не «есть что забрать»
-  const checked = await run(dir, { sessionId: 's3', check: true });
+  const m0 = markOf(dir);
+  const checked = await run(dir, { check: true });
   assert.equal(checked.code, 0, text(checked));
   assert.equal(last(checked), '[kit] Синхронизация с продом: прод совпадает с git.');
-  assert.equal(readMark(dir).sessions.s3.result, 'checked');
+  assert.equal(markOf(dir), m0, '--check отметку не пишет');
   assert.equal(status(dir), before);
 });
 
@@ -709,7 +728,7 @@ test('новый неотслеживаемый файл, уже залитый 
   assert.equal(read(dir, 'win.php'), 'x\ny\n');
   assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 1, удалено 0.');
   assert.doesNotMatch(lastSent(log), /mine|win/, 'своё не скачивается');
-  const again = await run(dir, { sessionId: 's2' });
+  const again = await run(dir);
   assert.equal(again.code, 0, text(again));
   assert.equal(last(again), '[kit] Синхронизация с продом: прод совпадает с git.');
 });
@@ -726,14 +745,13 @@ test('незакоммиченная правка и изменение без �
   assert.equal(g(dir, 'show', 'HEAD:a.php'), FIVE, 'в git — прежняя версия');
   assert.equal(status(dir), ' M a.php\n');
   assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. ' + MERGED + 'a.php.');
-  const mark = readMark(dir);
-  assert.deepEqual(mark.pending, []);
-  assert.equal(mark.sessions.s1.result, 'done');
+  const m0 = markOf(dir);
+  assert.deepEqual(JSON.parse(m0), { named: [], pending: [] });
   // --check после совмещения (Р-39): синхронизация ничего не запишет — код 0
-  const checked = await run(dir, { sessionId: 's2', check: true });
+  const checked = await run(dir, { check: true });
   assert.equal(checked.code, 0, text(checked));
   assert.equal(last(checked), '[kit] Синхронизация с продом: прод совпадает с git.');
-  assert.equal(readMark(dir).sessions.s2.result, 'checked');
+  assert.equal(markOf(dir), m0, '--check отметку не пишет');
   assert.equal(status(dir), ' M a.php\n');
 });
 
@@ -753,7 +771,7 @@ test('merge закоммиченного незалитого с изменен�
   const old = new Date(Date.now() - 3600 * 1000);
   fs.utimesSync(path.join(dir, 'a.php'), old, old);
   const mtime = fs.statSync(path.join(dir, 'a.php')).mtimeMs;
-  const again = await run(dir, { sessionId: 's2' });
+  const again = await run(dir);
   assert.equal(again.code, 0, text(again));
   assert.equal(last(again), '[kit] Синхронизация с продом: прод совпадает с git.');
   assert.equal(count(dir), 3);
@@ -768,7 +786,7 @@ const conflictTag = (dir) => {
 };
 const conflictRoots = (dir) => fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith(conflictTag(dir))).sort();
 
-test('конфликт совмещения — код 1, рабочая копия не тронута, версия сервера — во временном файле; остальное — коммитом синхронизации, отметка done; повторная синхронизация — одни конфликты (Р-37), прежняя папка конфликтов убрана (Р-38)', { skip: !SH }, async () => {
+test('конфликт совмещения — код 1, рабочая копия не тронута, версия сервера — во временном файле; остальное — коммитом синхронизации, pending пуст; повторная синхронизация — одни конфликты (Р-37), прежняя папка конфликтов убрана (Р-38)', { skip: !SH }, async () => {
   const { dir, server } = site({ 'a.php': FIVE, 'b.php': 'b\n', 'm.php': FIVE });
   writeFiles(dir, { 'a.php': 'наша\nl2\nl3\nl4\nl5\n', 'm.php': 'M1 наша\nl2\nl3\nl4\nl5\n' });
   writeFiles(server, { 'a.php': 'сервер\nl2\nl3\nl4\nl5\n', 'b.php': 'b2\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n', 'n.php': 'n\n' });
@@ -792,13 +810,9 @@ test('конфликт совмещения — код 1, рабочая коп�
     'Не совместилось само — вопрос ниже: a.php.');
   assert.ok(r.out.indexOf(summaryOf(r)) < r.out.findIndex((l) => l.startsWith('  a.php — ')));
   assert.match(last(r), /^синхронизация сделана, кроме этих файлов; спроси пользователя по каждому: Совместить вручную \(.+\) \/ Оставить нашу \(.+\) \/ Взять версию сервера \(.+\)$/);
-  const mark = readMark(dir);
-  assert.deepEqual(mark.pending, []);
-  assert.equal(mark.sessions.s1.result, 'done');
-  assert.equal(mark.sessions.s1.commit, head);
-  assert.deepEqual(mark.named, []);
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
   // конфликт называется при каждой синхронизации; совмещённое раньше — нет; одни конфликты — не «совпадает» (Р-37)
-  const again = await run(dir, { sessionId: 's2' });
+  const again = await run(dir);
   assert.equal(again.code, 1, text(again));
   assert.equal(count(dir), 2);
   const k2 = conflictOf(again, 'a.php');
@@ -814,10 +828,11 @@ test('конфликт совмещения — код 1, рабочая коп�
   assert.equal(fs.readFileSync(k2.server, 'utf8'), 'сервер\nl2\nl3\nl4\nl5\n');
   assert.equal(fs.readFileSync(k2.base, 'utf8'), FIVE);
   // --check при стоящем конфликте (Р-39): код 0, конфликт назван; папок конфликтов --check не создаёт и не убирает
-  const checked = await run(dir, { sessionId: 's3', check: true });
+  const m0 = markOf(dir);
+  const checked = await run(dir, { check: true });
   assert.equal(checked.code, 0, text(checked));
   assert.equal(last(checked), '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместится само — вопрос задаст синхронизация в основной папке: a.php.');
-  assert.equal(readMark(dir).sessions.s3.result, 'checked');
+  assert.equal(markOf(dir), m0, '--check отметку не пишет');
   assert.deepEqual(conflictRoots(dir), [path.basename(second)]);
   assert.equal(read(dir, 'a.php'), 'наша\nl2\nl3\nl4\nl5\n');
 });
@@ -847,7 +862,7 @@ test('удалён без нас при нашей правке, удалён у
   assert.deepEqual(fs.readFileSync(b.server), Buffer.from([0, 9, 2, 10, 3]));
   assert.deepEqual(fs.readFileSync(b.base), Buffer.from([0, 1, 2, 10, 3]));
   assert.deepEqual(fs.readFileSync(path.join(dir, 'bin.dat')), Buffer.from([0, 1, 2, 10, 4]));
-  assert.equal(readMark(dir).sessions.s1.result, 'done');
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
   assert.equal(summaryOf(r), '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: bin.dat, d.php, g.php.');
 });
 
@@ -889,7 +904,7 @@ test('Always и .scss среди забираемых — код 1 до скач
   assert.equal(read(dir, 'css/s.scss'), '$a: 1;\n');
   assert.ok(!has(dir, 'css/n.SCSS'));
   assert.equal(count(dir), 1);
-  assert.equal(readMark(dir).sessions.s1, undefined);
+  assert.equal(markOf(dir), null, 'отметка не записана');
   assert.match(text(r), /File Watchers PhpStorm \(scss\) — среди забираемого 2 файла: css\/n\.SCSS, css\/s\.scss; пересборка перезапишет результат, PhpStorm \(Always\) зальёт его на сервер/);
   assert.doesNotMatch(text(r), /x\.less|МБ/);
   assert.match(last(r), /^спроси пользователя одним AskUserQuestion: по вотчерам — Забирать \(`prod-sync\.js --watchers-ok`; .+\) \/ Отложить$/);
@@ -909,14 +924,14 @@ test('File Watchers без остановки: без Always, вотчер вы�
 
   idea(dir, { always: true, watchers: [['scss', false], ['less', true]] });
   writeFiles(server, { 's.scss': '$a: 3;\n' });
-  r = await run(dir, { sessionId: 's2' });
+  r = await run(dir);
   assert.equal(r.code, 0, text(r));
   assert.equal(read(dir, 's.scss'), '$a: 3;\n');
 
   idea(dir, { always: true, watchers: [['scss', true]] });
   writeFiles(dir, { 's.scss': '$a: моя;\n' }); // наша правка, залитая автозаливкой
   writeFiles(server, { 's.scss': '$a: моя;\n', 'a.php': '2\n' });
-  r = await run(dir, { sessionId: 's3' });
+  r = await run(dir);
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['M\ta.php']);
   assert.equal(read(dir, 's.scss'), '$a: моя;\n');
@@ -934,7 +949,7 @@ test('больше 50 МБ за раз — код 1 до скачивания; -
   assert.ok(!fetched(log), 'ничего не скачано');
   assert.ok(!has(dir, '6.bin') && !has(dir, 'media'));
   assert.equal(read(dir, 'a.php'), '1\n');
-  assert.equal(readMark(dir).sessions.s1, undefined);
+  assert.equal(markOf(dir), null, 'отметка не записана');
   assert.ok(text(r).includes('Забрать за одну синхронизацию — 54 МБ (больше 50 МБ); самые тяжёлые папки: media/one/x/ — 27 МБ, 6.bin — 9 МБ, media/two/ — 9 МБ, video/ — 9 МБ, a.php — 1 КБ'), text(r));
   assert.doesNotMatch(text(r), /File Watchers/);
   assert.match(last(r), /^спроси пользователя одним AskUserQuestion: по объёму — Забрать всё \(`prod-sync\.js --big-ok`\) \/ Не забирать папки \(.*\.gitignore.*\) \/ Отложить$/);
@@ -966,19 +981,19 @@ test('вотчеры — по тому, что синхронизация зап
   assert.equal(r.code, 1, text(r));
   assert.match(text(r), /File Watchers PhpStorm \(scss\) — среди забираемого 1 файл: m\.scss;/, 'конфликтный c.scss синхронизация не запишет — не в счёт');
   assert.equal(read(dir, 'm.scss'), 'M1 наша\nl2\nl3\nl4\nl5\n', 'ничего не записано');
-  assert.equal(readMark(dir).sessions.s1, undefined);
+  assert.equal(markOf(dir), null, 'отметка не записана');
   assert.deepEqual(conflictRoots(dir), [], 'до записи — и папки конфликтов нет');
   const ok = await run(dir, { watchersOk: true });
   assert.equal(ok.code, 1, text(ok));
   assert.equal(read(dir, 'm.scss'), 'M1 наша\nl2\nl3\nl4\nM5 сервер\n');
   assert.equal(conflictOf(ok, 'c.scss').why, 'правки пересекаются');
   // следующая сессия: m.scss совмещён раньше, c.scss — стоящий конфликт; синхронизация их не пишет — вотчеры не останавливают
-  const next = await run(dir, { sessionId: 's2' });
+  const next = await run(dir);
   assert.equal(next.code, 1, text(next));
   assert.doesNotMatch(text(next), /File Watchers/);
   assert.equal(summaryOf(next), '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. Не совместилось само — вопрос ниже: c.scss.');
   assert.equal(conflictOf(next, 'c.scss').why, 'правки пересекаются');
-  assert.equal(readMark(dir).sessions.s2.result, 'done');
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
 });
 
 test('удалённые на сервере, «не забирать» и М-6 не считаются ни в объёме, ни в вотчерах (Р-41); малый предел (opts.entryLimit) — остановка по объёму', { skip: !SH }, async () => {
@@ -994,7 +1009,7 @@ test('удалённые на сервере, «не забирать» и М-6 
   assert.match(last(r), /Не забрано, осталось на сервере: arch\.zip \(архив\), dir\.scss \(у нас на этом месте папка\)\.$/);
   // забираемое больше малого предела — остановка по объёму; вотчеров среди него нет
   writeFiles(server, { 'big.php': blob });
-  const big = await run(dir, { sessionId: 's2', entryLimit: 1000 });
+  const big = await run(dir, { entryLimit: 1000 });
   assert.equal(big.code, 1, text(big));
   assert.match(text(big), /Забрать за одну синхронизацию — 5 КБ \(больше 1 КБ\); самые тяжёлые папки: big\.php — 5 КБ$/m);
   assert.doesNotMatch(text(big), /File Watchers/);
@@ -1017,15 +1032,16 @@ test('запись мешает локальное (М-6): на месте пу�
   assert.equal(read(dir, 'new'), 'файл');
   assert.equal(read(dir, 'x.php/inner.txt'), 'i');
   assert.match(last(r), /Не забрано, осталось на сервере: c\.php \(у нас на этом месте папка\), new\/n\.php \(у нас файл new на месте папки\), x\.php \(у нас на этом месте папка\)\.$/);
-  const again = await run(dir, { sessionId: 's2' });
+  const again = await run(dir);
   assert.equal(again.code, 0, text(again));
   assert.match(last(again), /Не забрано, осталось на сервере: c\.php .+, new\/n\.php .+, x\.php /);
   assert.deepEqual(readMark(dir).named, []);
   // --check при М-6 (Р-39): синхронизация ничего не запишет — код 0, пути названы
-  const checked = await run(dir, { sessionId: 's3', check: true });
+  const m0 = markOf(dir);
+  const checked = await run(dir, { check: true });
   assert.equal(checked.code, 0, text(checked));
   assert.match(last(checked), /^\[kit\] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0\. Не забрано, осталось на сервере: c\.php \(у нас на этом месте папка\), new\/n\.php .+, x\.php /);
-  assert.equal(readMark(dir).sessions.s3.result, 'checked');
+  assert.equal(markOf(dir), m0, '--check отметку не пишет');
   assert.equal(status(dir), before);
 });
 
@@ -1033,7 +1049,7 @@ test('повтор убирает временные файлы <путь>.*.kit
   const { dir, server } = site({ 'a.php': '1\n' });
   writeFiles(server, { 'a.php': '2\n', 'sub/n.php': 'n\n' });
   writeFiles(dir, { 'a.php.4242.kit-tmp': '2\n', 'sub/n.php.77.kit-tmp': 'n' });
-  writeMark(dir, { sessions: {}, named: [], pending: ['a.php', 'sub/n.php'] });
+  writeMark(dir, { named: [], pending: ['a.php', 'sub/n.php'] });
   const r = await run(dir);
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['A\tsub/n.php', 'M\ta.php']);
@@ -1079,53 +1095,62 @@ test('окружение «дев» (М-10): «SSH дев», заголовок 
   assert.deepEqual(changed(dir), ['M\ta.php']);
   assert.equal(read(dir, 'b.php'), 'b прод\n', 'коммит синхронизации с прода не наложен на базу дева: b.php не откатан');
   assert.equal(last(r), '[kit] Синхронизация с девом: файлов без kit: изменено 1, добавлено 0, удалено 0.');
-  const again = await run(dir, { sessionId: 's2' });
+  const again = await run(dir);
   assert.equal(again.code, 0, text(again));
   assert.match(text(again), /\(первый коммит репозитория; поверх — 1 коммит синхронизации\)/);
   assert.equal(last(again), '[kit] Синхронизация с девом: дев совпадает с git.');
 });
 
-test('kit-commit.js коды 2 и 3 (М-10) → код 4, pending остаётся; повтор доводит синхронизацию', { skip: !SH }, async () => {
+// Хук git в проекте теста: name — pre-commit, post-commit; cmd — команда sh.
+const hook = (dir, name, cmd) => fs.writeFileSync(path.join(dir, '.git', 'hooks', name), '#!/bin/sh\n' + cmd + '\n', { mode: 0o755 });
+// Остановка после записи (Р-51): последняя строка — вопрос с отменой.
+const AGAIN = 'спроси пользователя: Повторить / Отменить (`prod-sync.js --abort`)';
+
+test('kit-commit.js коды 2 и 3 (М-10, Р-51) → код 1, pending остаётся, «Повторить / Отменить»; при коде 3 — историю не чинить; повтор доводит синхронизацию', { skip: !SH }, async () => {
   const { dir, server } = site({ 'a.php': '1\n' });
-  const hook = (name, cmd) => fs.writeFileSync(path.join(dir, '.git', 'hooks', name), '#!/bin/sh\n' + cmd + '\n', { mode: 0o755 });
   writeFiles(server, { 'a.php': '2\n' });
-  hook('pre-commit', 'exit 1');
+  hook(dir, 'pre-commit', 'exit 1');
   let r = await run(dir);
-  assert.equal(r.code, 4, text(r));
+  assert.equal(r.code, 1, text(r));
   assert.match(text(r), /коммит синхронизации не сделан \(kit-commit\.js, код 2\)/);
-  assert.deepEqual(readMark(dir).pending, ['a.php']);
-  assert.equal(readMark(dir).sessions.s1, undefined);
+  assert.equal(last(r), AGAIN);
+  assert.deepEqual(pendingOf(dir), ['a.php']);
   assert.equal(count(dir), 1);
   fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
   // код 3: коммит есть, самопроверка не сошлась (хук после коммита правит файл)
-  hook('post-commit', 'echo x >> a.php');
+  hook(dir, 'post-commit', 'echo x >> a.php');
   r = await run(dir);
-  assert.equal(r.code, 4, text(r));
-  assert.match(text(r), /коммит синхронизации сделан, но не проверен \(kit-commit\.js, код 3\)/);
+  assert.equal(r.code, 1, text(r));
+  assert.match(text(r), /коммит синхронизации сделан, но не проверен \(kit-commit\.js, код 3\) — историю не чинить/);
+  assert.equal(last(r), AGAIN);
   assert.equal(count(dir), 2);
-  assert.deepEqual(readMark(dir).pending, ['a.php']);
+  assert.deepEqual(pendingOf(dir), ['a.php']);
   fs.rmSync(path.join(dir, '.git', 'hooks', 'post-commit'));
+  // хук дописал a.php после записи: на диске не то, что записала синхронизация, и не HEAD — повтор его не трогает (Р-57)
   r = await run(dir);
   assert.equal(r.code, 0, text(r));
-  assert.equal(count(dir), 2, 'коммит синхронизации уже есть: повтор вернул a.php к HEAD, забирать нечего');
-  assert.equal(read(dir, 'a.php'), '2\n');
-  assert.equal(status(dir), '');
-  assert.deepEqual(readMark(dir).pending, []);
+  assert.equal(count(dir), 2, 'коммит синхронизации уже есть: забирать нечего');
+  assert.equal(read(dir, 'a.php'), '2\nx\n');
+  assert.equal(status(dir), ' M a.php\n');
+  assert.ok(text(r).includes('a.php (изменён после остановки синхронизации — не тронут)'), text(r));
+  assert.deepEqual(pendingOf(dir), []);
   assert.equal(last(r), '[kit] Синхронизация с продом: прод совпадает с git.');
 });
 
-test('повтор после остановки по секрету (М-10): индекс, оставленный kit-commit.js, очищается; новый файл с секретом убран; совмещённое не откатывается (Р-34)', { skip: !SH }, async () => {
+test('повтор после остановки kit-commit.js (М-10): индекс, оставленный kit-commit.js, очищается; новый файл убран; совмещённое не откатывается (Р-34)', { skip: !SH }, async () => {
   const { dir, server } = site({ 'cfg.php': '<?php\n', 'a.php': 'a\n', 'm.php': FIVE });
-  const secret = `<?php\nreturn ['password' => '${SECRET}'];\n`;
   writeFiles(dir, { 'm.php': 'M1 наша\nl2\nl3\nl4\nl5\n' });
-  writeFiles(server, { 'cfg.php': secret, 'new.php': secret, 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n' });
+  writeFiles(server, { 'cfg.php': '<?php\nreturn [1];\n', 'new.php': 'n\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n' });
+  hook(dir, 'pre-commit', 'exit 1');
   const r = await run(dir);
   assert.equal(r.code, 1, text(r));
+  assert.equal(last(r), AGAIN);
   assert.deepEqual(g(dir, 'diff', '--cached', '--name-only').trim().split('\n').sort(), ['cfg.php', 'new.php']);
-  assert.deepEqual(readMark(dir).pending, ['cfg.php', 'new.php']);
+  assert.deepEqual(pendingOf(dir), ['cfg.php', 'new.php']);
   assert.equal(read(dir, 'm.php'), 'M1 наша\nl2\nl3\nl4\nM5 сервер\n', 'совмещённое записано до коммита и не откатано');
   assert.ok(r.out.includes('совмещённое с нашими правками осталось в рабочей копии: m.php'), text(r));
-  // на сервере убрали секрет и лишний файл
+  // хук убран; на сервере cfg.php поправили ещё раз, лишний файл убрали
+  fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
   writeFiles(server, { 'cfg.php': '<?php\nreturn [];\n' });
   fs.rmSync(path.join(server, 'new.php'));
   const again = await run(dir);
@@ -1180,8 +1205,9 @@ test('много путей: маленький argLimit → несколько 
   assert.deepEqual(all.sort(), names.map((n) => 'M\t' + n));
   assert.equal((text(r).match(/^Коммит синхронизации: /gm) || []).length, 3);
   assert.equal(status(dir), '');
-  assert.equal(readMark(dir).sessions.s1.commit, g(dir, 'rev-parse', 'HEAD').trim());
-  const again = await run(dir, { sessionId: 's2' });
+  assert.equal(r.commit, g(dir, 'rev-parse', 'HEAD').trim(), 'r.commit — последний коммит синхронизации');
+  assert.deepEqual(pendingOf(dir), []);
+  const again = await run(dir);
   assert.equal(again.code, 0, text(again));
   assert.equal(count(dir), 4, 'у каждого пути версия базы — из своего коммита синхронизации: забирать нечего');
   assert.match(text(again), /поверх — 3 коммита синхронизации/);
@@ -1196,7 +1222,7 @@ test('запрещённый к коммиту новый файл (local/.setti
   assert.equal(count(dir), 1);
   assert.ok(!has(dir, 'local/.settings.php'));
   assert.match(last(r), /local\/\.settings\.php \(запрещён к коммиту\)/);
-  const again = await run(dir, { sessionId: 's2' });
+  const again = await run(dir);
   assert.equal(last(again), '[kit] Синхронизация с продом: прод совпадает с git.');
 });
 
@@ -1227,11 +1253,11 @@ test('«Удалённый репозиторий»: голый репозито
   g(dir, 'remote', 'set-url', 'origin', path.join(tmpDir('kit-prod-'), 'нет такого'));
   g(dir, 'update-ref', '-d', 'refs/remotes/origin/' + branch);
   writeFiles(server, { 'a.php': '3\n' });
-  const r2 = await run(dir, { sessionId: 's2' });
+  const r2 = await run(dir);
   assert.equal(r2.code, 0, text(r2));
   assert.match(text(r2), /^коммит синхронизации не отправлен: .+/m);
   assert.equal(read(dir, 'a.php'), '3\n');
-  assert.equal(readMark(dir).sessions.s2.result, 'done');
+  assert.deepEqual(pendingOf(dir), []);
   assert.match(last(r2), /изменено 1/);
 });
 
@@ -1257,18 +1283,338 @@ test('сквозное отрезание с рабочими папками (WO
   assert.doesNotMatch(text(r), /modules|dbconn|1\.jpg/);
 });
 
-test('main: KIT_SESSION_ID из окружения — отметка done; вывод в stdout, последняя строка — итог', { skip: !SH }, async () => {
+test('main: вывод в stdout, последняя строка — итог; KIT_SESSION_ID не влияет, строк об отметке сессии нет (48.7)', { skip: !SH }, async () => {
   const { dir, server } = site({ 'a.php': '1\n' });
   writeFiles(server, { 'a.php': '2\n' });
   const r = cli({ cwd: dir, env: { KIT_SESSION_ID: 'cli-1' } });
   assert.equal(r.code, 0, r.stdout + r.stderr);
   assert.equal(r.stderr, '');
   assert.match(r.stdout.trim().split('\n').pop(), /изменено 1, добавлено 0, удалено 0\.$/);
-  assert.equal(readMark(dir).sessions['cli-1'].result, 'done');
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
   const quiet = cli({ cwd: dir, env: { KIT_SESSION_ID: '' } });
   assert.equal(quiet.code, 0, quiet.stdout);
-  assert.match(quiet.stdout, /отметка не поставлена: хук не пустит правки — перезапусти сессию/);
+  assert.doesNotMatch(quiet.stdout, /отметка|хук/);
   assert.match(quiet.stdout.trim().split('\n').pop(), /совпадает с git/);
+  // --abort из командной строки: к серверу не подключается, с --timeout — можно (Р-53)
+  const ab = cli({ cwd: dir, args: ['--abort', '--timeout', '5'] });
+  assert.equal(ab.code, 0, ab.stdout);
+  assert.equal(ab.stdout.trim(), '[kit] Отменять нечего: незаконченной синхронизации нет');
+});
+
+// ---- Отмена, файлы с секретом, запись совмещённого (48.7) --------------------------------------------------------------
+const NOTHING = '[kit] Отменять нечего: незаконченной синхронизации нет';
+const SECRET_WHY = 'секрет — заливка нашей правки этого файла затрёт серверную';
+const secretPhp = () => `<?php\nreturn ['password' => '${SECRET}'];\n`;
+
+test('--abort после остановки kit-commit.js: записанное синхронизацией — к HEAD, pending пуст; наша правка и совмещённое целы', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'm.php': FIVE, 'x.php': 'x\n' });
+  writeFiles(dir, { 'm.php': 'M1 наша\nl2\nl3\nl4\nl5\n', 'x.php': 'моя\n' });
+  writeFiles(server, { 'a.php': '2\n', 'n.php': 'n\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n' });
+  hook(dir, 'pre-commit', 'exit 1');
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.equal(last(r), AGAIN);
+  assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n') }, { path: 'n.php', md5: md5('n\n') }], 'md5 записанного (Р-57)');
+  assert.equal(read(dir, 'a.php'), '2\n');
+  assert.ok(has(dir, 'n.php'));
+  const merged = 'M1 наша\nl2\nl3\nl4\nM5 сервер\n';
+  assert.equal(read(dir, 'm.php'), merged);
+  writeFiles(dir, { 'a.php.4242.kit-tmp': 'остаток' }); // временный файл записи после обрыва (М-7) — отмена убирает и его
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  const a = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir, { abort: true }));
+  assert.equal(a.code, 0, text(a));
+  assert.deepEqual(a.out, ['[kit] Синхронизация отменена: к HEAD возвращено 2 файла']);
+  assert.ok(!fs.existsSync(log), 'к серверу не подключались');
+  assert.equal(read(dir, 'a.php'), '1\n');
+  assert.ok(!has(dir, 'n.php') && !has(dir, 'a.php.4242.kit-tmp'));
+  assert.equal(g(dir, 'diff', '--cached', '--name-only'), '', 'индекс, оставленный kit-commit.js, очищен');
+  assert.equal(status(dir), ' M m.php\n M x.php\n');
+  assert.equal(read(dir, 'm.php'), merged, 'совмещённое не тронуто');
+  assert.equal(read(dir, 'x.php'), 'моя\n', 'наша правка не тронута');
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
+  assert.equal(count(dir), 1);
+  // повторная отмена — отменять нечего; один путь — «возвращён 1 файл»; named отмена не трогает
+  assert.deepEqual((await run(dir, { abort: true })).out, [NOTHING]);
+  writeMark(dir, { named: ['old.zip'], pending: ['a.php'] });
+  writeFiles(dir, { 'a.php': '2\n' });
+  const one = await run(dir, { abort: true });
+  assert.equal(one.code, 0, text(one));
+  assert.deepEqual(one.out, ['[kit] Синхронизация отменена: к HEAD возвращён 1 файл']);
+  assert.equal(read(dir, 'a.php'), '1\n');
+  assert.deepEqual(readMark(dir), { named: ['old.zip'], pending: [] });
+});
+
+test('--abort без pending — «отменять нечего», код 0, рабочая копия и git не меняются; в worktree — тоже, основная папка не тронута (Р-53)', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n' });
+  writeFiles(dir, { 'a.php': 'моя\n', 'new.php': 'n\n' });
+  writeFiles(server, { 'a.php': '2\n' });
+  const before = status(dir);
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  const r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir, { abort: true }));
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(r.out, [NOTHING]);
+  assert.ok(!fs.existsSync(log), 'к серверу не подключались');
+  assert.equal(status(dir), before);
+  assert.equal(read(dir, 'a.php'), 'моя\n');
+  assert.equal(markOf(dir), null, 'отметка не создана');
+  assert.equal(count(dir), 1);
+  // pending пуст в файле — то же, файл не переписывается
+  writeMark(dir, { named: ['x.zip'], pending: [] });
+  const m0 = markOf(dir);
+  assert.deepEqual((await run(dir, { abort: true })).out, [NOTHING]);
+  assert.equal(markOf(dir), m0);
+  // worktree: отменять нечего, хотя у основной папки pending есть; ни основная папка, ни worktree не тронуты
+  const wt = path.join(tmpDir('kit-prod-wt-'), 'w');
+  g(dir, 'worktree', 'add', '-q', '-b', 'w', wt);
+  writeMark(dir, { named: [], pending: ['a.php'] });
+  const m1 = markOf(dir);
+  const w = await withEnv({ FAKE_SSH_LOG: log }, () => run(wt, { abort: true }));
+  assert.equal(w.code, 0, text(w));
+  assert.deepEqual(w.out, [NOTHING]);
+  assert.ok(!fs.existsSync(log), 'к серверу не подключались');
+  assert.equal(read(dir, 'a.php'), 'моя\n');
+  assert.equal(markOf(dir), m1);
+  assert.equal(status(wt), '');
+  assert.equal(markOf(wt), null);
+});
+
+test('код 3 — «Повторить / Отложить»; строка с секретом из HEAD повторена на сервере в другом месте — файл не забран, назван, остальное забрано (Р-59: не стоп kit-commit.js)', { skip: !SH }, async () => {
+  const down = site({ 'a.php': '1\n' }, { host: 'down' });
+  const r0 = await run(down.dir);
+  assert.equal(r0.code, 3, text(r0));
+  assert.equal(last(r0), 'спроси пользователя: Повторить / Отложить');
+  assert.equal(markOf(down.dir), null);
+
+  // строка с паролем уже была в HEAD, на сервере её повторили: дифф (как у kit-commit.js) видит её добавленной — секрет
+  const line = `$a = ['password' => '${SECRET}'];`;
+  const { dir, server } = site({ 'cfg.php': `<?php\n${line}\n`, 'b.php': 'b\n' });
+  writeFiles(server, { 'cfg.php': `<?php\n${line}\n// копия\n${line}\n`, 'b.php': 'b2\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\tb.php']);
+  assert.equal(read(dir, 'cfg.php'), `<?php\n${line}\n`);
+  assert.equal(status(dir), '');
+  assert.doesNotMatch(text(r), /kit-commit: стоп/);
+  assert.ok(!text(r).includes(SECRET), 'значение секрета не в выводе');
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. Не забрано, осталось на сервере: cfg.php (' +
+    SECRET_WHY + ').');
+  assert.deepEqual(readMark(dir), { named: ['cfg.php'], pending: [] });
+});
+
+test('секрет в скачанном: файл не записан и не в коммите, остальное забрано, причина «секрет»; второй запуск его не называет', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'cfg.php': '<?php\n', 'a.php': 'a\n' }, { params: { 'Секреты': 'ZZTEST-' } });
+  writeFiles(server, { 'cfg.php': secretPhp(), 'new.php': secretPhp(), 'k.php': "<?php $k = 'ZZTEST-777';\n", 'a.php': 'a2\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(body(dir), 'изменён: a.php');
+  assert.equal(read(dir, 'cfg.php'), '<?php\n');
+  assert.ok(!has(dir, 'new.php') && !has(dir, 'k.php'), 'файлы с секретом не записаны');
+  assert.equal(status(dir), '');
+  assert.ok(!text(r).includes(SECRET) && !text(r).includes('ZZTEST-777'), 'значений в выводе нет');
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. Не забрано, осталось на сервере: ' +
+    ['cfg.php', 'k.php', 'new.php'].map((p) => p + ' (' + SECRET_WHY + ')').join(', ') + '.');
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: ['cfg.php', 'k.php', 'new.php'], pending: [] });
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), '[kit] Синхронизация с продом: прод совпадает с git.');
+  assert.deepEqual(readMark(dir).named, ['cfg.php', 'k.php', 'new.php']);
+  // --check: названные файлы с секретом скачиваются и снова не в счёт — «есть что забрать» нет
+  const m0 = markOf(dir);
+  const checked = await run(dir, { check: true });
+  assert.equal(checked.code, 0, text(checked));
+  assert.equal(last(checked), '[kit] Синхронизация с продом: прод совпадает с git.');
+  assert.equal(markOf(dir), m0);
+  // секрет на сервере убрали — файл забирается, из named уходит
+  writeFiles(server, { 'cfg.php': '<?php\nreturn [];\n' });
+  const fixed = await run(dir);
+  assert.equal(fixed.code, 0, text(fixed));
+  assert.deepEqual(changed(dir), ['M\tcfg.php']);
+  assert.deepEqual(readMark(dir).named, ['k.php', 'new.php']);
+});
+
+test('секрет в версии сервера совмещаемого файла — не совмещён, назван; строка, уже бывшая в HEAD, секретом не считается', { skip: !SH }, async () => {
+  const head = `<?php\n$a = ['password' => '${SECRET}'];\nl3\nl4\nl5\nl6\nl7\n`;
+  const { dir, server } = site({ 'm.php': head, 's.php': FIVE });
+  writeFiles(dir, { 'm.php': head.replace('l7', 'L7 наша'), 's.php': 'L1 наша\nl2\nl3\nl4\nl5\n' });
+  writeFiles(server, { 'm.php': head.replace('l3', 'L3 сервер'), 's.php': 'l1\nl2\nl3\nl4\n' + "return ['password' => '" + SECRET + "'];\n" });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.equal(count(dir), 1);
+  assert.equal(read(dir, 'm.php'), head.replace('l3', 'L3 сервер').replace('l7', 'L7 наша'), 'строка из HEAD — не секрет: совмещено');
+  assert.equal(read(dir, 's.php'), 'L1 наша\nl2\nl3\nl4\nl5\n', 'с секретом — не совмещён');
+  assert.ok(!text(r).includes(SECRET));
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. ' + MERGED + 'm.php. ' +
+    'Не забрано, осталось на сервере: s.php (' + SECRET_WHY + ').');
+  assert.deepEqual(conflictRoots(dir), [], 'версия сервера с секретом во временную папку не пишется');
+  assert.deepEqual(readMark(dir).named, ['s.php']);
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), '[kit] Синхронизация с продом: прод совпадает с git.');
+  assert.equal(read(dir, 's.php'), 'L1 наша\nl2\nl3\nl4\nl5\n');
+});
+
+test('файл изменён между чтением и записью совмещённого — не перезаписан, назван', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': FIVE, 'b.php': 'b\n' });
+  writeFiles(dir, { 'a.php': 'L1 наша\nl2\nl3\nl4\nl5\n' });
+  writeFiles(server, { 'a.php': 'l1\nl2\nl3\nl4\nL5 сервер\n', 'b.php': 'b2\n' });
+  // пользователь сохранил a.php, пока скачивался забор (b.php): совмещено было с прежней «нашей»
+  const touch = JSON.stringify({ match: "^g [0-9]+ 'b[.]php'$", file: path.join(dir, 'a.php'), text: 'L1 новее\nl2\nl3\nl4\nl5\n' });
+  const r = await withEnv({ FAKE_SSH_TOUCH: touch }, () => run(dir));
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\tb.php']);
+  assert.equal(read(dir, 'a.php'), 'L1 новее\nl2\nl3\nl4\nl5\n', 'правка пользователя не затёрта');
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. ' +
+    'Не забрано, осталось на сервере: a.php (изменён во время синхронизации — повтори).');
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] }, 'называется каждый раз — не в named');
+  // повтор совмещает с новой «нашей»
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.equal(read(dir, 'a.php'), 'L1 новее\nl2\nl3\nl4\nL5 сервер\n');
+  assert.equal(last(again), '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. ' + MERGED + 'a.php.');
+});
+
+// ---- Раунд 1 проверки 48.7: правка после остановки, гонка забора, части коммита, сбои записи ---------------------------
+const UNTOUCHED = (p) => p + ' (изменён после остановки синхронизации — не тронут)';
+
+test('Р-57: правка файла из pending после остановки — --abort её не трогает и называет; остальное — к HEAD, индекс чист', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'b.php': 'b\n' });
+  writeFiles(server, { 'a.php': '2\n', 'b.php': 'b2\n', 'n.php': 'n\n' });
+  hook(dir, 'pre-commit', 'exit 1');
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(pendingOf(dir), ['a.php', 'b.php', 'n.php']);
+  // после остановки доработали забранное: изменённый a.php и новый n.php
+  writeFiles(dir, { 'a.php': '2 и моя\n', 'n.php': 'n и моя\n' });
+  const a = await run(dir, { abort: true });
+  assert.equal(a.code, 0, text(a));
+  assert.deepEqual(a.out, ['[kit] Синхронизация отменена: к HEAD возвращён 1 файл; ' + UNTOUCHED('a.php') + ', ' + UNTOUCHED('n.php')]);
+  assert.equal(read(dir, 'a.php'), '2 и моя\n');
+  assert.equal(read(dir, 'n.php'), 'n и моя\n');
+  assert.equal(read(dir, 'b.php'), 'b\n');
+  assert.equal(g(dir, 'diff', '--cached', '--name-only'), '', 'поставленное kit-commit.js в индекс снято и у нетронутых');
+  assert.equal(status(dir), ' M a.php\n?? n.php\n');
+  assert.deepEqual(pendingOf(dir), []);
+});
+
+test('Р-57: правка файла из pending после остановки — повтор её не трогает, называет и сверяет как нашу правку', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': FIVE, 'b.php': 'b\n' });
+  writeFiles(server, { 'a.php': 'l1\nl2\nl3\nl4\nL5 сервер\n', 'b.php': 'b2\n' });
+  hook(dir, 'pre-commit', 'exit 1');
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(pendingOf(dir), ['a.php', 'b.php']);
+  writeFiles(dir, { 'a.php': 'L1 моя\nl2\nl3\nl4\nL5 сервер\n' }); // доработали забранную версию сервера
+  fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.deepEqual(changed(dir), ['M\tb.php']);
+  assert.equal(read(dir, 'a.php'), 'L1 моя\nl2\nl3\nl4\nL5 сервер\n', 'правка цела: совмещение с сервером дало её же');
+  assert.equal(status(dir), ' M a.php\n');
+  assert.ok(text(again).includes(UNTOUCHED('a.php')), text(again));
+  assert.equal(last(again), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0.');
+  assert.deepEqual(pendingOf(dir), []);
+});
+
+test('Р-58: файл забора изменён во время скачивания — не записан и не в коммите, назван; остальное забрано', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'b.php': 'b\n', 'c.php': 'c\n', 'd.php': 'd\n' });
+  writeFiles(server, { 'b.php': 'b2\n', 'c.php': 'c2\n' });
+  fs.rmSync(path.join(server, 'd.php'));
+  // пока скачивается забор, пользователь сохранил b.php (изменён на сервере) и d.php (удалён на сервере)
+  const when = "^g [0-9]+ 'b[.]php'$";
+  const touch = JSON.stringify([{ match: when, file: path.join(dir, 'b.php'), text: 'b моя\n' }, { match: when, file: path.join(dir, 'd.php'), text: 'd моя\n' }]);
+  const r = await withEnv({ FAKE_SSH_TOUCH: touch }, () => run(dir));
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\tc.php']);
+  assert.equal(read(dir, 'b.php'), 'b моя\n', 'правка не затёрта');
+  assert.equal(read(dir, 'd.php'), 'd моя\n', 'файл с правкой не удалён');
+  assert.equal(status(dir), ' M b.php\n M d.php\n');
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. ' +
+    'Не забрано, осталось на сервере: b.php (изменён во время синхронизации — повтори), d.php (изменён во время синхронизации — повтори).');
+  assert.deepEqual(readMark(dir), { named: [], pending: [] });
+});
+
+test('М-1: упал не первый коммит синхронизации — закоммиченные части уходят из pending, --abort возвращает только остальное', { skip: !SH }, async () => {
+  const names = ['f1.php', 'f2.php', 'f3.php'];
+  const { dir, server } = site(Object.fromEntries(names.map((n) => [n, '1\n'])));
+  writeFiles(server, Object.fromEntries(names.map((n) => [n, '2\n'])));
+  hook(dir, 'pre-commit', 'if [ -f .git/kit-once ]; then exit 1; fi; touch .git/kit-once'); // первый коммит проходит, второй — нет
+  const r = await run(dir, { argLimit: 20 });
+  assert.equal(r.code, 1, text(r));
+  assert.equal(last(r), AGAIN);
+  assert.equal(count(dir), 2);
+  assert.deepEqual(changed(dir), ['M\tf1.php', 'M\tf2.php']);
+  assert.deepEqual(pendingOf(dir), ['f3.php']);
+  const a = await run(dir, { abort: true });
+  assert.deepEqual(a.out, ['[kit] Синхронизация отменена: к HEAD возвращён 1 файл']);
+  assert.equal(read(dir, 'f3.php'), '1\n');
+  assert.equal(read(dir, 'f1.php'), '2\n');
+  assert.equal(status(dir), '');
+});
+
+test('М-3: исключение после начала записи — код 1, «Повторить / Отменить», pending остаётся; повтор доводит синхронизацию', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n' });
+  writeFiles(server, { 'a.php': '2\n', 'n.php': 'n\n' });
+  const rename = fs.renameSync;
+  fs.renameSync = (from, to) => {
+    if (String(to).endsWith(path.sep + 'n.php')) throw Object.assign(new Error('тест: сбой диска'), { code: 'EIO' });
+    return rename(from, to);
+  };
+  let r;
+  try {
+    r = await run(dir);
+  } finally {
+    fs.renameSync = rename;
+  }
+  assert.equal(r.code, 1, text(r));
+  assert.match(text(r), /синхронизация остановилась после записи: записано частично: a\.php; не записано: n\.php/);
+  assert.equal(last(r), AGAIN);
+  assert.deepEqual(pendingOf(dir), ['a.php', 'n.php']);
+  assert.equal(read(dir, 'a.php'), '2\n');
+  assert.ok(!has(dir, 'n.php'));
+  assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.kit-tmp')), []);
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.deepEqual(changed(dir), ['A\tn.php', 'M\ta.php']);
+  assert.doesNotMatch(text(again), /изменён после остановки/, 'не записанный n.php — не «правка после остановки»');
+  assert.equal(status(dir), '');
+});
+
+test('М-3, М-2: md5 записанного не сошёлся — код 1; у забора — «Повторить / Отменить», у одного совмещённого (pending пуст) — «Повторить / Отложить»', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'm.php': FIVE });
+  writeFiles(server, { 'a.php': '2\n' });
+  const rename = fs.renameSync;
+  // после переименования файл name тут же переписал кто-то другой
+  const spoiled = async (name) => {
+    fs.renameSync = (from, to) => {
+      rename(from, to);
+      if (String(to).endsWith(path.sep + name)) fs.writeFileSync(to, 'чужое\n');
+    };
+    try {
+      return await run(dir);
+    } finally {
+      fs.renameSync = rename;
+    }
+  };
+  const r = await spoiled('a.php');
+  assert.equal(r.code, 1, text(r));
+  assert.ok(text(r).includes('записано не то, что скачано (md5 не совпал): a.php'), text(r));
+  assert.equal(last(r), AGAIN);
+  assert.deepEqual(pendingOf(dir), ['a.php']);
+  assert.equal(count(dir), 1);
+  // отмена: на диске не то, что записала синхронизация, и не HEAD — не тронут (Р-57)
+  const a = await run(dir, { abort: true });
+  assert.deepEqual(a.out, ['[kit] Синхронизация отменена: к HEAD возвращено 0 файлов; ' + UNTOUCHED('a.php')]);
+  assert.equal(read(dir, 'a.php'), 'чужое\n');
+
+  // только совмещённое: pending пуст — отменять нечего
+  writeFiles(dir, { 'a.php': '1\n', 'm.php': 'M1 наша\nl2\nl3\nl4\nl5\n' });
+  writeFiles(server, { 'a.php': '1\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n' });
+  const m = await spoiled('m.php');
+  assert.equal(m.code, 1, text(m));
+  assert.ok(text(m).includes('записано не то, что совмещено (md5 не совпал): m.php'), text(m));
+  assert.equal(last(m), 'спроси пользователя: Повторить / Отложить');
+  assert.deepEqual(pendingOf(dir), []);
 });
 
 // ---- Имя и вывод (48.6) ------------------------------------------------------------------------------------------------

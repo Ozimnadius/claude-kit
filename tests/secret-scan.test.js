@@ -4,7 +4,8 @@ const assert = require('node:assert/strict');
 const path = require('path');
 const { gitRepo, git, writeFiles, runScript, makeProject } = require('./helpers');
 const { paramsMd, ALPHA, WORK_GITIGNORE, WORK_RULE, WORK_FILES } = require('./fixtures');
-const { scanLine, looksSecret } = require('../plugins/kit/scripts/secret-scan');
+const { scanLine, looksSecret, secretFindings } = require('../plugins/kit/scripts/secret-scan');
+const { readParams } = require('../plugins/kit/scripts/lib/params');
 
 const scan = (dir, ...args) => runScript('secret-scan.js', { args, cwd: dir });
 
@@ -502,4 +503,69 @@ test('--paths: абсолютный путь внутри проекта — к�
   assert.match(folder.stdout, /^ {2}upload\/iblock\/x\.jpg: запрещённый путь/m);
   assert.doesNotMatch(folder.stdout, /upload\/docs\/a\.txt/);
   assert.equal(scan(dir, '--paths', '--', path.join(dir, 'upload', 'docs', 'a.txt')).code, 0, 'исключение «кроме» — и для абсолютного');
+});
+
+// ---- secretFindings: проверка скачанного с сервера (prod-sync.js, 48.7) --------------------------------------------------
+// Пароль собран из частей: литерал в файле теста остановил бы проверку секретов при коммите.
+const PASS = ['Qw3', 'rty!x9'].join('');
+const PASS_LINE = "return ['password' => '" + PASS + "'];";
+
+test('secretFindings: новый файл — все строки; строки, бывшие в HEAD-версии, — не находка; значения замаскированы', () => {
+  assert.deepEqual(secretFindings(Buffer.from('<?php\n' + PASS_LINE + '\n'), null, 'cfg.php'), ['cfg.php:2: пароль или токен — Qw3…(9 симв.)']);
+  const head = '<?php\n' + PASS_LINE + '\n';
+  // строка уже в HEAD (CRLF и LF — одна строка), новая строка без секрета — чисто
+  assert.deepEqual(secretFindings('<?php\r\n// правка\r\n' + PASS_LINE + '\r\n', head, 'cfg.php'), []);
+  const token = "$t = ['token' => '" + ['Secr3t', 'Value123'].join('') + "'];";
+  const found = secretFindings(Buffer.from(head + token + '\n'), Buffer.from(head), 'cfg.php');
+  assert.deepEqual(found, ['cfg.php:3: пароль или токен — Sec…(14 симв.)']);
+  assert.ok(!found.join('\n').includes(PASS) && !found.join('\n').includes('Value123'), 'значения не в находках');
+  // доп. шаблоны «Секреты» — параметром; правило без кавычек — по имени файла (rel), как у --cached
+  assert.deepEqual(secretFindings("$k = 'ZZTEST-777';\n", null, 'k.php', ['ZZTEST-']), ['k.php:1: шаблон «ZZTEST-» — 777…(5 симв.)']);
+  assert.deepEqual(secretFindings("$k = 'ZZTEST-777';\n", null, 'k.php'), []);
+  assert.deepEqual(secretFindings('DB_PASSWORD=Secr3t123\n', null, '.env.example'), ['.env.example:1: пароль или токен (без кавычек) — Sec…(9 симв.)']);
+  assert.deepEqual(secretFindings('DB_PASSWORD=Secr3t123\n', null, 'notes.txt'), []);
+  assert.deepEqual(secretFindings('', null, 'empty.php'), []);
+});
+
+test('secretFindings: двоичное (NUL в первых 8000 байтах скачанной или HEAD-версии) — без проверки, как у git diff в --cached', () => {
+  const text = Buffer.from('<?php\n' + PASS_LINE + '\n');
+  assert.deepEqual(secretFindings(Buffer.concat([Buffer.from([0, 1, 10]), text]), null, 'x.bin'), []);
+  assert.deepEqual(secretFindings(text, Buffer.from([0, 1, 2]), 'x.bin'), []);
+  // NUL дальше 8000 байт — текст: проверяется
+  const late = Buffer.concat([text, Buffer.alloc(8000, 32), Buffer.from([0])]);
+  assert.equal(secretFindings(late, null, 'x.php').length, 1);
+});
+
+test('secretFindings — те же находки, что secret-scan.js --cached у kit-commit.js (доп. правила «Секреты» проекта)', () => {
+  const head = '<?php\n' + PASS_LINE + "\n$u = 'x';\n";
+  const next = '<?php\n' + PASS_LINE + "\n$u = '?apikey=' . $k;\n$c = [\"API_KEY\" => \"k-123456\"];\n$hook = 'https://x.bitrix24.ru/rest/1/" + "abcdef123456/';\n";
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd(ALPHA), 'cfg.php': head });
+  writeFiles(dir, { 'cfg.php': next });
+  git(dir, 'add', 'cfg.php');
+  const r = scan(dir, '--cached', '--', 'cfg.php');
+  assert.equal(r.code, 1, r.stdout);
+  const cached = r.stdout.split('\n').slice(1).map((l) => l.trim()).filter(Boolean);
+  assert.ok(cached.length >= 3, r.stdout);
+  assert.deepEqual(secretFindings(Buffer.from(next), Buffer.from(head), 'cfg.php', readParams(dir).list('Секреты')), cached);
+});
+
+test('secretFindings (Р-59): строка с секретом из HEAD, повторённая или перенесённая, — находка, как у --cached; та же строка без изменений — нет', () => {
+  const head = '<?php\n' + PASS_LINE + "\n$a = 1;\n";
+  const same = '<?php\n' + PASS_LINE + "\n$a = 2;\n";
+  const cases = [
+    ['повтор строки', head + '// копия\n' + PASS_LINE + '\n', true],
+    ['перенос строки', "<?php\n$a = 1;\n" + PASS_LINE + '\n', true],
+    ['строка из HEAD без изменений', same, false],
+    ['то же с CRLF (kit-проект: core.autocrlf=input)', same.split('\n').join('\r\n'), false],
+  ];
+  const dir = gitRepo({ 'cfg.php': head });
+  for (const [name, next, found] of cases) {
+    writeFiles(dir, { 'cfg.php': next });
+    git(dir, '-c', 'core.autocrlf=input', 'add', 'cfg.php');
+    const r = scan(dir, '--cached', '--', 'cfg.php');
+    const cached = r.code === 1 ? r.stdout.split('\n').slice(1).map((l) => l.trim()).filter(Boolean) : [];
+    const mine = secretFindings(Buffer.from(next), Buffer.from(head), 'cfg.php');
+    assert.deepEqual(mine, cached, name + '\n' + r.stdout);
+    assert.equal(mine.length > 0, found, name);
+  }
 });
