@@ -6,16 +6,16 @@
 // файлы сайта на диске: версии — база (baseTree), HEAD и скачанное, правила — те же, что по SSH (classify, Т-5). Разбор не
 // удаляет файлов, которых нет в HEAD (Р-68), и не идёт при автозаливке PhpStorm Always (Р-70): возврат из HEAD она залила бы на
 // сервер. Здесь — корни, правки, строки для пользователя, разбор скачанного, секреты и совмещение в памяти; запись, коммит и
-// отметка — prod-sync.js. Удалённые на сервере файлы и новые вне скачанных папок по FTP не видны.
+// отметка — prod-sync.js. Удалённые на сервере файлы и новые вне скачанных папок по FTP не видны. Что вне синхронизации
+// (служебные файлы git, исключённое в PhpStorm, «Не выкладывать») — syncRules из lib/prod.js, как по SSH (Р-83).
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { matchRules } = require('./paths');
-const { ALWAYS_SKIP, skipRules, git } = require('./deploy');
-const { readDeployment } = require('./deployment');
+const { ALWAYS_SKIP, isSsh, git } = require('./deploy');
 const {
   REGULAR, SKIP, md5NoCr, classify, treeOf, baseTree, pendingDelete, pendingEntry, ignoredOf, dirtyPaths, readWork, mergeVersions,
-  catBlobs, blobHashes, readText, clean, secretPaths,
+  catBlobs, blobHashes, clean, secretPaths, syncRules, deploymentOf,
 } = require('./prod');
 
 // строк в списке правок (Р-60), дальше — «и ещё N»; корни выводятся все (Р-73): каждый скачивают вручную, иначе изменения на
@@ -27,15 +27,19 @@ const DOWNLOADED = 'спроси пользователя: Скачал (`prod-s
 const DIRTY_OK = 'спроси пользователя: Скачаю всё равно (`prod-sync.js --dirty-ok`) / ' + SKIP;
 const ALWAYS_OFF = 'на время синхронизации выключи автозаливку PhpStorm (Tools → Deployment → Automatic Upload): иначе возврат файлов из ' +
   'HEAD уйдёт на сервер';
-const ALWAYS_STOP = ['автозаливка PhpStorm включена — выключи её (Tools → Deployment → Automatic Upload; PhpStorm записывает настройку не ' +
-  'сразу — File → Save All) и повтори', 'спроси пользователя: Выключил — повторить (`prod-sync.js --ftp-done`) / ' + SKIP];
+// Остановка при автозаливке PhpStorm Always до любой записи (Р-70, Р-84) — для разбора скачанного, повтора по SSH и отмены:
+// why — чем грозит запуск (пусто — не сказано), cmd — запуск для повтора после ответа «Выключил».
+const alwaysStop = (cmd, why = '') => ['автозаливка PhpStorm включена — ' + (why ? why + '; ' : '') + 'выключи её (Tools → Deployment → ' +
+  'Automatic Upload; PhpStorm записывает настройку не сразу — File → Save All) и повтори', 'спроси пользователя: Выключил — повторить (`' +
+  cmd + '`) / ' + SKIP];
+const ALWAYS_STOP = alwaysStop('prod-sync.js --ftp-done');
 
 const md5 = (buf) => crypto.createHash('md5').update(buf).digest('hex');
 const lines = (items) => items.map((p) => '  ' + clean(p));
 const upTo = (items) => [...lines(items.slice(0, LIMIT)), ...(items.length > LIMIT ? ['  и ещё ' + (items.length - LIMIT)] : [])];
-const deployment = (dir) => readDeployment(readText(path.join(dir, '.idea', 'deployment.xml')));
-// Автозаливка PhpStorm Always (.idea/deployment.xml; нет или не разобран — нет): разбор скачанного не идёт (Р-70).
-const autoUpload = (dir) => deployment(dir).always;
+// Автозаливка PhpStorm Always (.idea/deployment.xml; нет или не разобран — нет): разбор скачанного, повтор с откатом и отмена не
+// идут (Р-70, Р-84).
+const autoUpload = (dir) => deploymentOf(dir).always;
 
 // Начало правила skipRules со слешем (путь от корня проекта) до первой маски — нижним регистром; правило-имя без слеша и маска с
 // самого начала — null: лежать может где угодно (под ним разбор ничего не трогает, Р-72).
@@ -63,15 +67,18 @@ function ignoredDirs(dir) {
   return out;
 }
 
-// Корни для скачивания по FTP (Т-4, Т-9, Р-69, Р-71) — по файлам сайта в git (индекс, обычные файлы, не под skipRules), от
-// первой части пути вниз. Каталог D — корень целиком, если в нём нет исключённого: пробный D/kit-probe не исключают ни
-// .gitignore (git check-ignore --no-index), ни skipRules, ни одно правило skipRules со слешем не лежит в D, и на диске в D нет
-// локального игнорируемого (скачивание «с заменой» затёрло бы, например, local/php_interface/dbconn.php). Иначе D дробится на
-// файлы сайта прямо в нём и дочерние каталоги с файлами сайта — рекурсивно (отслеживаемый файл под целиком исключённой папкой —
-// сам корень; игнорируемое в корни не попадает). Каталог — с «/» на конце. → [корень] по алфавиту.
+// Корни для скачивания по FTP (Т-4, Т-9, Р-69, Р-71) — по файлам сайта в git (индекс, обычные файлы, не под syncRules: и не
+// служебные файлы git, и не исключённое в PhpStorm, Р-83, кроме «Claude по SSH», Р-88), от первой части пути вниз. Каталог D — корень целиком, если в нём нет
+// исключённого: пробный D/kit-probe не исключают ни .gitignore (git check-ignore --no-index), ни syncRules, ни одно правило
+// skipRules со слешем и ни один путь Excluded Paths PhpStorm не лежит в D, и на диске в D нет локального игнорируемого
+// (скачивание «с заменой» затёрло бы, например, local/php_interface/dbconn.php). Иначе D дробится на файлы сайта прямо в нём и
+// дочерние каталоги с файлами сайта — рекурсивно (отслеживаемый файл под целиком исключённой папкой — сам корень; игнорируемое в
+// корни не попадает). Каталог — с «/» на конце. → [корень] по алфавиту.
 function ftpRoots(dir, info) {
-  const rules = skipRules(info);
-  const inside = [...ALWAYS_SKIP, ...info.params.list('Не выкладывать')].map(rulePrefix).filter(Boolean);
+  const rules = syncRules(dir, info);
+  // Excluded Paths — вне синхронизации, кроме «Claude по SSH» (Р-88: там они — файлы сайта)
+  const inside = [...[...ALWAYS_SKIP, ...info.params.list('Не выкладывать')].map(rulePrefix),
+    ...(isSsh(info) ? [] : deploymentOf(dir).excluded.map((p) => p.toLowerCase()))].filter(Boolean);
   const local = ignoredDirs(dir);
   const r = git(dir, ['ls-files', '-s', '-z']);
   if (!r.ok) throw new Error('git ls-files: ' + r.err);
@@ -113,8 +120,8 @@ function ftpRoots(dir, info) {
 // Правки перед скачиванием (Р-60, Р-68, Р-72): изменённые и удалённые отслеживаемые файлы сайта — по содержимому без \r
 // (отличие только в \r — не правка); неотслеживаемые файлы сайта (не игнорируемые .gitignore), кроме тех, что разбор не заберёт
 // и оставит как есть: есть в базе или ждёт удаления (pendingDelete), не забирается по Т-11 (c.whyNot — читается только
-// забираемое по имени и размеру; файл с секретом). Под skipRules («Не выкладывать», .claude…) — не файлы сайта, не правки.
-// c: { dir, info, b, rules, whyNot, secrets }. → [путь] по алфавиту.
+// забираемое по имени и размеру; файл с секретом). Под c.rules (syncRules: «Не выкладывать», .claude…, служебные файлы git, исключённое в PhpStorm) — не
+// файлы сайта, не правки. c: { dir, info, b, rules, whyNot, secrets }. → [путь] по алфавиту.
 async function ftpDirty(c) {
   const { dir } = c;
   const head = treeOf(dir, 'HEAD');
@@ -155,7 +162,7 @@ function dirtyLines(paths) {
 }
 
 function rootLines(dir, roots) {
-  const d = deployment(dir);
+  const d = deploymentOf(dir);
   const from = d.server ? 'Download from ' + clean(d.server) : 'Download from… — с сервера автозаливки';
   return [`Скачай с сервера по FTP — в папку проекта, с заменой файлов (${roots.length}):`, ...lines(roots),
     `В PhpStorm: выдели эти папки и файлы в дереве проекта → Tools → Deployment → ${from}. Удалённые на сервере файлы и новые вне ` +
@@ -164,8 +171,9 @@ function rootLines(dir, roots) {
 
 // Разбор скачанного (Т-9 по правилам Т-5): «сервер» — файл сайта на диске. Кандидаты — пути git status: файл, который git
 // считает неизменённым, равен индексу, а индекс перед скачиванием — HEAD (Р-60), то есть «сервер = HEAD» — по Т-5 ничего. Нет
-// на диске — ничего (удалённое на сервере по FTP не видно); игнорируемое .gitignore git status не даёт; под skipRules
-// («Не выкладывать», .claude…) — не файлы сайта: не разбирается, не трогается и не называется (Р-72). Чего нет в HEAD, разбор не
+// на диске — ничего (удалённое на сервере по FTP не видно); игнорируемое .gitignore git status не даёт; под c.rules
+// (syncRules: «Не выкладывать», .claude…, служебные файлы git, исключённое в PhpStorm) — не файлы сайта: не разбирается, не
+// трогается и не называется (Р-72, Р-83). Чего нет в HEAD, разбор не
 // удаляет (Р-68): ждущее удаления и путь базы — лежит, называется каждый раз; новое, что не забирается, — лежит, называется
 // один раз. c: { dir, info, b, rules, whyNot(путь, размер) → причина | null }; skip — пути, которые в этот раз не разбираются
 // (Р-61: изменены после остановки). → { take: [{ path, kind: changed | added, size }] — в коммит синхронизации, merge: [{ path,
@@ -295,4 +303,4 @@ async function ftpPlan(c, s) {
   };
 }
 
-module.exports = { ftpRoots, ftpDirty, dirtyLines, rootLines, ftpSurvey, ftpMerges, ftpPlan, autoUpload, ALWAYS_STOP };
+module.exports = { ftpRoots, ftpDirty, dirtyLines, rootLines, ftpSurvey, ftpMerges, ftpPlan, autoUpload, alwaysStop, ALWAYS_STOP };

@@ -220,10 +220,13 @@ test('entryBase: не git и пустой репозиторий — error', () 
 
 test('skipTake: архивы и бэкапы без регистра, предел 10 МБ — включительно проходит, на байт больше — нет', () => {
   for (const n of ['_old.back', '_old.back1.php', 'dir/_X.BACK2', 'a/b/_site_back.zip', 'x_back_2024.ZIP', 'site.tar.gz', 'site.tar.gz.1', 'a.zip',
-    'a.RAR', 'a.7z', 'a.tar', 'a.gz', 'dump.SQL', 'a.bak', 'д/копия сайта.zip', 'win\\a.zip']) {
+    'a.RAR', 'a.7z', 'a.tar', 'a.gz', 'dump.SQL', 'a.bak', 'д/копия сайта.zip', 'win\\a.zip',
+    // М-7 (48.11а): ещё архивы и бэкапы — без регистра
+    'site.tgz', 'a.TGZ', 'site.tar.bz2', 'a.bz2', 'site.tar.xz', 'a.XZ', 'index.php.old', 'b/x.OLD', 'index.php.orig', 'a.Orig']) {
     assert.equal(skipTake(n, 10), 'архив', n);
   }
-  for (const n of ['index.php', 'upload/a.jpg', 'backup.php', 'a/zip', 'a/sql/x.php', 'bak', 'a.zipx', 'x/back.php']) assert.equal(skipTake(n, 10), null, n);
+  for (const n of ['index.php', 'upload/a.jpg', 'backup.php', 'a/zip', 'a/sql/x.php', 'bak', 'a.zipx', 'x/back.php',
+    'old.php', 'origin.php', 'a.older', 'a.original', 'xz.php', 'a.tgz.php', 'old/x.php']) assert.equal(skipTake(n, 10), null, n);
   assert.equal(skipTake('big.bin', FILE_LIMIT), null);
   assert.equal(skipTake('big.bin', FILE_LIMIT + 1), 'больше 10 МБ');
   assert.equal(skipTake('a.zip', FILE_LIMIT + 1), 'архив', 'маска — раньше размера');
@@ -501,6 +504,62 @@ test('отметка (Р-57): элемент pending — { path, md5 }: md5 за
   assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: h }, { path: 'gone.php', md5: null }, { path: 'old.php' }, { path: 'x.php' }]);
   fs.writeFileSync(file, JSON.stringify({ named: [], pending: [{ path: 'a.php', md5: 5 }, { md5: h }, null, 7, { path: 3 }, [], { path: 'b.php', md5: 'abc' }] }));
   assert.deepEqual(readMark(dir).pending, [{ path: 'a.php' }, { path: 'b.php', md5: 'abc' }], 'md5 не строка и не null — неизвестен; без пути — отброшен');
+  // Р-85: пометка разбора скачанного по FTP (ftp: true) сохраняется при чтении и записи; не true — пометки нет
+  writeMark(dir, { named: [], pending: [{ path: 'n.php', md5: h, ftp: true }, { path: 'a.php', md5: h, ftp: 'да' }, { path: 'x.php', ftp: true }] });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).pending, [{ path: 'n.php', md5: h, ftp: true }, { path: 'a.php', md5: h }, 'x.php']);
+  assert.deepEqual(readMark(dir).pending, [{ path: 'n.php', md5: h, ftp: true }, { path: 'a.php', md5: h }, { path: 'x.php' }]);
+});
+
+// .idea/deployment.xml: сервер по умолчанию alpha с исключениями (Excluded Paths), у другого сервера — свои.
+const DEPLOYMENT = (alpha, beta = []) => '<?xml version="1.0" encoding="UTF-8"?>\n<project version="4">\n' +
+  '  <component name="PublishConfigData" autoUpload="Always" serverName="alpha">\n    <serverData>\n' +
+  [['alpha', alpha], ['beta', beta]].map(([name, list]) => `      <paths name="${name}">\n        <serverdata>\n          <mappings>\n` +
+    '            <mapping deploy="/" local="$PROJECT_DIR$" web="/" />\n          </mappings>\n          <excludedPaths>\n' +
+    list.map((p) => `            <excludedPath local="true" path="$PROJECT_DIR$/${p}" />\n`).join('') +
+    '            <excludedPath path="/upload" />\n          </excludedPaths>\n        </serverdata>\n      </paths>\n').join('') +
+  '    </serverData>\n  </component>\n</project>\n';
+
+test('syncRules (Р-83): вне синхронизации — правила выкладки, .gitignore и .gitattributes в любой папке, исключённое у сервера автозаливки PhpStorm', () => {
+  const { matchRules } = require('../plugins/kit/scripts/lib/paths');
+  const dir = makeProject({ '.claude/CLAUDE.md': paramsMd({ ...PARAMS, 'Не выкладывать': '/dist' }) });
+  const off = (p) => !!matchRules(p, prod.syncRules(dir, kitInfo(dir)));
+  const always = ['.gitignore', 'sub/deep/.gitignore', '.gitattributes', 'a/.GITATTRIBUTES', 'dist/app.js', '.claude/x.md', '.idea/w.xml', 'kit-exec.php'];
+  for (const p of always) assert.ok(off(p), p);
+  const site = ['a.php', 'src/scss/s.scss', 'gulpfile.js', '.gitignore.php', 'x.gitignore', '.htaccess', 'gitignore', 'local/.gitkeep'];
+  for (const p of site) assert.ok(!off(p), 'нет deployment.xml — исключений нет: ' + p);
+  // исключения сервера по умолчанию — путь сам и всё внутри, без регистра; удалённые (без local) и другого сервера — не в счёт
+  writeFiles(dir, { '.idea/deployment.xml': DEPLOYMENT(['src/scss', 'gulpfile.js'], ['other']) });
+  for (const p of [...always, 'src/scss/s.scss', 'SRC/Scss/a/b.scss', 'gulpfile.js']) assert.ok(off(p), p);
+  for (const p of ['a.php', 'src/js/app.js', 'src/scss2/a.php', 'gulpfile.js.map', 'other/x.php', 'upload/a.jpg', '.htaccess']) assert.ok(!off(p), p);
+  assert.equal(prod.ideaKeep(dir, kitInfo(dir))('src/scss/s.scss'), false, 'не «Claude по SSH» — удалять не мешает: путь и так вне синхронизации');
+  // Р-88: «Claude по SSH» — исключённое в PhpStorm сверяется как файлы сайта (его заливает ssh-deploy.js), но у нас не удаляется
+  writeFiles(dir, { '.claude/CLAUDE.md': paramsMd({ ...PARAMS, 'Выкладка': 'Claude по SSH', 'Не выкладывать': '/dist' }) });
+  for (const p of always) assert.ok(off(p), 'Claude по SSH: ' + p);
+  for (const p of ['src/scss/s.scss', 'gulpfile.js', 'a.php']) assert.ok(!off(p), 'Claude по SSH: ' + p);
+  const keep = prod.ideaKeep(dir, kitInfo(dir));
+  for (const p of ['src/scss/s.scss', 'SRC/Scss/a/b.scss', 'gulpfile.js']) assert.equal(keep(p), true, p);
+  for (const p of ['a.php', 'src/js/app.js', 'other/x.php', 'gulpfile.js.map']) assert.equal(keep(p), false, p);
+});
+
+test('summaryLine (Р-88): kept — «Оставлено у нас: путь (причина)» после «Не забрано, осталось на сервере»; одно kept — не «совпадает»', () => {
+  const why = 'нет на сервере — не удалён: исключён в PhpStorm';
+  assert.equal(summaryLine({ env: 'прод', changed: ['a.php'], skipped: [{ path: 'x.zip', why: 'архив' }], kept: [{ path: 'b/u.php', why }], waiting: ['w.php'] }),
+    '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. Не забрано, осталось на сервере: x.zip (архив). ' +
+    `Оставлено у нас: b/u.php (${why}). Ждёт удаления с сервера: w.php.`);
+  assert.equal(summaryLine({ env: 'прод', kept: [{ path: 'u.php', why }] }),
+    `[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. Оставлено у нас: u.php (${why}).`);
+});
+
+test('ftpRoots (Р-83): .gitignore и .gitattributes не в «Не выкладывать» — не корни; исключённое в PhpStorm — не корень, папка над ним дробится', () => {
+  const { ftpRoots } = require('../plugins/kit/scripts/lib/prod-ftp');
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd(PARAMS), '.gitignore': 'x\n', '.gitattributes': '* text=auto\n', 'a.php': '1',
+    'sub/.gitignore': 'y\n', 'gulpfile.js': '1', 'src/scss/s.scss': '1', 'src/js/app.js': '1', 'src/i.php': '1', 'lib/l.php': '1' });
+  assert.deepEqual(ftpRoots(dir, kitInfo(dir)), ['a.php', 'gulpfile.js', 'lib/', 'src/'], 'служебные файлы git — не корни');
+  writeFiles(dir, { '.idea/deployment.xml': DEPLOYMENT(['src/scss', 'gulpfile.js']) });
+  assert.deepEqual(ftpRoots(dir, kitInfo(dir)), ['a.php', 'lib/', 'src/i.php', 'src/js/']);
+  // Р-88: «Claude по SSH» — исключённое в PhpStorm — обычные файлы сайта и в корнях
+  writeFiles(dir, { '.claude/CLAUDE.md': paramsMd({ ...PARAMS, 'Выкладка': 'Claude по SSH' }) });
+  assert.deepEqual(ftpRoots(dir, kitInfo(dir)), ['a.php', 'gulpfile.js', 'lib/', 'src/']);
 });
 
 test('отметка: поля не того типа — пустые; BOM не мешает; записей сессий и функций для них нет (48.7)', () => {

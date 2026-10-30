@@ -1,6 +1,6 @@
 'use strict';
 // Синхронизация с продом (этап 48): правила сверки сервера с git без SSH — три версии файла (база, HEAD, сервер), база
-// синхронизации, что не забирать (недопустимое имя пути, файл с секретом), наши доработки, ждущее удаления, совмещение (git merge-file) и папка
+// синхронизации, что вне синхронизации (syncRules), что не забирать (недопустимое имя пути, файл с секретом), наши доработки, ждущее удаления, совмещение (git merge-file) и папка
 // конфликтов, File Watchers PhpStorm и объём за раз, строки для пользователя, отметка синхронизации; blob из git и md5 его
 // вариантов переводов строк; правки рабочей копии (git status) и чтение её файла. Только правила и git; сценарии для сервера и
 // их разбор — lib/prod-ssh.js; без SSH (FTP) — lib/prod-ftp.js; подключение, скачивание, запись и коммит — prod-sync.js.
@@ -10,10 +10,10 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
-const { git, isSsh, baseFromPlan, sectionOf } = require('./deploy');
+const { git, isSsh, baseFromPlan, sectionOf, skipRules } = require('./deploy');
 const { getSection, parseTable } = require('./md');
 const { writeFilesAtomic } = require('./atomic');
-const { readDeployment } = require('./deployment');
+const { readDeployment, isExcluded } = require('./deployment');
 const { parseRules, matchRules, safePath } = require('./paths');
 const { BASE_FORBIDDEN, secretFindings } = require('../secret-scan');
 
@@ -140,10 +140,40 @@ function baseTree(cwd, b) {
   return tree;
 }
 
-// Что не забирается: бэкапы и архивы (как при первом скачивании в /kit:project-init) и файлы больше предела.
-// Маски — по имени файла, без регистра. size не число — размер неизвестен, только маски.
-const SKIP_MASKS = ['_*.back*', '*_back*.zip', '*.tar.gz*', '*.zip', '*.rar', '*.7z', '*.tar', '*.gz', '*.sql', '*.bak'].map(
-  (m) => new RegExp('^' + m.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$', 'i'));
+// Служебные файлы git (Р-83) — по имени, в любой папке. Их создаёт и ведёт kit (/kit:project-init), на сервер их обычно не
+// заливают: считай синхронизация их файлами сайта — удаляла бы наш .gitignore (на сервере его нет) или подменяла серверным.
+const GIT_FILES = ['.gitignore', '.gitattributes'];
+
+// .idea/deployment.xml проекта (нет или не разобран — без автозаливки и исключений): readDeployment из lib/deployment.js.
+const deploymentOf = (dir) => readDeployment(readText(path.join(dir, '.idea', 'deployment.xml')));
+
+// Пути, исключённые у сервера автозаливки PhpStorm (Excluded Paths сервера по умолчанию; путь от корня проекта — сам и всё
+// внутри, без регистра).
+const ideaExcluded = (dir) => deploymentOf(dir).excluded.filter(Boolean);
+
+// Что вне синхронизации (Т-4, Р-83) — одни правила по SSH и без SSH: не файлы сайта по правилам выкладки (skipRules — ALWAYS_SKIP
+// и «Не выкладывать»), служебные файлы git и — кроме «Выкладка: Claude по SSH» (Р-88) — пути Excluded Paths PhpStorm: исходники,
+// которые PhpStorm на сервер не льёт, база для них сервер не описывает. Такие пути не сверяются, не забираются, не удаляются и не
+// возвращаются к HEAD. При «Claude по SSH» Excluded Paths заливает ssh-deploy.js (он смотрит только «Не выкладывать») — их база
+// верна, и они сверяются как файлы сайта; удалить их у нас не даёт ideaKeep. → правила для matchRules (lib/paths.js).
+function syncRules(dir, info) {
+  const idea = isSsh(info) ? [] : ideaExcluded(dir).map((p) => ({ pattern: p, match: (np) => isExcluded([p], np), except: [] }));
+  return [...skipRules(info), ...parseRules(GIT_FILES), ...idea];
+}
+
+// Р-88: при «Выкладка: Claude по SSH» путь под Excluded Paths PhpStorm, которого нет на сервере, — не удаление (исходник мог
+// попасть в первый коммит и не заливаться): синхронизация его у нас не удаляет. → (путь) → не удалять; в остальных режимах —
+// всегда false (там такие пути и так вне синхронизации).
+function ideaKeep(dir, info) {
+  if (!isSsh(info)) return () => false;
+  const list = ideaExcluded(dir);
+  return (p) => isExcluded(list, p);
+}
+
+// Что не забирается: бэкапы и архивы (как при первом скачивании в /kit:project-init; М-7 — ещё *.tgz, *.bz2, *.xz, *.old,
+// *.orig) и файлы больше предела. Маски — по имени файла, без регистра. size не число — размер неизвестен, только маски.
+const SKIP_MASKS = ['_*.back*', '*_back*.zip', '*.tar.gz*', '*.zip', '*.rar', '*.7z', '*.tar', '*.gz', '*.tgz', '*.bz2', '*.xz', '*.sql', '*.bak',
+  '*.old', '*.orig'].map((m) => new RegExp('^' + m.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$', 'i'));
 
 function skipTake(rel, size) {
   const name = String(rel).split(/[\\/]/).pop();
@@ -423,7 +453,8 @@ function mergeVersions({ ours = null, base = null, theirs = null } = {}) {
 // conflicts — не совместилось само (Р-37: подробности и вопрос — строками ниже); conflictsAhead — не совместится само (--check,
 // Р-39: вопрос задаст синхронизация в основной папке). «Совпадает с git» — только если всё пусто. Без SSH (48.8): local —
 // [{ path, why }] не забранное, что лежит в рабочей копии и не в git (Р-68: разбор скачанного его не удаляет); ftp — в конце
-// одна фраза, что удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны (Р-67).
+// одна фраза, что удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны (Р-67). kept — [{ path, why }]: нет
+// на сервере, но у нас не удалено (Р-88: исключено в PhpStorm при «Claude по SSH»).
 const cleanText = (s) => String(s).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '?');
 const listOf = (items, fmt = cleanText) => items.slice(0, LIST_LIMIT).map(fmt).join(', ') +
   (items.length > LIST_LIMIT ? ' и ещё ' + (items.length - LIST_LIMIT) : '');
@@ -431,9 +462,9 @@ const listOf = (items, fmt = cleanText) => items.slice(0, LIST_LIMIT).map(fmt).j
 function summaryLine(input = {}) {
   const list = (v) => (Array.isArray(v) ? v : []);
   const { env } = input;
-  const keys = ['changed', 'added', 'removed', 'ours', 'merged', 'conflicts', 'conflictsAhead', 'skipped', 'local', 'waiting'];
+  const keys = ['changed', 'added', 'removed', 'ours', 'merged', 'conflicts', 'conflictsAhead', 'skipped', 'kept', 'local', 'waiting'];
   const all = keys.map((k) => list(input[k]));
-  const [changed, added, removed, ours, merged, conflicts, ahead, skipped, local, waiting] = all;
+  const [changed, added, removed, ours, merged, conflicts, ahead, skipped, kept, local, waiting] = all;
   const dev = env === 'дев';
   const head = '[kit] ' + (dev ? 'Синхронизация с девом: ' : 'Синхронизация с продом: ');
   const ftp = input.ftp ? ' Удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны.' : '';
@@ -445,6 +476,7 @@ function summaryLine(input = {}) {
   if (conflicts.length) parts.push(`Не совместилось само — вопрос ниже: ${listOf(conflicts)}.`);
   if (ahead.length) parts.push(`Не совместится само — вопрос задаст синхронизация в основной папке: ${listOf(ahead)}.`);
   if (skipped.length) parts.push(`Не забрано, осталось на сервере: ${listOf(skipped, why)}.`);
+  if (kept.length) parts.push(`Оставлено у нас: ${listOf(kept, why)}.`);
   if (local.length) parts.push(`Не забрано, лежит в рабочей копии, в git не идёт — удали сам, если не нужен: ${listOf(local, why)}.`);
   if (waiting.length) parts.push(`Ждёт удаления с сервера: ${listOf(waiting)}.`);
   return head + parts.join(' ') + ftp;
@@ -494,7 +526,7 @@ function watcherHits(dir, paths) {
   const none = { exts: [], hits: [] };
   if (!paths.length) return none;
   const exts = watcherExts(dir);
-  if (!exts.size || !readDeployment(readText(path.join(dir, '.idea', 'deployment.xml'))).always) return none;
+  if (!exts.size || !deploymentOf(dir).always) return none;
   const extOf = (p) => {
     const name = p.split('/').pop();
     const i = name.lastIndexOf('.');
@@ -681,6 +713,8 @@ async function secretPaths(c, s, versions) {
 // Записей сессий нет (с 48.7): синхронизация — только по просьбе пользователя; поле первой редакции читается без ошибки и при
 // записи пропадает. Элемент pending (Р-57) — { path, md5 }: md5NoCr того, что синхронизация пишет в путь (null — удаляет);
 // без md5 — неизвестно (строка первой редакции или md5 не строка и не null): в файле — строкой, путь — к HEAD, как прежде.
+// Р-85: ftp: true — элемент записал разбор скачанного по FTP (--ftp-done): файл положило скачивание, а не синхронизация — отмена
+// такой путь вне HEAD не удаляет; пометка — только вместе с md5.
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const strings = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === 'string') : []);
 const hasMd5 = (e) => Object.prototype.hasOwnProperty.call(e, 'md5');
@@ -688,7 +722,8 @@ const hasMd5 = (e) => Object.prototype.hasOwnProperty.call(e, 'md5');
 function pendingOf(v) {
   if (typeof v === 'string') return { path: v };
   if (!isObj(v) || typeof v.path !== 'string') return null;
-  return typeof v.md5 === 'string' || v.md5 === null ? { path: v.path, md5: v.md5 } : { path: v.path };
+  if (typeof v.md5 !== 'string' && v.md5 !== null) return { path: v.path };
+  return v.ftp === true ? { path: v.path, md5: v.md5, ftp: true } : { path: v.path, md5: v.md5 };
 }
 
 function cleanMark(raw) {
@@ -713,7 +748,7 @@ function writeMark(dir, mark) {
 }
 
 module.exports = {
-  ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, REGULAR, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake,
+  ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, REGULAR, GIT_FILES, deploymentOf, syncRules, ideaKeep, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake,
   oursPaths, entryDeploy, pendingDelete, inPending, pendingEntry, ignoredOf, dirtyPaths, readWork, watcherExts, mergeVersions, listOf, summaryLine, readMark,
   writeMark, hasMd5, UNKNOWN_SIZE, SKIP, readText, clean, badName, takeRule, watcherHits, bigOf, stopLines, conflictDir, md5Eol,
   catBlobs, blobHashes, blobVariants, secretPaths,

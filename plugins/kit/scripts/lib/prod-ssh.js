@@ -103,7 +103,9 @@ function findPrune(rules) {
 // строки, их md5 как есть — пачкой (xargs -0 md5sum), по порядку номеров, между KIT_H и KIT_Z, их размеры — так же пачкой
 // (find … -maxdepth 0 на пачку; М-11: и в отрезанных папках) до KIT_L. Затем find остальных обычных файлов с отрезанием —
 // «размер путь\0» в base64 до KIT_LE <код find>; rules = null — без find (md5 только по списку). Список для md5sum — во
-// временной папке mktemp -d, вне папки сайта; убирается по выходу.
+// временной папке mktemp -d, вне папки сайта; убирается по выходу. Р-86: вызовы k — каждый своей строкой на верхнем уровне,
+// поток 3 открыт exec: группу «{ …; } 3>» bash выполняет рекурсивно, глубина стека растёт с числом файлов (на Windows 4000
+// файлов роняли сценарий).
 function listScript(root, tracked, rules) {
   return [
     'cd ' + shq(root) + " || { echo 'KIT_ERR нет папки сайта'; exit 0; }",
@@ -125,9 +127,9 @@ function listScript(root, tracked, rules) {
     '    if [ -d "$d" ] && [ -r "$d" ] && [ -x "$d" ]; then echo "KIT_S $1 N"; else echo "KIT_S $1 U"; fi',
     '  fi',
     '}',
-    '{ :',
+    'exec 3> "$T/z"',
     ...tracked.map((p, i) => 'k ' + (i + 1) + ' ' + shq(p)),
-    '} 3> "$T/z"',
+    'exec 3>&-',
     'echo KIT_H',
     'if [ -s "$T/z" ]; then <"$T/z" xargs -0 md5sum | cut -c1-33; fi',
     'echo KIT_Z',

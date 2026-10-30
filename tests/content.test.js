@@ -387,17 +387,24 @@ test('навык sync: name sync, описание — «только когда
   assert.ok(fm.description.includes('/kit:sync') && fm.description.includes('синхронизируй с продом'), 'описание: команда и слова');
 });
 
-test('навык sync: prod-sync.js с timeout 300000, коды 0–4, флаги --watchers-ok, --big-ok, --ftp-done, --abort и варианты вопросов', () => {
+test('навык sync: prod-sync.js с timeout 300000, коды 0–4, флаги --watchers-ok, --big-ok, --ftp-done, --abort, --delete-ok и варианты вопросов', () => {
   const { body } = skill('sync');
   for (const s of [
-    '${CLAUDE_PLUGIN_ROOT}/scripts/prod-sync.js', '300000', '--check', '--watchers-ok', '--big-ok', '--ftp-done', '--abort', '--dirty-ok',
+    '${CLAUDE_PLUGIN_ROOT}/scripts/prod-sync.js', '300000', '--check', '--watchers-ok', '--big-ok', '--ftp-done', '--abort', '--dirty-ok', '--delete-ok',
     'AskUserQuestion', 'спроси пользователя', 'Совместить вручную', 'Оставить нашу', 'Взять версию сервера', 'Не забирать папки',
     'Повторить', 'Отложить', 'Отменить', 'Скачал', 'Не буду скачивать', 'Скачаю всё равно', 'mcp__ccd_view__show_pane', 'diff_scope',
     '.gitignore', 'worktree', 'Мэтт', 'multiSelect', 'Совмещено', '--timeout 250', '«спроси пользователя:», «…по каждому:», «…одним AskUserQuestion:»',
     'с теми же флагами', '`<папка>/server/…`', '`<папка>/base/…`',
+    // 48.11а: М-4 — при коде 0 важные строки перед итогом; Р-83 — массовое удаление; Р-84 — автозаливка при откате
+    'коммит синхронизации не отправлен', 'Удалить у нас', 'Проверить «SSH', 'Выключил',
   ]) assert.ok(body.includes(s), s);
   assert.ok(body.includes('`/kit:step-done` не нужен'), 'коммит делает скрипт, /kit:step-done не нужен — одной фразой');
-  const known = new Set(['--check', '--ftp-done', '--abort', '--watchers-ok', '--big-ok', '--dirty-ok', '--timeout']);
+  // флаги навыка — из списка флагов prod-sync.js (FLAGS и --timeout)
+  const src = fs.readFileSync(path.join(PLUGIN, 'scripts', 'prod-sync.js'), 'utf8');
+  const flags = /const FLAGS = \{([\s\S]*?)\};/.exec(src);
+  assert.ok(flags, 'FLAGS в prod-sync.js');
+  const known = new Set([...flags[1].matchAll(/'(--[a-z-]+)'/g)].map((m) => m[1]).concat('--timeout'));
+  for (const f of ['--check', '--ftp-done', '--abort', '--watchers-ok', '--big-ok', '--dirty-ok', '--delete-ok']) assert.ok(known.has(f), 'FLAGS: ' + f);
   for (const flag of body.replace('git diff --stat', '').match(/--[a-z]+(?:-[a-z]+)*/g)) assert.ok(known.has(flag), 'флаг вне списка prod-sync.js: ' + flag);
   for (const c of ['0', '1', '2', '3', '4']) assert.match(body, new RegExp('^\\| ' + c + ' \\|', 'm'), 'код ' + c);
   assert.ok(body.includes('/kit:project-init') && body.includes('/kit:step-done'), 'ссылки на соседние команды');

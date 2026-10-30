@@ -9,11 +9,21 @@
 //   node prod-sync.js --check [--timeout сек]   план синхронизации без записи (исполнитель Мэтта; сессия в worktree — всегда
 //                                               так, и сверяется основная папка проекта): файлы, индекс и отметка не меняются
 //   node prod-sync.js --abort [--timeout сек]   отмена незаконченной синхронизации (Т-10): пути pending — к HEAD (и их
-//                                               временные *.kit-tmp), кроме изменённых после остановки; pending = []; к
-//                                               серверу не подключается; наши правки и совмещённое не трогает (их в pending
-//                                               нет); в worktree — «отменять нечего»
+//                                               временные *.kit-tmp), кроме изменённых после остановки; новый файл из
+//                                               скачанного по FTP (pending с ftp, нет в HEAD) не удаляется — снимается с
+//                                               индекса и называется (Р-85); pending = []; к серверу не подключается; наши
+//                                               правки и совмещённое не трогает (их в pending нет); в worktree — «отменять
+//                                               нечего»; автозаливка PhpStorm Always — код 1 до любой записи (Р-84)
 //   --watchers-ok — забирать, хотя среди забираемого исходники File Watchers при PhpStorm Always; --big-ok — забирать больше
-//   50 МБ за раз; --abort с --check, --ftp-done, --watchers-ok, --big-ok, --dirty-ok — код 4
+//   50 МБ за раз; --delete-ok — удалять у нас, хотя на сервере нет многих файлов сайта (Р-83); --abort с --check, --ftp-done,
+//   --watchers-ok, --big-ok, --dirty-ok, --delete-ok — код 4
+// Вне синхронизации (Т-4, Р-83; по SSH и без SSH — syncRules из lib/prod.js): не файлы сайта (ALWAYS_SKIP, «Не выкладывать»),
+// служебные файлы git (.gitignore, .gitattributes в любой папке) и исключённое у сервера автозаливки PhpStorm — не сверяются, не
+// забираются, не удаляются, не восстанавливаются. Р-88: при «Выкладка: Claude по SSH» исключённое в PhpStorm заливает
+// ssh-deploy.js — оно сверяется как файлы сайта, но нет на сервере — у нас не удаляется («Оставлено у нас», один раз — named).
+// По SSH на сервере нет больше 20 файлов сайта и больше 10 % отслеживаемых — до любой записи код 1 (неверный «SSH <окружение>»
+// или переналитый сайт), без --delete-ok ничего не удаляется. Повтор с непустым pending по SSH откатывает его к HEAD — при
+// PhpStorm Always откат уехал бы на сервер: код 1 до любой записи (Р-84).
 // Без SSH (Т-9, 48.8): адрес сервера задан («Прод» / «Дев»), «SSH <окружение>» пуст — lib/prod-ftp.js.
 //   node prod-sync.js [--check] [--dirty-ok]   ничего не пишет: незаконченная синхронизация — «Повторить / Отменить»;
 //                                               правки файлов сайта в рабочей копии (Р-60) — скачивание затрёт их, «Скачаю
@@ -47,8 +57,8 @@
 // называется один раз (named). Файл забора и «наша» совмещаемого пишутся, только если на диске то, что видела сверка
 // (Р-58); иначе — «изменён во время синхронизации», каждый раз.
 // Коды: 0 — синхронизация сделана (или нечего забирать; с --check — синхронизация ничего не запишет; с --abort — отменено или
-// отменять нечего); 1 — нужен ответ пользователя (не совместилось — синхронизация сделана без этих файлов; File Watchers или
-// больше 50 МБ — ничего не записано; остановка после записи — kit-commit.js не сделал или не проверил коммит, записано не то,
+// отменять нечего); 1 — нужен ответ пользователя (не совместилось — синхронизация сделана без этих файлов; File Watchers,
+// больше 50 МБ, на сервере нет многих файлов сайта, откат при автозаливке Always — ничего не записано; остановка после записи — kit-commit.js не сделал или не проверил коммит, записано не то,
 // что скачано: «Повторить / Отменить»; записано не то, что совмещено, а забора не было — «Повторить / Отложить»; с --check —
 // есть что забрать; без SSH до скачивания — всегда: правки, список корней или незаконченная синхронизация; worktree без
 // SSH); 2 — синхронизировать не с чем, параметр неверный или на сервере нет папки сайта; 3 — нет подключения, обрыв, вышло
@@ -61,18 +71,18 @@ const { spawnSync } = require('child_process');
 const { kitInfo, serverEnv } = require('./lib/project');
 const { matchRules, safePath } = require('./lib/paths');
 const { serverSsh, runSsh, lastLine } = require('./lib/ssh');
-const { skipRules, git } = require('./lib/deploy');
+const { git } = require('./lib/deploy');
 const { projectRoot } = require('./lib/matt');
 const { writeFilesAtomic } = require('./lib/atomic');
 const { NO_ROOT, pruneRules, listScript, parseList, fetchScript, parseFetch } = require('./lib/prod-ssh');
-const { ftpRoots, ftpDirty, dirtyLines, rootLines, ftpSurvey, ftpPlan, autoUpload, ALWAYS_STOP } = require('./lib/prod-ftp');
+const { ftpRoots, ftpDirty, dirtyLines, rootLines, ftpSurvey, ftpPlan, autoUpload, alwaysStop, ALWAYS_STOP } = require('./lib/prod-ftp');
 const {
   ENTRY_LIMIT, UNKNOWN_SIZE, SKIP, REGULAR, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, oursPaths,
   pendingDelete, pendingEntry, ignoredOf, dirtyPaths, readWork, mergeVersions, listOf, summaryLine, readMark, writeMark, hasMd5, readText, clean,
-  takeRule, watcherHits, bigOf, stopLines, conflictDir, md5Eol, catBlobs, blobHashes, blobVariants, secretPaths,
+  takeRule, watcherHits, bigOf, stopLines, conflictDir, md5Eol, catBlobs, blobHashes, blobVariants, secretPaths, syncRules, ideaKeep,
 } = require('./lib/prod');
 
-const USAGE = 'Использование: node prod-sync.js [--check] [--watchers-ok] [--big-ok] [--dirty-ok] [--timeout сек] | ' +
+const USAGE = 'Использование: node prod-sync.js [--check] [--watchers-ok] [--big-ok] [--delete-ok] [--dirty-ok] [--timeout сек] | ' +
   '--ftp-done [--big-ok] [--timeout сек] | --abort [--timeout сек]';
 // Меньше предела инструмента Bash (120 с): зависший сервер — код 3, а не оборванный вызов. Срок — общий на все подключения
 // синхронизации.
@@ -95,21 +105,32 @@ const TAIL = {
     ask: 'спроси пользователя: Повторить (`prod-sync.js --ftp-done`) / ' + SKIP,
     again: 'спроси пользователя: Повторить (`prod-sync.js --ftp-done`) / Отменить (`prod-sync.js --abort`)',
     kept: 'забираемое из скачанного — в pending: «Повторить» разберёт скачанное заново, без отката к HEAD, «Отменить» вернёт ' +
-      'забираемое к HEAD; изменённые после остановки, восстановленное из HEAD и совмещённое оба ответа не тронут',
+      'забираемое отслеживаемое к HEAD, а новые файлы оставит в рабочей копии; изменённые после остановки, восстановленное из ' +
+      'HEAD и совмещённое оба ответа не тронут',
   },
 };
 const NOTHING = '[kit] Отменять нечего: незаконченной синхронизации нет';
 const SECRET_WHY = 'секрет — заливка нашей правки этого файла затрёт серверную'; // Т-11: называется один раз
 const MOVED_WHY = 'изменён во время синхронизации — повтори'; // файл поменялся до записи забора или совмещённого: каждый раз
 const UNTOUCHED_WHY = 'изменён после остановки синхронизации — не тронут'; // Р-57: отмена и повтор его не откатывают
+const LEFT_WHY = 'новый файл оставлен в рабочей копии — удали сам, если не нужен'; // Р-85: его положило скачивание по FTP
+const ROLLBACK_WHY = 'откат к git уйдёт на сервер'; // Р-84: автозаливка Always — повтор с откатом и отмена не идут
+const IDEA_KEPT_WHY = 'нет на сервере — не удалён: исключён в PhpStorm'; // Р-88: «Claude по SSH», называется один раз
 const KIND = { changed: 'изменён', added: 'добавлен', removed: 'удалён' };
+// Р-83: на сервере нет больше MASS_DELETE файлов сайта и больше MASS_SHARE отслеживаемых — до записи вопрос, а не удаление у нас
+const MASS_DELETE = 20;
+const MASS_SHARE = 0.1;
 
 const FLAGS = {
   '--check': 'check', '--ftp-done': 'ftpDone', '--abort': 'abort', '--watchers-ok': 'watchersOk', '--big-ok': 'bigOk', '--dirty-ok': 'dirtyOk',
+  '--delete-ok': 'deleteOk',
 };
+// Флаги ответа запуска по SSH — для «повторить» в вопросе (Р-84): те же, что у этого запуска, в порядке USAGE.
+const flagsOf = (o) => [['watchersOk', '--watchers-ok'], ['bigOk', '--big-ok'], ['deleteOk', '--delete-ok']]
+  .filter(([k]) => o[k]).map(([, f]) => ' ' + f).join('');
 
 function parseArgs(argv) {
-  const o = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, dirtyOk: false, timeout: DEFAULT_TIMEOUT };
+  const o = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, dirtyOk: false, deleteOk: false, timeout: DEFAULT_TIMEOUT };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (Object.prototype.hasOwnProperty.call(FLAGS, a)) o[FLAGS[a]] = true;
@@ -120,7 +141,7 @@ function parseArgs(argv) {
     } else throw new Error('неизвестный аргумент ' + a);
   }
   // Р-53: отмена ничего не сверяет и не забирает — с режимами синхронизации не сочетается
-  if (o.abort && (o.check || o.ftpDone || o.watchersOk || o.bigOk || o.dirtyOk)) throw new Error('--abort — только сам или с --timeout');
+  if (o.abort && (o.check || o.ftpDone || o.watchersOk || o.bigOk || o.dirtyOk || o.deleteOk)) throw new Error('--abort — только сам или с --timeout');
   // Р-65: разбор скачанного пишет — со сверкой без записи не сочетается
   if (o.ftpDone && o.check) throw new Error('--ftp-done — без --check: разбор скачанного записывает и коммитит');
   return o;
@@ -255,13 +276,16 @@ function diskVer(dir, rel) {
 // Откат незаконченной синхронизации (отмена и повтор, Т-12, Р-57): entries — элементы pending. К HEAD — путь, на диске у которого
 // то, что записала синхронизация (md5 из pending), или уже версия HEAD (не успела записать); элемент без md5 (первая
 // редакция) — к HEAD, как прежде. Иначе файл изменили после остановки: не трогать, только снять из индекса поставленное туда
-// kit-commit.js (git reset — рабочая копия цела), назвать. Временные файлы записи — убрать у всех (М-7). → { back, kept }.
+// kit-commit.js (git reset — рабочая копия цела), назвать. Р-85: новый файл из разбора скачанного по FTP (ftp, нет в HEAD) на
+// диске — его положило скачивание, а не синхронизация: не удалять, только снять из индекса, назвать (left; изменён после
+// остановки — kept, как прочие). Временные файлы записи — убрать у всех (М-7). → { back, kept, left }.
 async function rollback(dir, entries, argLimit) {
   const head = treeOf(dir, 'HEAD');
   const oidOf = (p) => (head.has(p) && REGULAR.has(head.get(p).mode) ? head.get(p).oid : null);
   const blobs = await blobHashes(dir, [...new Set(entries.filter(hasMd5).map((e) => oidOf(e.path)).filter(Boolean))]);
   const back = [];
   const kept = [];
+  const left = [];
   for (const e of entries) {
     if (!hasMd5(e)) {
       back.push(e.path);
@@ -270,19 +294,23 @@ async function rollback(dir, entries, argLimit) {
     const disk = diskVer(dir, e.path);
     const oid = oidOf(e.path);
     const headVer = !head.has(e.path) ? null : oid ? blobs.get(oid).noCr : undefined;
-    (disk === e.md5 || disk === headVer ? back : kept).push(e.path);
+    if (e.ftp && !head.has(e.path) && disk !== null) (disk === e.md5 ? left : kept).push(e.path);
+    else (disk === e.md5 || disk === headVer ? back : kept).push(e.path);
   }
   restore(dir, back, argLimit);
-  for (const p of kept) dropTmp(dir, p);
-  for (const part of byLength(kept, argLimit)) {
+  const unstage = [...kept, ...left];
+  for (const p of unstage) dropTmp(dir, p);
+  for (const part of byLength(unstage, argLimit)) {
     const r = git(dir, ['--literal-pathspecs', 'reset', '-q', '--', ...part]);
     if (!r.ok) throw new Error('git reset: ' + r.err);
   }
-  return { back, kept };
+  return { back, kept, left };
 }
 
 // «a.php (изменён после остановки синхронизации — не тронут), …» — для строки отмены и повтора (Р-57).
 const untouched = (paths) => listOf(paths, (p) => clean(p) + ' (' + UNTOUCHED_WHY + ')');
+// «n.php (новый файл оставлен в рабочей копии — удали сам, если не нужен), …» (Р-85).
+const leftNew = (paths) => listOf(paths, (p) => clean(p) + ' (' + LEFT_WHY + ')');
 
 // Основная папка, если dir — worktree: <проект>/.claude/worktrees/<имя> или связанный git worktree в другом месте; иначе null.
 function mainFolder(dir) {
@@ -361,7 +389,8 @@ async function download(c, items) {
 // файла нет, raw }],
 // once: [{ path, why }] — называются один раз, each: [{ path, why }] — каждый раз, waiting: [запись], findFailed,
 // judge(путь, версия сервера), work — наши правки (null — кандидатов нет), baseOid(путь) и headOid(путь) — blob базы и HEAD
-// или null, headVer(путь) — версия HEAD (md5 без \r; нет в HEAD — null) }.
+// или null, headVer(путь) — версия HEAD (md5 без \r; нет в HEAD — null), total — сколько файлов сайта сверено как отслеживаемые
+// (HEAD ∪ база; Р-83) }. Файлы сайта — не под c.rules (syncRules).
 async function survey(c) {
   const { dir } = c;
   const site = (p) => !matchRules(p, c.rules);
@@ -481,7 +510,14 @@ async function survey(c) {
     ? 'merge' : 'take');
   const once = [];
   const keep = [];
+  const ideaKept = c.ideaKeep || (() => false);
   for (const it of left) {
+    // Р-88: при «Claude по SSH» путь под Excluded Paths PhpStorm, которого нет на сервере, — не удаление и не конфликт «удалён на
+    // сервере»: у нас не удаляется, называется один раз (named)
+    if (it.gone && ideaKept(it.path)) {
+      once.push({ path: it.path, why: IDEA_KEPT_WHY, kept: true });
+      continue;
+    }
     const why = whyNot(it);
     const blocked = why ? null : blockedOnDisk(dir, it.path);
     if (why) once.push({ path: it.path, why });
@@ -490,7 +526,7 @@ async function survey(c) {
   }
   return {
     items: keep.sort(byPath), once, each, waiting: [...waiting].sort(), findFailed: list.findFailed, judge, work,
-    baseOid: (p) => baseF.get(p) || null, headOid: (p) => headF.get(p) || null, headVer: (p) => ver(headF.get(p)),
+    baseOid: (p) => baseF.get(p) || null, headOid: (p) => headF.get(p) || null, headVer: (p) => ver(headF.get(p)), total: tracked.length,
   };
 }
 
@@ -642,18 +678,24 @@ function usableHome(p) {
 }
 
 // Отмена незаконченной синхронизации (Т-10, Р-53): пути pending — к HEAD (rollback: и из индекса, и временные файлы записи),
-// изменённое после остановки — не тронуто и названо (Р-57); pending = [], named не трогается. К серверу не подключается; наших
-// правок и совмещённого в pending нет — они целы.
+// изменённое после остановки — не тронуто и названо (Р-57), новый файл из скачанного по FTP — оставлен и назван (Р-85); pending =
+// [], named не трогается. К серверу не подключается; наших правок и совмещённого в pending нет — они целы. Р-84: при автозаливке
+// PhpStorm Always возврат к HEAD уехал бы на сервер — код 1 до любой записи (и отметка не тронута).
 async function abortSync(dir, info, argLimit, out) {
   const { pending } = readMark(dir);
   if (!pending.length) {
     out.push(NOTHING);
     return { code: 0, out };
   }
-  const rules = skipRules(info);
+  const rules = syncRules(dir, info);
+  const undo = pending.filter((e) => safePath(e.path) && !matchRules(e.path, rules));
+  if (undo.length && autoUpload(dir)) {
+    out.push(...alwaysStop('prod-sync.js --abort', ROLLBACK_WHY));
+    return { code: 1, out };
+  }
   let r;
   try {
-    r = await rollback(dir, pending.filter((e) => safePath(e.path) && !matchRules(e.path, rules)), argLimit);
+    r = await rollback(dir, undo, argLimit);
     const m = readMark(dir); // заново прямо перед записью
     m.pending = [];
     writeMark(dir, m);
@@ -663,7 +705,7 @@ async function abortSync(dir, info, argLimit, out) {
   }
   const n = r.back.length;
   const said = `[kit] Синхронизация отменена: к HEAD ${plural(n, 'возвращён', 'возвращено', 'возвращено')} ${n} ${plural(n, 'файл', 'файла', 'файлов')}`;
-  out.push(r.kept.length ? said + '; ' + untouched(r.kept) : said);
+  out.push([said, ...(r.kept.length ? [untouched(r.kept)] : []), ...(r.left.length ? [leftNew(r.left)] : [])].join('; '));
   return { code: 0, out };
 }
 
@@ -692,17 +734,18 @@ const noBase = (b) => ['синхронизация не сделана: ' + b.er
 
 // Строка (Р-33, Р-37): числа — забранное коммитом синхронизации (в --check — что синхронизация запишет); наши доработки — только
 // при непустом заборе (М-4); extra — merged, conflicts или conflictsAhead. once и each читаются при вызове (их дополняют после
-// скачивания; once с local — без SSH: новое, что лежит в рабочей копии, Р-68). x: { home, env, once, each, named, waiting, ftp —
+// скачивания; once с local — без SSH: новое, что лежит в рабочей копии, Р-68; once с kept — нет на сервере, у нас не удалено,
+// Р-88). x: { home, env, once, each, named, waiting, ftp —
 // без SSH: фраза об удалённых на сервере (Р-67) }.
 const lineOf = (x) => (take, extra = {}) => {
   const kindOf = (it) => (it.kind === 'added' ? 'added' : it.gone ? 'removed' : 'changed');
   const [changed, added, removed] = ['changed', 'added', 'removed'].map((k) => take.filter((it) => kindOf(it) === k).map((it) => it.path));
   const ours = changed.length || removed.length ? oursPaths(x.home) : new Set();
   const fresh = x.once.filter((it) => !x.named.has(it.path));
-  const skipped = [...fresh.filter((it) => !it.local), ...x.each].sort(byPath);
+  const skipped = [...fresh.filter((it) => !it.local && !it.kept), ...x.each].sort(byPath);
   return summaryLine({
     env: x.env, changed, added, removed, ours: [...changed, ...removed].filter((p) => ours.has(p)).sort(), skipped,
-    local: fresh.filter((it) => it.local).sort(byPath), waiting: x.waiting, ftp: x.ftp, ...extra,
+    kept: fresh.filter((it) => it.kept).sort(byPath), local: fresh.filter((it) => it.local).sort(byPath), waiting: x.waiting, ftp: x.ftp, ...extra,
   });
 };
 
@@ -759,7 +802,7 @@ function finish(x) {
 }
 
 // Синхронизация (и отмена) для тестов и main. opts: { check, abort, ftpDone, dirtyOk, env, timeoutMs, argLimit, entryLimit,
-// watchersOk, bigOk }. → { code, out: [строки], commit? (хеш последнего коммита синхронизации) }.
+// watchersOk, bigOk, deleteOk }. → { code, out: [строки], commit? (хеш последнего коммита синхронизации) }.
 async function entry(dir, opts = {}) {
   const out = [];
   // written — пути забора уже в pending, запись началась (до отметки с pending = []); ftp — разбор скачанного (--ftp-done)
@@ -813,19 +856,23 @@ async function enter(dir, opts, out, st) {
   const timeoutMs = opts.timeoutMs || DEFAULT_TIMEOUT * 1000;
   const entryLimit = opts.entryLimit || ENTRY_LIMIT;
   const c = {
-    dir: home, info, env, target, b, check, rules: skipRules(info), secrets: info.params.list('Секреты'), deadline: Date.now() + timeoutMs,
-    timeoutSec: Math.round(timeoutMs / 1000),
+    dir: home, info, env, target, b, check, rules: syncRules(home, info), ideaKeep: ideaKeep(home, info), secrets: info.params.list('Секреты'),
+    deadline: Date.now() + timeoutMs, timeoutSec: Math.round(timeoutMs / 1000),
   };
   const saveMark = markSaver(home, stop);
 
   // Р-14 п.1: прошлая синхронизация оборвалась после записи — её пути вернуть к HEAD (к забору шли только пути без наших
-  // правок). Р-57: изменённое после остановки не трогается и дальше сверяется как наша правка.
+  // правок). Р-57: изменённое после остановки не трогается и дальше сверяется как наша правка. Р-84: при автозаливке PhpStorm
+  // Always откат уехал бы на сервер поверх правки клиента — код 1 до любой записи и до подключения.
   const pendingBefore = readMark(home).pending;
   if (!check && pendingBefore.length) {
-    const { kept } = await rollback(home, pendingBefore.filter((e) => safePath(e.path) && !matchRules(e.path, c.rules)), argLimit);
+    const undo = pendingBefore.filter((e) => safePath(e.path) && !matchRules(e.path, c.rules));
+    if (undo.length && autoUpload(home)) return stop(1, ...alwaysStop('prod-sync.js' + flagsOf(opts), ROLLBACK_WHY));
+    const { kept, left } = await rollback(home, undo, argLimit);
     const bad = saveMark((m) => { m.pending = []; });
     if (bad) return bad;
     if (kept.length) out.push('Повтор после остановки: ' + untouched(kept) + '; дальше — как наша правка');
+    if (left.length) out.push('Повтор после остановки: ' + leftNew(left));
   }
 
   // Нет папки сайта на сервере — неверный «SSH <окружение>», повтор не поможет (М-9); остальное — связь: код 3.
@@ -856,9 +903,22 @@ async function enter(dir, opts, out, st) {
     const writes = [...got.take, ...mp.merged.map((m) => ({ path: m.path, kind: 'changed', gone: false }))].sort(byPath);
     const sum = line(writes, { conflictsAhead: mp.conflicts.map((k) => k.path) });
     if (writes.length || readMark(home).pending.length) {
-      return stop(1, sum, `есть изменения без kit — синхронизация в основной папке проекта (${wt || projectRoot(dir)})`);
+      // М-5: в основной папке синхронизация — здесь же, без --check; в worktree — в основной папке
+      return stop(1, sum, wt === null ? 'есть изменения без kit — запусти синхронизацию: /kit:sync'
+        : `есть изменения без kit — синхронизация в основной папке проекта (${wt})`);
     }
     return stop(0, sum);
+  }
+
+  // Р-83 (М-1): на сервере нет многих файлов сайта — скорее «SSH <окружение>» указывает не на ту папку или сайт переналили:
+  // удалить их у нас одним коммитом без вопроса нельзя. До любой записи — вопрос; --delete-ok — удалять. Р-89: доля — от файлов
+  // сайта без оставленных в этот раз (Р-88: нет на сервере, у нас не удаляются — kept из сверки, а не только named прошлых раз),
+  // иначе сотни путей под исключённой папкой раздували бы знаменатель.
+  const gone = takeSide.filter((it) => it.gone).map((it) => it.path);
+  const total = s.total - s.once.filter((it) => it.kept).length;
+  if (!opts.deleteOk && gone.length > MASS_DELETE && gone.length > total * MASS_SHARE) {
+    return stop(1, `на сервере нет ${gone.length} из ${total} файлов сайта — проверь «${sshKey}» (/kit:project-init)`, '  например: ' + listOf(gone),
+      `спроси пользователя: Удалить у нас (\`prod-sync.js${flagsOf({ ...opts, deleteOk: true })}\`) / Проверить «${sshKey}» / ${SKIP}`);
   }
 
   // Р-40 (1): объём — по всем кандидатам (забор и совмещение), до любого скачивания; остановка по объёму — сразу и вотчеры по всем
@@ -911,7 +971,7 @@ async function ftpEnter(home, wt, info, env, opts, out, st) {
   const b = entryBase(home, info, env);
   if (b.error) return stop(4, ...noBase(b));
   out.push(`Сервер: ${env} — ${clean(info.params.get(env === 'дев' ? 'Дев' : 'Прод'))} (без SSH — по FTP)`);
-  const rules = skipRules(info);
+  const rules = syncRules(home, info);
   const argLimit = opts.argLimit || ARG_LIMIT;
   const pending = readMark(home).pending.filter((e) => safePath(e.path) && !matchRules(e.path, rules));
   const c = { dir: home, info, env, b, rules, secrets: info.params.list('Секреты'), whyNot: takeRule(info) };
@@ -949,10 +1009,10 @@ async function ftpEnter(home, wt, info, env, opts, out, st) {
   once.push(...secret.map((p) => ({ path: p, why: SECRET_WHY })), ...secretLocal.map((p) => ({ path: p, why: 'секрет', local: true })));
   each.push(...gone.map((p) => ({ path: p, why: MOVED_WHY })));
   // Р-61: до любой записи (восстановления из HEAD, удаления, совмещения) в pending — забор с md5 диска (что идёт в коммит);
-  // остановка дальше — после записи (Р-51)
+  // остановка дальше — после записи (Р-51). Р-85: с пометкой ftp — файлы положило скачивание, отмена новые из них не удаляет
   const saveMark = markSaver(home, stop);
   if (take.length || pending.length) {
-    const fail = saveMark((m) => { m.pending = take.map((it) => ({ path: it.path, md5: it.md5 })); });
+    const fail = saveMark((m) => { m.pending = take.map((it) => ({ path: it.path, md5: it.md5, ftp: true })); });
     if (fail) return fail;
     st.written = take.length > 0;
   }
@@ -981,6 +1041,7 @@ async function main(argv) {
   const dir = top.ok && top.out.trim() ? path.resolve(top.out.trim()) : cwd;
   const r = await entry(dir, {
     check: o.check, abort: o.abort, ftpDone: o.ftpDone, dirtyOk: o.dirtyOk, timeoutMs: o.timeout * 1000, watchersOk: o.watchersOk, bigOk: o.bigOk,
+    deleteOk: o.deleteOk,
   });
   console.log(r.out.join('\n'));
   return r.code;

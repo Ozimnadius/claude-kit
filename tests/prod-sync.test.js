@@ -33,9 +33,12 @@ for (const k of ['KIT_SESSION_ID', 'FAKE_SSH_OUT', 'FAKE_SSH_LOG', 'FAKE_SSH_COU
 
 const TEMPLATE = fs.readFileSync(path.join(ROOT, 'plugins', 'kit', 'skills', 'project-init', 'templates', 'gitignore-bitrix'), 'utf8');
 const GITIGNORE = '/.claude/*\n!/.claude/CLAUDE.md\n!/.claude/docs/\n!/.claude/docs/**\n';
+// Р-83 (48.11а): «Не выкладывать» без .gitignore — как у проекта после /kit:project-init с ответом «Больше ничего»: .gitignore
+// проекта есть в git, на «сервере» его нет, и синхронизация не должна его трогать. С .gitignore в «Не выкладывать» — тесты, где
+// параметр задан явно.
 const PARAMS = {
   'Режим': 'общий', 'Окружение': 'прод', 'Выкладка': 'вручную', 'Прод': 'https://alpha.example.com',
-  'План выкладки': '.claude/docs/deploy-prod.md', 'Не выкладывать': '.gitignore',
+  'План выкладки': '.claude/docs/deploy-prod.md',
 };
 // Пароль собран из частей: литерал в файле теста остановил бы проверку секретов при коммите.
 const SECRET = ['Qw3', 'rty!x9'].join('');
@@ -123,12 +126,15 @@ const listOut = ({ states = {}, hashes = [], sizes = hashes.map(() => 1), list =
   ...Object.entries(states).map(([n, s]) => `KIT_S ${n} ${s}`), 'KIT_H', ...hashes, 'KIT_Z', ...sizes.map(String), 'KIT_L',
   Buffer.from(list.map(([s, p]) => `${s} ${p}\0`).join('')).toString('base64'), `KIT_LE ${findCode}`, 'KIT_END', ''].join('\n');
 
-// .idea PhpStorm: deployment.xml (always — автозаливка Always) и watcherTasks.xml (watchers — [[расширение, включён]]).
-function idea(dir, { always = false, watchers = [] } = {}) {
+// .idea PhpStorm: deployment.xml (always — автозаливка Always, excluded — Excluded Paths сервера alpha, пути от корня проекта) и
+// watcherTasks.xml (watchers — [[расширение, включён]]).
+function idea(dir, { always = false, watchers = [], excluded = [] } = {}) {
   writeFiles(dir, {
     '.idea/deployment.xml': '<?xml version="1.0" encoding="UTF-8"?>\n<project version="4">\n  <component name="PublishConfigData"' +
       (always ? ' autoUpload="Always"' : '') + ' serverName="alpha">\n    <serverData>\n      <paths name="alpha">\n        <serverdata>\n' +
-      '          <mappings>\n            <mapping deploy="/" local="$PROJECT_DIR$" web="/" />\n          </mappings>\n        </serverdata>\n' +
+      '          <mappings>\n            <mapping deploy="/" local="$PROJECT_DIR$" web="/" />\n          </mappings>\n' +
+      (excluded.length ? '          <excludedPaths>\n' + excluded.map((p) => `            <excludedPath local="true" path="$PROJECT_DIR$/${p}" />\n`).join('') +
+        '          </excludedPaths>\n' : '') + '        </serverdata>\n' +
       '      </paths>\n    </serverData>\n  </component>\n</project>\n',
     '.idea/watcherTasks.xml': '<?xml version="1.0" encoding="UTF-8"?>\n<project version="4">\n  <component name="ProjectTasksOptions">\n' +
       watchers.map(([ext, on]) => `    <TaskOptions isEnabled="${on}">\n      <option name="fileExtension" value="${ext}" />\n` +
@@ -161,16 +167,17 @@ function conflictOf(r, rel) {
 
 // ---- Разбор и правила ---------------------------------------------------------------------------------------------------
 
-test('parseArgs: --check, --ftp-done, --abort, --watchers-ok, --big-ok, --dirty-ok, --timeout 1…600 (по умолчанию 100); неизвестное и неверное — исключение; --abort — только с --timeout (Р-53); --ftp-done — без --check (Р-65)', () => {
-  const base = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, dirtyOk: false, timeout: 100 };
+test('parseArgs: --check, --ftp-done, --abort, --watchers-ok, --big-ok, --dirty-ok, --delete-ok, --timeout 1…600 (по умолчанию 100); неизвестное и неверное — исключение; --abort — только с --timeout (Р-53); --ftp-done — без --check (Р-65)', () => {
+  const base = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, dirtyOk: false, deleteOk: false, timeout: 100 };
   assert.deepEqual(ps.parseArgs([]), base);
-  assert.deepEqual(ps.parseArgs(['--check', '--watchers-ok', '--big-ok', '--dirty-ok', '--timeout', '7']),
-    { ...base, check: true, watchersOk: true, bigOk: true, dirtyOk: true, timeout: 7 });
+  assert.deepEqual(ps.parseArgs(['--check', '--watchers-ok', '--big-ok', '--dirty-ok', '--delete-ok', '--timeout', '7']),
+    { ...base, check: true, watchersOk: true, bigOk: true, dirtyOk: true, deleteOk: true, timeout: 7 });
   assert.deepEqual(ps.parseArgs(['--ftp-done', '--watchers-ok', '--big-ok']), { ...base, ftpDone: true, watchersOk: true, bigOk: true });
+  assert.deepEqual(ps.parseArgs(['--delete-ok']), { ...base, deleteOk: true });
   assert.deepEqual(ps.parseArgs(['--abort']), { ...base, abort: true });
   assert.deepEqual(ps.parseArgs(['--timeout', '5', '--abort']), { ...base, abort: true, timeout: 5 });
   for (const bad of [['--нет'], ['x'], ['--skip'], ['--hook'], ['--timeout'], ['--timeout', '0'], ['--timeout', '601'], ['--timeout', '1.5'], ['--timeout', '-3'],
-    ['--abort', '--check'], ['--ftp-done', '--abort'], ['--abort', '--watchers-ok'], ['--big-ok', '--abort'], ['--dirty-ok', '--abort'],
+    ['--abort', '--check'], ['--ftp-done', '--abort'], ['--abort', '--watchers-ok'], ['--big-ok', '--abort'], ['--dirty-ok', '--abort'], ['--abort', '--delete-ok'],
     ['--ftp-done', '--check'], ['--check', '--ftp-done']]) {
     assert.throws(() => ps.parseArgs(bad), bad.join(' '));
   }
@@ -184,7 +191,8 @@ test('--skip и --hook — код 4 (неизвестный флаг); --abort �
     assert.ok(r.stdout.startsWith('prod-sync: неизвестный аргумент ' + args[args.length - 1]), r.stdout);
     assert.ok(r.stdout.includes('Использование: node prod-sync.js [--check]'), r.stdout);
   }
-  for (const args of [['--abort', '--check'], ['--abort', '--ftp-done'], ['--abort', '--watchers-ok'], ['--abort', '--big-ok'], ['--abort', '--dirty-ok']]) {
+  for (const args of [['--abort', '--check'], ['--abort', '--ftp-done'], ['--abort', '--watchers-ok'], ['--abort', '--big-ok'], ['--abort', '--dirty-ok'],
+    ['--abort', '--delete-ok']]) {
     const r = cli({ cwd: ftp.dir, args });
     assert.equal(r.code, 4, args.join(' '));
     assert.match(r.stdout, /^prod-sync: --abort — только сам или с --timeout/, r.stdout);
@@ -301,6 +309,14 @@ test('listScript: пути — только через shq; md5 пачкой (xa
   const h = listScript('/srv/site', ['a.php'], null);
   assert.doesNotMatch(h, /-prune/);
   assert.match(h, /xargs -0 md5sum/);
+  // Р-86: вызовы k — на верхнем уровне, каждый своей строкой, между exec 3> и exec 3>&-: группа «{ …; } 3>» растила бы глубину
+  // стека bash с числом файлов
+  const lines = s.split('\n');
+  const open = lines.indexOf('exec 3> "$T/z"');
+  const close = lines.indexOf('exec 3>&-');
+  assert.ok(open > 0 && close === open + 3, s);
+  assert.deepEqual(lines.slice(open + 1, close), ["k 1 'a b/it'\\''s.php'", "k 2 '-x.php'"]);
+  assert.ok(!lines.some((l) => /^\{|^\} 3>/.test(l)), 'без группы команд');
 });
 
 test('parseList: состояния, хеши по порядку (и с «\\» в начале), список find с размерами и переводом строки в имени; обрыв, лишний хеш, KIT_ERR', () => {
@@ -350,6 +366,19 @@ test('listScript на локальном sh: есть, нет, папка, не�
   assert.equal(list.files.get('d/f.txt'), 1);
   assert.equal(list.files.get("n/it's файл.php"), Buffer.byteLength('ф'));
   assert.deepEqual(fs.readdirSync(server).sort(), before);
+});
+
+// Р-86 (В-3): bash выполнял группу «{ …; } 3>» рекурсивно — на Windows (стек 2 МБ) 4000 файлов роняли сценарий сверки. Важно
+// число вызовов k, а не содержимое: одно содержимое (один blob) и имена без расширения — иначе на Windows половину времени теста
+// съедают первое чтение свежих .php и запись 5000 объектов git (с .php и разным содержимым — около 50 с вместо 10).
+test('Р-86: 5000 отслеживаемых файлов — сценарий сверки проходит на локальном sh, «прод совпадает с git»', { skip: !SH }, async () => {
+  const files = {};
+  for (let i = 0; i < 5000; i++) files[`d${i % 50}/${i}`] = 'x\n';
+  const { dir } = site(files);
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.equal(last(r), '[kit] Синхронизация с продом: прод совпадает с git.');
+  assert.equal(count(dir), 1);
 });
 
 // ---- Синхронизация по SSH ----------------------------------------------------------------------------------------------
@@ -600,7 +629,8 @@ test('--check и worktree: только сверка — есть что заб�
   const r = await run(dir, { check: true });
   assert.equal(r.code, 1, text(r));
   assert.match(r.out[r.out.length - 2], /изменено 1/);
-  assert.match(last(r), /^есть изменения без kit — синхронизация в основной папке проекта \(.+\)$/);
+  // М-5 (48.11а): в основной папке — «запусти синхронизацию», а не «синхронизация в основной папке» (это она и есть)
+  assert.equal(last(r), 'есть изменения без kit — запусти синхронизацию: /kit:sync');
   assert.equal(read(dir, 'a.php'), '1\n');
   assert.ok(!has(dir, '.claude/kit-prod.json'));
   assert.equal(count(dir), 1);
@@ -1656,6 +1686,8 @@ const PHPSTORM = (from) => `В PhpStorm: выдели эти папки и фа�
 const ALWAYS_OFF = 'на время синхронизации выключи автозаливку PhpStorm (Tools → Deployment → Automatic Upload): иначе возврат файлов из HEAD ' +
   'уйдёт на сервер';
 const LOCAL = 'Не забрано, лежит в рабочей копии, в git не идёт — удали сам, если не нужен: ';
+// Р-85: отмена после разбора скачанного новый файл (его нет в HEAD) не удаляет — его положило скачивание, а не синхронизация.
+const LEFT_NEW = (p) => p + ' (новый файл оставлен в рабочей копии — удали сам, если не нужен)';
 
 test('без SSH: код 1, список корней для FTP и подсказка PhpStorm; правки файлов сайта в рабочей копии — сначала предупреждение', async () => {
   const dir = ftpSite({ 'a.php': '1\n', 'local/x.php': 'x\n', 'local/sub/y.php': 'y\n', 'bitrix/templates/t.php': 't\n' },
@@ -1663,8 +1695,8 @@ test('без SSH: код 1, список корней для FTP и подска
   idea(dir);
   const r = await run(dir);
   assert.equal(r.code, 1, text(r));
-  // корни (Р-69): bitrix/ исключён .gitignore, кроме bitrix/templates/, — корень bitrix/templates/; .gitignore («Не выкладывать»)
-  // и .claude — не сайт
+  // корни (Р-69): bitrix/ исключён .gitignore, кроме bitrix/templates/, — корень bitrix/templates/; .gitignore (вне синхронизации
+  // всегда, Р-83) и .claude — не сайт
   assert.deepEqual(r.out, [FTP_SERVER, ROOTS_HEAD(3), '  a.php', '  bitrix/templates/', '  local/', PHPSTORM('Download from alpha'), DOWNLOADED]);
   assert.equal(markOf(dir), null, 'ничего не пишет');
   assert.equal(status(dir), '');
@@ -1845,7 +1877,7 @@ test('--ftp-done: скачанное под .gitignore и «Не выклады�
   assert.deepEqual(readMark(dir).named, []);
 });
 
-test('Р-72: незакоммиченная правка .gitignore («Не выкладывать») — не правка перед скачиванием; после --dirty-ok и --ftp-done цела, в выводе о ней ничего', async () => {
+test('Р-72, Р-83: незакоммиченная правка .gitignore (вне синхронизации всегда) — не правка перед скачиванием; после --dirty-ok и --ftp-done цела, в выводе о ней ничего', async () => {
   const dir = ftpSite({ 'a.php': 'a\n', 'b.php': 'b\n' });
   const edited = GITIGNORE + '/tmp-local/\n';
   writeFiles(dir, { '.gitignore': edited, 'b.php': 'b моя\n' }); // b.php — правка файла сайта: нужен --dirty-ok
@@ -1873,7 +1905,8 @@ test('Р-61: --ftp-done после остановки kit-commit.js — pending 
   assert.equal(r.code, 1, text(r));
   assert.match(text(r), /коммит синхронизации не сделан \(kit-commit\.js, код 2\)/);
   assert.equal(last(r), AGAIN_FTP);
-  assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n') }, { path: 'b.php', md5: md5('b2\n') }, { path: 'n.php', md5: md5('n\n') }]);
+  assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n'), ftp: true }, { path: 'b.php', md5: md5('b2\n'), ftp: true },
+    { path: 'n.php', md5: md5('n\n'), ftp: true }], 'Р-85: записано разбором скачанного — с пометкой ftp');
   assert.equal(read(dir, 'a.php'), '2\n');
   // обычный запуск при незаконченной синхронизации — сначала ответ на неё; ничего не пишет
   const m0 = markOf(dir);
@@ -1895,7 +1928,7 @@ test('Р-61: --ftp-done после остановки kit-commit.js — pending 
   assert.equal(last(again), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 1, удалено 0.' + FTP_NOTE);
 });
 
-test('Р-61: --abort после остановленной --ftp-done — забираемое к HEAD (скачанное отменяется), совмещённое цело', async () => {
+test('Р-61, Р-85: --abort после остановленной --ftp-done — забираемое отслеживаемое к HEAD (скачанное отменяется), новое скачанное оставлено и названо, совмещённое цело', async () => {
   const dir = ftpSite({ 'a.php': '1\n', 'm.php': FIVE });
   writeFiles(dir, { 'm.php': 'M1 наш шаг\nl2\nl3\nl4\nl5\n' });
   commit(dir, '1.1: правка m.php'); // не залито
@@ -1910,12 +1943,12 @@ test('Р-61: --abort после остановленной --ftp-done — заб
   assert.deepEqual(pendingOf(dir), ['a.php', 'n.php']);
   const a = await run(dir, { abort: true });
   assert.equal(a.code, 0, text(a));
-  assert.deepEqual(a.out, ['[kit] Синхронизация отменена: к HEAD возвращено 2 файла']);
+  assert.deepEqual(a.out, ['[kit] Синхронизация отменена: к HEAD возвращён 1 файл; ' + LEFT_NEW('n.php')]);
   assert.equal(read(dir, 'a.php'), '1\n');
-  assert.ok(!has(dir, 'n.php'));
+  assert.equal(read(dir, 'n.php'), 'n\n', 'новое скачанное синхронизация не записывала — не удаляет (Р-85)');
   assert.equal(read(dir, 'm.php'), merged, 'совмещённое не тронуто');
   assert.equal(g(dir, 'diff', '--cached', '--name-only'), '');
-  assert.equal(status(dir), ' M m.php\n');
+  assert.equal(status(dir), ' M m.php\n?? n.php\n');
   assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
   assert.equal(count(dir), 2);
 });
@@ -2068,7 +2101,7 @@ test('--ftp-done (М-5): исключение после записи pending �
   assert.match(text(r), /^синхронизация остановилась после записи: /m);
   assert.ok(r.out[r.out.length - 2].startsWith('забираемое из скачанного — в pending: «Повторить» разберёт скачанное заново'), text(r));
   assert.equal(last(r), AGAIN_FTP);
-  assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n') }]);
+  assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n'), ftp: true }]);
   assert.equal(read(dir, 'a.php'), '2\n');
   const again = await run(dir, { ftpDone: true });
   assert.equal(again.code, 0, text(again));
@@ -2117,6 +2150,244 @@ test('--ftp-done (М-5): наше уже на сервере (скачанное
 // не kit-проект…», «нет папки сайта…»), код 3 («нет подключения…», «--timeout 1…»), вотчеры и объём («больше 50 МБ за раз…»). Здесь —
 // ветки, до которых сценарии не доходят (исключение, отметка не записана, md5 записанного не совпал): слова нет во всех исходниках
 // синхронизации; и сам помощник.
+// ---- Итоговая проверка этапа 48 (48.11а): что вне синхронизации, массовое удаление, автозаливка при откате, отмена без SSH ----
+
+test('Р-83 (К-1): .gitignore не в «Не выкладывать» и нет на сервере — не удалён, не в коммите, о нём ничего; .gitattributes и .gitignore с сервера не забираются; изменённый у нас — не конфликт', { skip: !SH }, async () => {
+  const { dir } = site({ 'a.php': '1\n', 'sub/.gitattributes': '* text\n', 'sub/b.php': 'b\n' },
+    { server: { 'a.php': '2\n', 'sub/b.php': 'b\n', 'new/.gitignore': 'x\n', '.gitattributes': '* -text\n' } });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(body(dir), 'изменён: a.php');
+  assert.equal(read(dir, '.gitignore'), GITIGNORE);
+  assert.equal(read(dir, 'sub/.gitattributes'), '* text\n');
+  assert.ok(!has(dir, 'new/.gitignore') && !has(dir, '.gitattributes'), 'служебные файлы git с сервера не забираются');
+  assert.equal(status(dir), '');
+  assert.doesNotMatch(text(r), /gitignore|gitattributes/);
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0.');
+  // .gitignore изменён нашим шагом после базы и ещё правка в рабочей копии — не «изменён у нас, удалён на сервере»
+  writeFiles(dir, { '.gitignore': GITIGNORE + '/tmp/\n' });
+  commit(dir, '1.1: .gitignore');
+  writeFiles(dir, { '.gitignore': GITIGNORE + '/tmp/\n/cache/\n' });
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), '[kit] Синхронизация с продом: прод совпадает с git.');
+  assert.equal(status(dir), ' M .gitignore\n');
+  const chk = await run(dir, { check: true });
+  assert.equal(chk.code, 0, text(chk));
+  assert.doesNotMatch(text(chk), /gitignore|gitattributes/);
+});
+
+test('Р-83 (К-1): путь, исключённый у сервера автозаливки PhpStorm (Excluded Paths), нет на сервере — не тронут и не в коммите; новое под ним на сервере — не забрано', { skip: !SH }, async () => {
+  const { dir } = site({ 'a.php': '1\n', 'gulpfile.js': 'g\n', 'src/scss/s.scss': '$a: 1;\n', 'src/js/app.js': 'app\n' },
+    { gitignore: GITIGNORE + '/.idea/\n', server: { 'a.php': '2\n', 'src/js/app.js': 'app\n', 'src/scss/new.scss': '$n: 1;\n' } });
+  idea(dir, { excluded: ['gulpfile.js', 'src/scss'] });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(read(dir, 'gulpfile.js'), 'g\n');
+  assert.equal(read(dir, 'src/scss/s.scss'), '$a: 1;\n');
+  assert.ok(!has(dir, 'src/scss/new.scss'));
+  assert.equal(status(dir), '');
+  assert.doesNotMatch(text(r), /gulpfile|scss/);
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0.');
+});
+
+// Р-88 (Н-1, опыт rr1 повторной проверки): при «Claude по SSH» ssh-deploy.js заливает и пути из Excluded Paths — их база верна,
+// и вне сверки правка сервера под ними пропала бы при следующей заливке. Удалить такой путь у нас синхронизация не может.
+const IDEA_KEPT = 'нет на сервере — не удалён: исключён в PhpStorm';
+
+test('Р-88 (Н-1): «Claude по SSH», Excluded Paths PhpStorm над рабочей папкой — изменённое и новое на сервере забраны; удалённое на сервере у нас не удалено, названо один раз', { skip: !SH }, async () => {
+  const files = { 'index.php': 'i\n', 'bitrix/templates/sol/t.php': FIVE, 'bitrix/templates/sol/u.php': 'u1\n', 'bitrix/templates/sol/w.php': 'w1\n' };
+  const { dir, server } = site(files, { params: { 'Выкладка': 'Claude по SSH' }, gitignore: GITIGNORE + '/.idea/\n' });
+  idea(dir, { excluded: ['bitrix'] });
+  writeFiles(dir, { 'bitrix/templates/sol/w.php': 'w наш шаг\n' });
+  commit(dir, '1.1: правка w.php'); // не залито: база — первый коммит
+  writeFiles(server, { 'bitrix/templates/sol/t.php': 'l1\nl2\nl3\nl4\nl5 обновление\n', 'bitrix/templates/sol/v.php': 'v\n' });
+  for (const p of ['bitrix/templates/sol/u.php', 'bitrix/templates/sol/w.php']) fs.rmSync(path.join(server, p));
+  const chk = await run(dir, { check: true });
+  assert.equal(chk.code, 1, text(chk));
+  assert.match(chk.out[chk.out.length - 2], /изменено 1, добавлено 1, удалено 0\./);
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['A\tbitrix/templates/sol/v.php', 'M\tbitrix/templates/sol/t.php']);
+  assert.equal(read(dir, 'bitrix/templates/sol/t.php'), 'l1\nl2\nl3\nl4\nl5 обновление\n');
+  assert.equal(read(dir, 'bitrix/templates/sol/u.php'), 'u1\n', 'нет на сервере — не удаление');
+  assert.equal(read(dir, 'bitrix/templates/sol/w.php'), 'w наш шаг\n', 'изменён у нас, нет на сервере — не конфликт и не удаление');
+  assert.equal(status(dir), '');
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 1, удалено 0. Оставлено у нас: ' +
+    `bitrix/templates/sol/u.php (${IDEA_KEPT}), bitrix/templates/sol/w.php (${IDEA_KEPT}).`);
+  assert.deepEqual(readMark(dir).named, ['bitrix/templates/sol/u.php', 'bitrix/templates/sol/w.php']);
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), '[kit] Синхронизация с продом: прод совпадает с git.', 'названное — один раз');
+  assert.ok(has(dir, 'bitrix/templates/sol/u.php'));
+  assert.equal(count(dir), 3);
+});
+
+// Р-89 (Н-2, опыт n1-mass): оставленные пути (Р-88) у нас не удаляются — доля массового удаления считается без них, иначе сотни
+// путей под исключённой bitrix раздували бы знаменатель и неверный «SSH прод» удалял бы у нас всё остальное без вопроса.
+test('Р-89 (Н-2): «Claude по SSH», под исключённой bitrix 300 файлов, вне её 25, на сервере пусто — стоп «на сервере нет 25 из 25», ничего не записано', { skip: !SH }, async () => {
+  const inside = Array.from({ length: 300 }, (_, i) => `bitrix/templates/sol/f${i}.php`);
+  const outside = Array.from({ length: 25 }, (_, i) => `local/x${i}.php`);
+  const { dir, server } = site(Object.fromEntries([...inside, ...outside].map((p) => [p, p + '\n'])),
+    { params: { 'Выкладка': 'Claude по SSH' }, gitignore: GITIGNORE + '/.idea/\n' });
+  idea(dir, { excluded: ['bitrix'] });
+  for (const e of fs.readdirSync(server)) fs.rmSync(path.join(server, e), { recursive: true, force: true });
+  writeFiles(server, { 'other.txt': 'x\n' }); // не тот сайт
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(r.out.slice(-3), [
+    'на сервере нет 25 из 25 файлов сайта — проверь «SSH прод» (/kit:project-init)',
+    '  например: ' + [...outside].sort().slice(0, 10).join(', ') + ' и ещё 15',
+    'спроси пользователя: Удалить у нас (`prod-sync.js --delete-ok`) / Проверить «SSH прод» / Отложить',
+  ]);
+  assert.equal(count(dir), 1);
+  assert.equal(status(dir), '');
+  assert.ok(outside.every((p) => has(dir, p)), 'ничего не удалено');
+  assert.equal(markOf(dir), null, 'и отметка не тронута');
+});
+
+test('Р-83 (К-1), без SSH: .gitignore и исключённое в PhpStorm — не корни для скачивания; скачанное поверх них не забирается и не возвращается из HEAD', async () => {
+  const dir = ftpSite({ 'a.php': '1\n', 'gulpfile.js': 'g\n', 'src/scss/s.scss': '$a: 1;\n', 'src/i.php': 'i\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
+  idea(dir, { excluded: ['gulpfile.js', 'src/scss'] });
+  const list = await run(dir);
+  assert.equal(list.code, 1, text(list));
+  assert.deepEqual(list.out.slice(1, 4), [ROOTS_HEAD(2), '  a.php', '  src/i.php']);
+  // скачано: a.php изменён без нас; серверные .gitignore и gulpfile.js легли поверх наших, под src/scss — новый файл
+  writeFiles(dir, { 'a.php': '2\n', '.gitignore': GITIGNORE + '/.idea/\n# сервер\n', 'gulpfile.js': 'g сервер\n', 'src/scss/n.scss': 'n\n' });
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(status(dir), ' M .gitignore\n M gulpfile.js\n?? src/scss/n.scss\n', 'как «Не выкладывать» (Р-72): не забрано и не возвращено');
+  assert.doesNotMatch(text(r), /gitignore|gulpfile|scss/);
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0.' + FTP_NOTE);
+});
+
+test('Р-83 (М-1): на сервере нет больше 20 файлов и больше 10 % файлов сайта — код 1 до записи, примеры путей и вопрос; --delete-ok — удалены и закоммичены; 20 файлов или не больше 10 % — без вопроса', { skip: !SH }, async () => {
+  const names = Array.from({ length: 100 }, (_, i) => `f/${String(i).padStart(3, '0')}.php`);
+  const { dir, server } = site(Object.fromEntries(names.map((p) => [p, p + '\n'])));
+  for (const p of names.slice(0, 25)) fs.rmSync(path.join(server, p));
+  writeFiles(server, { 'f/050.php': 'клиент\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(r.out.slice(-3), [
+    'на сервере нет 25 из 100 файлов сайта — проверь «SSH прод» (/kit:project-init)',
+    '  например: ' + names.slice(0, 10).join(', ') + ' и ещё 15',
+    'спроси пользователя: Удалить у нас (`prod-sync.js --delete-ok`) / Проверить «SSH прод» / Отложить',
+  ]);
+  assert.equal(count(dir), 1);
+  assert.equal(status(dir), '');
+  assert.equal(read(dir, 'f/050.php'), 'f/050.php\n', 'ничего не записано');
+  assert.equal(markOf(dir), null, 'и отметка не тронута');
+  // ответ «Удалить у нас» — из командной строки
+  const ok = cli({ cwd: dir, args: ['--delete-ok'] });
+  assert.equal(ok.code, 0, ok.stdout);
+  assert.equal(ok.stdout.trim().split('\n').pop(), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 25.');
+  assert.deepEqual(changed(dir), [...names.slice(0, 25).map((p) => 'D\t' + p), 'M\tf/050.php'].sort());
+  assert.equal(status(dir), '');
+  // 20 из 75 — не больше 20: без вопроса
+  for (const p of names.slice(25, 45)) fs.rmSync(path.join(server, p));
+  const twenty = await run(dir);
+  assert.equal(twenty.code, 0, text(twenty));
+  assert.match(last(twenty), /удалено 20\.$/);
+  // 25 из 250 — не больше 10 %: без вопроса
+  const many = Array.from({ length: 250 }, (_, i) => `g/${String(i).padStart(3, '0')}.php`);
+  const big = site(Object.fromEntries(many.map((p) => [p, p + '\n'])));
+  for (const p of many.slice(0, 25)) fs.rmSync(path.join(big.server, p));
+  const tenth = await run(big.dir);
+  assert.equal(tenth.code, 0, text(tenth));
+  assert.match(last(tenth), /удалено 25\.$/);
+});
+
+const ALWAYS_ROLLBACK = 'автозаливка PhpStorm включена — откат к git уйдёт на сервер; выключи её (Tools → Deployment → Automatic Upload; ' +
+  'PhpStorm записывает настройку не сразу — File → Save All) и повтори';
+
+test('Р-84 (В-1): автозаливка PhpStorm Always и незаконченная синхронизация — повтор и --abort: код 1 до любой записи, файлы не тронуты; выключили — как прежде', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n', 'b.php': 'b\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
+  writeFiles(server, { 'a.php': '2 клиент\n', 'n.php': 'n клиент\n' });
+  hook(dir, 'pre-commit', 'exit 1');
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.equal(last(r), AGAIN);
+  assert.deepEqual(pendingOf(dir), ['a.php', 'n.php']);
+  fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
+  idea(dir, { always: true });
+  const before = status(dir);
+  const m0 = markOf(dir);
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  const unchanged = (what) => {
+    assert.equal(read(dir, 'a.php'), '2 клиент\n', what);
+    assert.equal(read(dir, 'n.php'), 'n клиент\n', what);
+    assert.equal(status(dir), before, what);
+    assert.equal(markOf(dir), m0, what);
+    assert.ok(!fs.existsSync(log), what + ': к серверу не подключались');
+    assert.equal(count(dir), 1);
+  };
+  // повтор — с теми же флагами в ответе
+  const again = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir, { bigOk: true, watchersOk: true }));
+  assert.equal(again.code, 1, text(again));
+  assert.deepEqual(again.out.slice(-2), [ALWAYS_ROLLBACK, 'спроси пользователя: Выключил — повторить (`prod-sync.js --watchers-ok --big-ok`) / Отложить']);
+  unchanged('повтор');
+  const plain = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir));
+  assert.equal(last(plain), 'спроси пользователя: Выключил — повторить (`prod-sync.js`) / Отложить');
+  unchanged('повтор без флагов');
+  const ab = await run(dir, { abort: true });
+  assert.equal(ab.code, 1, text(ab));
+  assert.deepEqual(ab.out, [ALWAYS_ROLLBACK, 'спроси пользователя: Выключил — повторить (`prod-sync.js --abort`) / Отложить']);
+  unchanged('отмена');
+  // --check при Always — сверка без записи, как прежде
+  const chk = await run(dir, { check: true });
+  assert.notEqual(last(chk), ALWAYS_ROLLBACK);
+  unchanged('--check');
+  // выключили — повтор доводит синхронизацию
+  idea(dir, { always: false });
+  const ok = await run(dir);
+  assert.equal(ok.code, 0, text(ok));
+  assert.deepEqual(changed(dir), ['A\tn.php', 'M\ta.php']);
+  assert.deepEqual(pendingOf(dir), []);
+});
+
+test('Р-85 (В-2): без SSH — --dirty-ok, наш незакоммиченный новый файл, --ftp-done, остановка коммита, --abort: файл цел и назван, отслеживаемое — к HEAD; при Always отмена — код 1', async () => {
+  const dir = ftpSite({ 'a.php': '1\n', 'b.php': 'b\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
+  writeFiles(dir, { 'n.php': 'наш новый\n' }); // не закоммичен, на сервере его нет
+  assert.equal(last(await run(dir)), DIRTY_ASK);
+  assert.equal(last(await run(dir, { dirtyOk: true })), DOWNLOADED);
+  writeFiles(dir, { 'a.php': '2\n' }); // скачано
+  hook(dir, 'pre-commit', 'exit 1');
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 1, text(r));
+  assert.equal(last(r), AGAIN_FTP);
+  assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n'), ftp: true }, { path: 'n.php', md5: md5('наш новый\n'), ftp: true }]);
+  fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
+  // автозаливка Always — и отмена без SSH: код 1, ничего не тронуто
+  idea(dir, { always: true });
+  const m0 = markOf(dir);
+  const st0 = status(dir);
+  const stopped = await run(dir, { abort: true });
+  assert.equal(stopped.code, 1, text(stopped));
+  assert.deepEqual(stopped.out, [ALWAYS_ROLLBACK, 'спроси пользователя: Выключил — повторить (`prod-sync.js --abort`) / Отложить']);
+  assert.equal(read(dir, 'a.php'), '2\n');
+  assert.equal(markOf(dir), m0);
+  assert.equal(status(dir), st0);
+  idea(dir, { always: false });
+  const a = await run(dir, { abort: true });
+  assert.equal(a.code, 0, text(a));
+  assert.deepEqual(a.out, ['[kit] Синхронизация отменена: к HEAD возвращён 1 файл; ' + LEFT_NEW('n.php')]);
+  assert.equal(read(dir, 'n.php'), 'наш новый\n', 'наш новый файл цел');
+  assert.equal(read(dir, 'a.php'), '1\n');
+  assert.equal(g(dir, 'diff', '--cached', '--name-only'), '', 'снят с индекса');
+  assert.equal(status(dir), '?? n.php\n');
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
+  // элемент без пометки (до 48.11а) — как прежде: нет в HEAD — к HEAD, то есть удаляется
+  writeFiles(dir, { 'x.php': 'x\n' });
+  writeMark(dir, { named: [], pending: [{ path: 'x.php', md5: md5('x\n') }] });
+  const old = await run(dir, { abort: true });
+  assert.deepEqual(old.out, ['[kit] Синхронизация отменена: к HEAD возвращён 1 файл']);
+  assert.ok(!has(dir, 'x.php'));
+  assert.equal(read(dir, 'n.php'), 'наш новый\n');
+});
+
 test('вывод синхронизации: ни в одной строке out нет слова «вход»', () => {
   for (const rel of ['prod-sync.js', 'lib/prod-ssh.js', 'lib/prod.js', 'lib/prod-ftp.js']) {
     const src = fs.readFileSync(path.join(ROOT, 'plugins', 'kit', 'scripts', rel), 'utf8').split('\n');
