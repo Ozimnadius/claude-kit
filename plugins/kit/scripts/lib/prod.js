@@ -14,8 +14,7 @@ const { git, isSsh, baseFromPlan, sectionOf } = require('./deploy');
 const { getSection, parseTable } = require('./md');
 const { writeFilesAtomic } = require('./atomic');
 const { readDeployment } = require('./deployment');
-const { parseRules, matchRules } = require('./paths');
-const { safePath } = require('../ssh-deploy');
+const { parseRules, matchRules, safePath } = require('./paths');
 const { BASE_FORBIDDEN, secretFindings } = require('../secret-scan');
 
 // Заголовок коммита синхронизации: по нему находятся база, «наши доработки» и файлы, не идущие на заливку.
@@ -34,6 +33,9 @@ function plural(n, one, few, many) {
   if (m10 === 1) return one;
   return m10 >= 2 && m10 <= 4 ? few : many;
 }
+
+// Начало заголовка коммитов синхронизации окружения env (entryBase, entryDeploy).
+const entryPrefix = (env) => (env === 'дев' ? 'Дев' : 'Прод') + ': изменения без kit ';
 
 // «Прод: изменения без kit на 2026-10-29 (3 файла)»; окружение «дев» — «Дев: …».
 function entrySubject(env, date, n) {
@@ -93,7 +95,7 @@ function entryBase(cwd, info, env) {
   }
   // только коммиты синхронизации своего окружения: синхронизация с девом говорит о деве, а прод мог быть любым; git log — от
   // новых к старым
-  const prefix = (env === 'дев' ? 'Дев' : 'Прод') + ': изменения без kit ';
+  const prefix = entryPrefix(env);
   const overlay = new Map();
   let entries = 0;
   for (const c of logPaths(cwd, ['^' + base])) {
@@ -180,6 +182,89 @@ function oursPaths(cwd) {
     for (const p of c.paths) out.add(p);
   }
   return out;
+}
+
+// Заливка после синхронизации (Т-13, Р-78, с 48.10). Для путей, которые после base меняли коммиты синхронизации своего окружения
+// (заголовок — как в entryBase), известное состояние сервера — версия самого нового такого коммита (как overlay в entryBase и
+// baseTree; нет файла в его дереве — на сервере его нет). Рабочая копия совпадает с ним — путь в exclude: он уже на сервере, даже
+// если changes от базы его видит. Отличается — в include: { status: 'M' } (файл есть — залить) или { status: 'D' } (нет —
+// удалить с сервера), даже если от базы разницы нет (шаг вернул файл к версии базы или удалил добавленный синхронизацией).
+// Остальные пути — как прежде, по changes. Коммиты — base..HEAD через logPaths: --no-renames (переименование — удаление и новый
+// файл), слияния и корневые коммиты пропускаются — изменения слияния лежат в коммитах веток, а что слияние поправило само, видно
+// по содержимому. Сравнение — как в changes (Р-79): отслеживаемый путь — git diff --name-only рабочей копии против дерева
+// коммита синхронизации (один вызов на коммит), с той же оглядкой на индекс при core.autocrlf и .gitattributes: CRLF на диске
+// при LF в git — та же версия, и blob с CRLF, закоммиченный до autocrlf, — тоже. Неотслеживаемый файл (версии в индексе нет) —
+// git hash-object с фильтрами пути, как его возьмёт будущий git add, против oid дерева. Файл на диске, которого git не видит
+// (игнорируемый и не отслеживаемый), и путь с переводом строки — ни в один список. Не ответил git — пустые списки: заливается
+// всё, как до 48.10. → { exclude: Set<путь>, include: [{ status, path }] }.
+function entryDeploy(cwd, base, env) {
+  const none = () => ({ exclude: new Set(), include: [] });
+  if (!base || !commitHash(cwd, base)) return none();
+  const prefix = entryPrefix(env);
+  const latest = new Map(); // путь → самый новый коммит синхронизации (git log — от новых к старым)
+  for (const c of logPaths(cwd, ['^' + base])) {
+    if (!c.subject.startsWith(prefix)) continue;
+    for (const p of c.paths) if (!latest.has(p) && !p.includes('\n')) latest.set(p, c.hash);
+  }
+  if (!latest.size) return none();
+  try {
+    const listed = (args) => {
+      const r = git(cwd, ['ls-files', '-z', ...args]);
+      if (!r.ok) throw new Error('git ls-files: ' + r.err);
+      return new Set(r.out.split('\0').filter(Boolean));
+    };
+    const tracked = listed(['--cached']);
+    const visible = listed(['--others', '--exclude-standard']); // неотслеживаемые, которые git видит
+    const isFile = (p) => {
+      try {
+        return fs.statSync(path.join(cwd, p)).isFile();
+      } catch (e) {
+        return false; // нет файла
+      }
+    };
+    const byCommit = new Map();
+    for (const [p, h] of latest) {
+      if (!byCommit.has(h)) byCommit.set(h, []);
+      byCommit.get(h).push(p);
+    }
+    const out = none();
+    const fresh = []; // неотслеживаемые файлы на диске: { path, oid на сервере или null }
+    for (const [h, paths] of byCommit) {
+      // отслеживаемые — как в changes: рабочая копия против дерева h (без pathspec — длина командной строки)
+      const d = git(cwd, ['diff', '--name-only', '--no-renames', '-z', h]);
+      if (!d.ok) return none();
+      const differ = new Set(d.out.split('\0').filter(Boolean));
+      let tree = null;
+      for (const p of paths) {
+        const file = isFile(p);
+        if (tracked.has(p)) {
+          if (differ.has(p)) out.include.push({ status: file ? 'M' : 'D', path: p });
+          else out.exclude.add(p);
+          continue;
+        }
+        if (file && !visible.has(p)) continue; // на диске, но git его не видит (игнорируемый)
+        if (!tree) tree = treeOf(cwd, h);
+        const srv = tree.has(p) ? tree.get(p).oid : null;
+        if (file) fresh.push({ path: p, srv });
+        else if (srv) out.include.push({ status: 'D', path: p });
+        else out.exclude.add(p);
+      }
+    }
+    if (fresh.length) {
+      // неотслеживаемые: версии в индексе нет — hash-object нормализует так же, как будущий git add
+      const r = spawnSync('git', ['hash-object', '--stdin-paths'],
+        { cwd, input: fresh.map((f) => f.path).join('\n') + '\n', encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+      const oids = r.status === 0 ? r.stdout.split('\n').map((s) => s.trim()).filter(Boolean) : [];
+      if (oids.length !== fresh.length) return none();
+      fresh.forEach((f, i) => {
+        if (oids[i] === f.srv) out.exclude.add(f.path);
+        else out.include.push({ status: 'M', path: f.path });
+      });
+    }
+    return out;
+  } catch (e) {
+    return none();
+  }
 }
 
 // Запись из «Удалить с сервера» → путь: без обратных кавычек, `/` вместо `\`, без ведущих `/` и `./`; папка (`/`, `/*`, `/**`
@@ -629,7 +714,7 @@ function writeMark(dir, mark) {
 
 module.exports = {
   ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, REGULAR, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake,
-  oursPaths, pendingDelete, inPending, pendingEntry, ignoredOf, dirtyPaths, readWork, watcherExts, mergeVersions, listOf, summaryLine, readMark,
+  oursPaths, entryDeploy, pendingDelete, inPending, pendingEntry, ignoredOf, dirtyPaths, readWork, watcherExts, mergeVersions, listOf, summaryLine, readMark,
   writeMark, hasMd5, UNKNOWN_SIZE, SKIP, readText, clean, badName, takeRule, watcherHits, bigOf, stopLines, conflictDir, md5Eol,
   catBlobs, blobHashes, blobVariants, secretPaths,
 };

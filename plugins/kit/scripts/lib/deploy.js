@@ -82,12 +82,23 @@ function parseNameStatusZ(out) {
 }
 
 // Изменения от базы до папки проекта: и незакоммиченное, и новые неигнорируемые файлы. Пути под правилами исключений убираются.
-function changes(cwd, base, rules) {
+// С 48.10 их считает вызывающий (ssh-deploy.js — entryDeploy из lib/prod.js; сюда lib/prod.js не берётся): include — пути
+// [{ status, path }], которые заливаются (M) или удаляются (D), даже если от базы разницы нет, — заменяют свою запись из диффа
+// или добавляются в конец; exclude — пути, которые не заливаются, убранные им — в excluded. Правила исключений — ко всем.
+function changes(cwd, base, rules, exclude = new Set(), include = []) {
   let items = parseNameStatusZ(git(cwd, ['diff', '--name-status', '--no-renames', '-z', base]).out);
   const extra = git(cwd, ['ls-files', '--others', '--exclude-standard', '-z']).out.split('\0').filter(Boolean);
   items = items.concat(extra.map((p) => ({ status: 'A', path: p })));
+  if (include.length) {
+    const inc = new Map(include.map((it) => [it.path, it]));
+    items = items.map((it) => inc.get(it.path) || it);
+    const have = new Set(items.map((it) => it.path));
+    items = items.concat(include.filter((it) => !have.has(it.path)));
+  }
   items = items.filter((it) => !matchRules(it.path, rules));
-  return { upload: items.filter((it) => it.status !== 'D'), del: items.filter((it) => it.status === 'D') };
+  const excluded = items.filter((it) => exclude.has(it.path));
+  items = items.filter((it) => !exclude.has(it.path));
+  return { upload: items.filter((it) => it.status !== 'D'), del: items.filter((it) => it.status === 'D'), excluded };
 }
 
 // Документы на сервер («Документы на сервере: да», ssh-deploy.js --docs, с 2.18.0). Записи «Не выкладывать», которые

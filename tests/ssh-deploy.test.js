@@ -351,3 +351,119 @@ test('--docs --go через локальный sh: документы запи�
   const again = await runScriptAsync('ssh-deploy.js', { cwd: dir, args: ['--docs', '--go'], env: env() });
   assert.equal(again.code, 0, again.stdout + again.stderr);
 });
+
+test('ssh-deploy.js (список): после синхронизации — файлы шага есть, файлов синхронизации нет; коммит синхронизации другого окружения не в счёт; --docs — как прежде', () => {
+  const dir = gitRepo({
+    '.claude/CLAUDE.md': paramsMd({ 'Выкладка': 'Claude по SSH', 'Окружение': 'прод', 'SSH прод': 'ok:/srv/site', 'SSH дев': 'ok:/srv/dev', 'Документы на сервере': 'да' }),
+    '.claude/.htaccess': 'Require all denied\n', '.claude/docs/progress.md': 'журнал', '.claude/docs/work/plan-a.md': 'план',
+    'a.php': '1', 'b.php': 'old', 'local/keep.php': 'k',
+  });
+  const commit = (msg) => {
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', msg);
+  };
+  // закоммиченный, но не залитый шаг
+  writeFiles(dir, { 'a.php': 'шаг', '.claude/docs/progress.md': 'журнал шага' });
+  commit('1.1: шаг');
+  // синхронизация с продом: изменённый, новый и удалённый на сервере файлы (и документ — для --docs)
+  writeFiles(dir, { 'b.php': 'сервер', 'n/новый.php': 'сервер', '.claude/docs/work/plan-a.md': 'план с сервера' });
+  fs.unlinkSync(path.join(dir, 'local', 'keep.php'));
+  commit('Прод: изменения без kit на 2026-10-30 (4 файла)');
+  // синхронизация с девом — для заливки на прод не в счёт
+  writeFiles(dir, { 'c.php': 'дев' });
+  commit('Дев: изменения без kit на 2026-10-30 (1 файл)');
+  // незакоммиченная правка поверх файла синхронизации — наша
+  writeFiles(dir, { 'n/новый.php': 'сервер и наша правка' });
+
+  const r = runScript('ssh-deploy.js', { cwd: dir, env: env() });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /Залить \(3\):\n  a\.php\n  c\.php\n  n\/новый\.php\n\nУдалить \(0\):/);
+  assert.match(r.stdout, /Не заливаю — уже на сервере, пришли синхронизацией \(2\):\n  b\.php\n  local\/keep\.php/);
+
+  const dev = runScript('ssh-deploy.js', { cwd: dir, args: ['--env', 'дев'], env: env() });
+  assert.equal(dev.code, 0, dev.stderr);
+  assert.match(dev.stdout, /Залить \(3\):\n  a\.php\n  b\.php\n  n\/новый\.php\n\nУдалить \(1\):\n  local\/keep\.php/);
+  assert.match(dev.stdout, /пришли синхронизацией \(1\):\n  c\.php/);
+
+  const docs = runScript('ssh-deploy.js', { cwd: dir, args: ['--docs'], env: env() });
+  assert.equal(docs.code, 0, docs.stderr);
+  assert.match(docs.stdout, /Документы — залить \(3\):\n  \.claude\/\.htaccess\n  \.claude\/docs\/progress\.md\n  \.claude\/docs\/work\/plan-a\.md\n/);
+  assert.doesNotMatch(docs.stdout, /синхронизацией/);
+
+  const back = runScript('ssh-deploy.js', { cwd: dir, args: ['--', 'b.php'], env: env() });
+  assert.equal(back.code, 0, back.stderr);
+  assert.match(back.stdout, /Залить \(1\):\n  b\.php/, 'откат по путям — как прежде');
+});
+
+test('ssh-deploy.js после синхронизации: шаг отверг правку сервера — залить и удалить; больше 10 файлов синхронизации — «и ещё N»', () => {
+  const files = {};
+  for (let i = 1; i <= 12; i++) files['s/f' + String(i).padStart(2, '0') + '.php'] = 'сервер ' + i;
+  const dir = project('ok:/srv/site');
+  writeFiles(dir, { ...files, 'a.php': 'v2 с сервера', 'n.php': 'с сервера' });
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', 'Прод: изменения без kit на 2026-10-30 (14 файлов)');
+  writeFiles(dir, { 'a.php': '1' });
+  fs.unlinkSync(path.join(dir, 'n.php'));
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', '1.1: отвергнуть правку сервера');
+  const r = runScript('ssh-deploy.js', { cwd: dir, env: env() });
+  assert.equal(r.code, 0, r.stderr);
+  assert.match(r.stdout, /Залить \(1\):\n  a\.php\n\nУдалить \(1\):\n  n\.php\n/);
+  assert.match(r.stdout, /пришли синхронизацией \(12\):\n(  s\/f\d\d\.php\n){10}  и ещё 2\n?$/);
+});
+
+test('--go после синхронизации через локальный sh: льются файлы шага и отвергнутая правка сервера, файлы синхронизации — нет', { skip: !SH }, async () => {
+  const server = tmpDir('kit-server-');
+  writeFiles(server, { 'a.php': '1', 'b.php': 'сервер', 'x.php': 'v2 с сервера', 'n.php': 'с сервера', 'local/keep.php': 'k' });
+  const dir = project('sh:' + shPath(server));
+  writeFiles(dir, { 'x.php': 'v1' });
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', '0.2: x.php');
+  const base = git(dir, 'rev-parse', '--short', 'HEAD').trim();
+  // синхронизация забрала b.php, x.php и n.php; затем шаг: a.php — наша правка, x.php — назад к v1, n.php — удалён
+  writeFiles(dir, { 'b.php': 'сервер', 'x.php': 'v2 с сервера', 'n.php': 'с сервера' });
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', 'Прод: изменения без kit на 2026-10-30 (3 файла)');
+  writeFiles(dir, { 'a.php': 'шаг', 'x.php': 'v1' });
+  fs.unlinkSync(path.join(dir, 'n.php'));
+  git(dir, 'add', '-A');
+  git(dir, 'commit', '-q', '-m', '1.1: шаг');
+  // b.php на сервере после синхронизации снова поменяли — заливка его не трогает
+  writeFiles(server, { 'b.php': 'сервер позже' });
+  const r = await runScriptAsync('ssh-deploy.js', { cwd: dir, args: ['--go', '--base', base], env: env() });
+  assert.equal(r.code, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /Залить \(2\):\n  a\.php\n  x\.php\n\nУдалить \(1\):\n  n\.php\n/);
+  assert.match(r.stdout, /пришли синхронизацией \(1\):\n  b\.php/);
+  assert.match(r.stdout, /Залито и сверено: 2 из 2/);
+  assert.equal(fs.readFileSync(path.join(server, 'a.php'), 'utf8'), 'шаг');
+  assert.equal(fs.readFileSync(path.join(server, 'x.php'), 'utf8'), 'v1');
+  assert.ok(!fs.existsSync(path.join(server, 'n.php')));
+  assert.equal(fs.readFileSync(path.join(server, 'b.php'), 'utf8'), 'сервер позже', 'файл синхронизации не залит');
+});
+
+test('после синхронизации: CRLF в blob, закоммиченном до core.autocrlf=input/true, git status чистый — файлы синхронизации «Не заливаю», не «Залить»', () => {
+  for (const mode of ['input', 'true']) {
+    const dir = project('ok:/srv/site');
+    writeFiles(dir, { 'x.php': 'v1\r\n', 'm.php': 'a\r\nb\n' });
+    git(dir, 'add', '-A');
+    git(dir, 'commit', '-q', '-m', '0.2: файлы с CRLF до autocrlf');
+    const base = git(dir, 'rev-parse', '--short', 'HEAD').trim();
+    // дальше — как у пользователя: core.autocrlf в настройках репозитория, git add без переопределения (как kit-commit.js)
+    git(dir, 'config', 'core.autocrlf', mode);
+    const userGit = (...args) => {
+      const r = require('child_process').spawnSync('git', ['-c', 'user.name=kit', '-c', 'user.email=kit@test.local', ...args],
+        { cwd: dir, encoding: 'utf8' });
+      assert.equal(r.status, 0, r.stderr);
+      return r.stdout;
+    };
+    writeFiles(dir, { 'x.php': 'v2\r\n', 'm.php': 'c\r\nd\n', 'n.php': 'n\r\n' });
+    userGit('add', '-A');
+    userGit('commit', '-q', '-m', 'Прод: изменения без kit на 2026-10-30 (3 файла)');
+    assert.equal(userGit('status', '--porcelain'), '', mode + ': git status чистый');
+    assert.match(userGit('cat-file', '-p', 'HEAD:x.php'), /\r\n/, mode + ': blob с CR');
+    const r = runScript('ssh-deploy.js', { cwd: dir, args: ['--base', base], env: env() });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /Залить \(0\):/, mode + ': ' + r.stdout);
+    assert.match(r.stdout, /пришли синхронизацией \(3\):\n  m\.php\n  n\.php\n  x\.php/, mode + ': ' + r.stdout);
+  }
+});

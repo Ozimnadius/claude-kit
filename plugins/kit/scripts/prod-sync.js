@@ -59,12 +59,11 @@ const path = require('path');
 const crypto = require('crypto');
 const { spawnSync } = require('child_process');
 const { kitInfo, serverEnv } = require('./lib/project');
-const { matchRules } = require('./lib/paths');
+const { matchRules, safePath } = require('./lib/paths');
 const { serverSsh, runSsh, lastLine } = require('./lib/ssh');
 const { skipRules, git } = require('./lib/deploy');
 const { projectRoot } = require('./lib/matt');
 const { writeFilesAtomic } = require('./lib/atomic');
-const { safePath } = require('./ssh-deploy');
 const { NO_ROOT, pruneRules, listScript, parseList, fetchScript, parseFetch } = require('./lib/prod-ssh');
 const { ftpRoots, ftpDirty, dirtyLines, rootLines, ftpSurvey, ftpPlan, autoUpload, ALWAYS_STOP } = require('./lib/prod-ftp');
 const {

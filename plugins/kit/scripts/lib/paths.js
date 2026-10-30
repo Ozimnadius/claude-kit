@@ -114,4 +114,11 @@ function matchRules(p, rules) {
   return null;
 }
 
-module.exports = { parseRules, matchRules, norm, repoPath };
+// Путь от корня сайта, который можно отдать оболочке сервера: не абсолютный, без «..», без управляющих символов
+// (ssh-deploy.js, синхронизация — prod-sync.js и lib/prod.js; с 48.10 — здесь, без круговой зависимости).
+function safePath(p) {
+  const s = String(p);
+  return s !== '' && !s.startsWith('/') && !/^[A-Za-z]:/.test(s) && !s.split('/').includes('..') && !/[\x00-\x1f\x7f]/.test(s);
+}
+
+module.exports = { parseRules, matchRules, norm, repoPath, safePath };

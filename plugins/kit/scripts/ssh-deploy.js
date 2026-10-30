@@ -17,7 +17,10 @@
 //                                                                                 заливки (строка «DEPLOY Файлы:»)
 // Сервер — --env, иначе «Окружение»; куда — «SSH прод» / «SSH дев» (хост:/папка). База — из плана выкладки
 // (lib/deploy.js), изменения — до папки проекта: и незакоммиченное, и новые файлы. Удаляется на сервере только то,
-// чего нет на диске (файл, убранный из git через git rm --cached, остаётся). Повтор безопасен.
+// чего нет на диске (файл, убранный из git через git rm --cached, остаётся). Повтор безопасен. Файлы, которые после базы
+// меняли коммиты синхронизации этого сервера (/kit:sync), сверяются с их версией с сервера: совпали — не заливаются (уже там),
+// отличаются — заливаются или удаляются, даже если от базы разницы нет (entryDeploy, lib/prod.js, с 48.10); --docs и пути
+// после -- — без этого.
 // Коды: 0 — залито и сверено (или нечего; с --md5 — всё совпало с сервером); 1 — часть не вышла (с --md5 — есть различия); 2 — SSH не задан или параметр неверный; с --docs —
 // «Документы на сервере» не «да» или нет .claude/.htaccess;
 // 3 — нет подключения, обрыв, вышло время; 4 — аргументы, git, недопустимый путь (на сервер ничего не ушло).
@@ -25,9 +28,10 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { kitInfo, serverEnv, docsOnServer } = require('./lib/project');
-const { matchRules } = require('./lib/paths');
+const { matchRules, safePath } = require('./lib/paths');
 const { shq, serverSsh, runSsh, lastLine } = require('./lib/ssh');
 const { skipRules, git, resolveBase, changes, docsChanges } = require('./lib/deploy');
+const { entryDeploy } = require('./lib/prod');
 
 const USAGE = 'Использование: node ssh-deploy.js [--env прод|дев] [--base <коммит>] [--timeout сек] [--docs [--all]] [--go | --md5] [-- <пути>]';
 // Меньше предела инструмента Bash (120 с): при зависании — код 3, а не обрыв вызова.
@@ -62,12 +66,6 @@ function parseArgs(argv) {
     o.timeout = Number(o.timeout);
   }
   return o;
-}
-
-// Путь от корня сайта, который можно отдать оболочке сервера: не абсолютный, без «..», без управляющих символов.
-function safePath(p) {
-  const s = String(p);
-  return s !== '' && !s.startsWith('/') && !/^[A-Za-z]:/.test(s) && !s.split('/').includes('..') && !/[\x00-\x1f\x7f]/.test(s);
 }
 
 const md5 = (buf) => crypto.createHash('md5').update(buf).digest('hex');
@@ -220,6 +218,7 @@ async function main(argv) {
   let b;
   let upload;
   let del;
+  let synced = [];
   if (o.paths) {
     // Откат шага: только названные пути, по текущему состоянию папки; исключённое из выкладки не трогаем.
     const refused = o.paths.filter((p) => !safePath(p) || matchRules(p, rules));
@@ -240,7 +239,16 @@ async function main(argv) {
       console.error('ssh-deploy: ' + b.error);
       return 4;
     }
-    ({ upload, del } = o.docs ? docsChanges(cwd, info, { base: b.base }) : changes(cwd, b.base, rules));
+    if (o.docs) ({ upload, del } = docsChanges(cwd, info, { base: b.base }));
+    else {
+      // После синхронизации (Т-13, Р-78, с 48.10): пути из коммитов синхронизации своего окружения сравниваются с их версией
+      // на сервере — совпало, не заливаем; отличается (и шаг, вернувший файл к версии базы) — заливаем или удаляем. База
+      // прежняя, чтобы наши незалитые шаги не выпали.
+      const ed = entryDeploy(cwd, b.base, env);
+      let excluded;
+      ({ upload, del, excluded } = changes(cwd, b.base, rules, ed.exclude, ed.include));
+      synced = excluded.map((it) => it.path);
+    }
   }
   const bad = [...upload, ...del].filter((it) => !safePath(it.path));
   if (bad.length) {
@@ -267,6 +275,11 @@ async function main(argv) {
     '', put + ' (' + files.length + '):', ...files.map((f) => '  ' + f.path),
     '', rm + ' (' + dels.length + '):', ...dels.map((p) => '  ' + p),
   ];
+  if (synced.length) {
+    // синхронизация могла забрать сотни файлов — в выводе первые 10
+    head.push('', 'Не заливаю — уже на сервере, пришли синхронизацией (' + synced.length + '):', ...synced.slice(0, 10).map((p) => '  ' + p));
+    if (synced.length > 10) head.push('  и ещё ' + (synced.length - 10));
+  }
   if (kept.length) head.push('', 'Не удаляю — файл есть локально (' + kept.length + '):', ...kept.map((p) => '  ' + p));
   if (skipped.length) {
     head.push('', 'Пропущено — не файл (' + skipped.length + '):', ...skipped.map((p) => '  ' + p),
