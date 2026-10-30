@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const { gitRepo, git, writeFiles, makeProject } = require('./helpers');
-const { paramsMd } = require('./fixtures');
+const { paramsMd, WORK_GITIGNORE } = require('./fixtures');
 const { kitInfo } = require('../plugins/kit/scripts/lib/project');
 const prod = require('../plugins/kit/scripts/lib/prod');
 
@@ -529,6 +529,69 @@ test('правила без SSH — в lib/prod.js (48.6): имя пути, во
   assert.ok(!fs.readFileSync(require.resolve('../plugins/kit/scripts/lib/prod'), 'utf8').includes("require('./prod-ssh')"), 'без круговой зависимости');
   assert.equal(md5Eol(Buffer.from('a\r\nb\n'), false), md5('a\nb\n'));
   assert.equal(md5Eol(Buffer.from('a\r\nb\n'), true), md5('a\r\nb\r\n'));
+});
+
+test('без SSH (48.8): summaryLine с ftp — в конце фраза, что удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны; local — «лежит в рабочей копии»; stopLines — ответ по объёму с --ftp-done', () => {
+  const NOTE = ' Удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны.';
+  assert.equal(summaryLine({ env: 'прод', ftp: true }), '[kit] Синхронизация с продом: прод совпадает с git.' + NOTE);
+  assert.equal(summaryLine({ env: 'дев', changed: ['a.php'], skipped: [{ path: 'x.zip', why: 'архив' }], ftp: true }),
+    '[kit] Синхронизация с девом: файлов без kit: изменено 1, добавлено 0, удалено 0. Не забрано, осталось на сервере: x.zip (архив).' + NOTE);
+  assert.ok(!summaryLine({ env: 'прод', changed: ['a.php'] }).includes('FTP'), 'по SSH фразы нет');
+  // Р-68: новое не забираемое лежит в рабочей копии — отдельной частью, между «не забрано» и «ждёт удаления»
+  assert.equal(summaryLine({ env: 'прод', skipped: [{ path: 'a.zip', why: 'архив' }], local: [{ path: 'd.sql', why: 'архив' }], waiting: ['w.php'], ftp: true }),
+    '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. Не забрано, осталось на сервере: a.zip (архив). ' +
+    'Не забрано, лежит в рабочей копии, в git не идёт — удали сам, если не нужен: d.sql (архив). Ждёт удаления с сервера: w.php.' + NOTE);
+  const big = bigOf([{ path: 'a.bin', size: 60 * 1024 * 1024 }], ENTRY_LIMIT);
+  assert.equal(stopLines(null, big, ENTRY_LIMIT, '--ftp-done ').pop(), 'спроси пользователя одним AskUserQuestion: по объёму — Забрать всё ' +
+    '(`prod-sync.js --ftp-done --big-ok`) / Не забирать папки (допиши их в .gitignore и повтори синхронизацию) / Отложить');
+  for (const name of ['dirtyPaths', 'readWork', 'pendingEntry']) assert.equal(typeof prod[name], 'function', name);
+  assert.deepEqual([...prod.REGULAR].sort(), ['100644', '100755']);
+});
+
+test('ftpRoots (48.8, Р-69): шаблон gitignore-bitrix с рабочими папками и «Не выкладывать: local/modules» — спуск: bitrix/ и upload/ целиком в корнях нет', () => {
+  const { ftpRoots } = require('../plugins/kit/scripts/lib/prod-ftp');
+  const tpl = fs.readFileSync(path.join(__dirname, '..', 'plugins', 'kit', 'skills', 'project-init', 'templates', 'gitignore-bitrix'), 'utf8');
+  const dir = gitRepo({
+    '.claude/CLAUDE.md': paramsMd({ ...PARAMS, 'Не выкладывать': '.gitignore, local/modules' }), '.gitignore': tpl + '\n' + WORK_GITIGNORE,
+    'index.php': '1', 'bitrix/templates/theme/a.php': '1', 'bitrix/php_interface/init.php': '1', 'local/x.php': '1', 'local/templates/t/b.php': '1',
+    'local/php_interface/init.php': '1', 'local/modules/m/inc.php': '1', 'upload/docs/d.txt': '1', 'docs/readme.md': '1', 'docs/superpowers/p.md': '1',
+  });
+  writeFiles(dir, { 'upload/forced/f.dat': '1' });
+  git(dir, 'add', '-f', 'upload/forced/f.dat'); // добавлен через -f под целиком исключённой папкой — сам корень
+  // bitrix/ дробится до рабочих папок (.gitignore с «!»), upload/ — до upload/docs/; local/ — без local/modules («Не выкладывать»);
+  // docs/ — без docs/superpowers (служебное ALWAYS_SKIP)
+  assert.deepEqual(ftpRoots(dir, kitInfo(dir)), ['bitrix/php_interface/init.php', 'bitrix/templates/theme/', 'docs/readme.md', 'index.php',
+    'local/php_interface/', 'local/templates/', 'local/x.php', 'upload/docs/', 'upload/forced/f.dat']);
+});
+
+test('ftpRoots (Р-71): локальный игнорируемый local/php_interface/dbconn.php на диске — local/ целиком в корнях нет, его соседние части есть, dbconn.php ни в один корень не попадает', () => {
+  const { ftpRoots } = require('../plugins/kit/scripts/lib/prod-ftp');
+  const files = { '.claude/CLAUDE.md': paramsMd({ ...PARAMS, 'Не выкладывать': '.gitignore' }), '.gitignore': '/local/php_interface/dbconn.php\n/cache/\n*.log\n', 'index.php': '1',
+    'local/x.php': '1', 'local/templates/t/a.php': '1', 'local/php_interface/init.php': '1', 'bitrix/templates/b.php': '1' };
+  const dir = gitRepo(files);
+  const before = ftpRoots(dir, kitInfo(dir));
+  assert.deepEqual(before, ['bitrix/', 'index.php', 'local/'], 'без локального игнорируемого — каталоги целиком');
+  // локальная настройка и прочее игнорируемое: в local/ — дробится; кеш в корне проекта и лог вне каталогов сайта корней не дробят
+  writeFiles(dir, { 'local/php_interface/dbconn.php': '<?php $DBHost = "localhost";', 'cache/x/y.dat': 'c', 'app.log': 'l' });
+  const roots = ftpRoots(dir, kitInfo(dir));
+  assert.deepEqual(roots, ['bitrix/', 'index.php', 'local/php_interface/init.php', 'local/templates/', 'local/x.php']);
+  const covered = (p) => roots.some((r) => p === r || (r.endsWith('/') && p.startsWith(r)));
+  assert.ok(!covered('local/php_interface/dbconn.php'), 'dbconn.php ни в один корень не попадает');
+  assert.ok(covered('local/php_interface/init.php') && covered('local/templates/t/a.php'), 'отслеживаемое — в корнях');
+  // целиком игнорируемая папка внутри каталога сайта (одной записью «папка/») — тоже дробит
+  writeFiles(dir, { 'bitrix/templates/node_modules/m/i.js': 'x', '.gitignore': '/local/php_interface/dbconn.php\n/cache/\n*.log\nnode_modules/\n' });
+  assert.deepEqual(ftpRoots(dir, kitInfo(dir)), ['bitrix/templates/b.php', 'index.php', 'local/php_interface/init.php', 'local/templates/', 'local/x.php']);
+});
+
+test('ftpRoots (48.8): папки с «/», по алфавиту; .claude, «Не выкладывать», ссылки — нет; lib/prod-ftp.js не берёт prod-ssh и prod-sync', () => {
+  const { ftpRoots } = require('../plugins/kit/scripts/lib/prod-ftp');
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd({ ...PARAMS, 'Не выкладывать': '.gitignore, /dist' }), '.gitignore': 'x\n', 'b.php': '1',
+    'local/a/x.php': '1', 'local/y.php': '1', 'dist/app.js': '1', 'папка с пробелом/z.php': '1', 'sub/.gitignore': 'y\n', 'a.php': '1' });
+  git(dir, 'update-index', '--add', '--cacheinfo', '120000,' + git(dir, 'hash-object', '-w', '--stdin').trim() + ',link');
+  // sub/ — только sub/.gitignore («Не выкладывать» без «/» в начале — в любой папке), dist/ — «/dist», link — ссылка
+  assert.deepEqual(ftpRoots(dir, kitInfo(dir)), ['a.php', 'b.php', 'local/', 'папка с пробелом/']);
+  const src = fs.readFileSync(require.resolve('../plugins/kit/scripts/lib/prod-ftp'), 'utf8');
+  assert.ok(!/require\('\.\/prod-ssh'\)|require\('\.\.\/prod-sync'\)/.test(src), 'без круговой зависимости и без SSH');
 });
 
 test('bigOf и stopLines (48.6): «Синхронизация остановлена, ничего не записано»; варианты «… / Отложить», флаги prod-sync.js', () => {

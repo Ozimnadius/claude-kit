@@ -1,9 +1,10 @@
 'use strict';
 // Синхронизация с продом (этап 48): правила сверки сервера с git без SSH — три версии файла (база, HEAD, сервер), база
-// синхронизации, что не забирать (и недопустимое имя пути), наши доработки, ждущее удаления, совмещение (git merge-file) и папка
+// синхронизации, что не забирать (недопустимое имя пути, файл с секретом), наши доработки, ждущее удаления, совмещение (git merge-file) и папка
 // конфликтов, File Watchers PhpStorm и объём за раз, строки для пользователя, отметка синхронизации; blob из git и md5 его
-// вариантов переводов строк. Только правила и git; сценарии для сервера и их разбор — lib/prod-ssh.js; подключение,
-// скачивание, запись и коммит — prod-sync.js. Отметка — `.claude/kit-prod.json`: читается без исключений, пишется атомарно.
+// вариантов переводов строк; правки рабочей копии (git status) и чтение её файла. Только правила и git; сценарии для сервера и
+// их разбор — lib/prod-ssh.js; без SSH (FTP) — lib/prod-ftp.js; подключение, скачивание, запись и коммит — prod-sync.js.
+// Отметка — `.claude/kit-prod.json`: читается без исключений, пишется атомарно.
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -13,7 +14,9 @@ const { git, isSsh, baseFromPlan, sectionOf } = require('./deploy');
 const { getSection, parseTable } = require('./md');
 const { writeFilesAtomic } = require('./atomic');
 const { readDeployment } = require('./deployment');
+const { parseRules, matchRules } = require('./paths');
 const { safePath } = require('../ssh-deploy');
+const { BASE_FORBIDDEN, secretFindings } = require('../secret-scan');
 
 // Заголовок коммита синхронизации: по нему находятся база, «наши доработки» и файлы, не идущие на заливку.
 const ENTRY_RE = /^(Прод|Дев): изменения без kit /;
@@ -22,6 +25,7 @@ const ENTRY_LIMIT = 50 * 1024 * 1024; // за одну синхронизаци�
 const UNKNOWN_SIZE = 1024 * 1024; // размер файла неизвестен — для объёма за раз и порций скачивания
 const MARK_FILE = '.claude/kit-prod.json';
 const LIST_LIMIT = 10;
+const REGULAR = new Set(['100644', '100755']); // ссылки (120000) и подмодули (160000) — вне сверки
 
 function plural(n, one, few, many) {
   const m100 = Math.abs(Math.trunc(n)) % 100;
@@ -223,6 +227,40 @@ function inPending(pending, rel) {
   return false;
 }
 
+// Запись «Удалить с сервера» или пути, удалённого шагом, которой отвечает rel (папка — одной записью); нет — null.
+function pendingEntry(pending, rel) {
+  if (!inPending(pending, rel)) return null;
+  return pending.has(rel) ? rel : [...pending].find((p) => p.endsWith('/') && rel.startsWith(p));
+}
+
+// Пути, которые исключает .gitignore (и info/exclude). --no-index: путь внутри подмодуля не роняет git; путь может и не
+// существовать (пробный путь корней FTP).
+function ignoredOf(dir, paths) {
+  if (!paths.length) return new Set();
+  const r = spawnSync('git', ['-c', 'core.quotepath=false', 'check-ignore', '--no-index', '-z', '--stdin'],
+    { cwd: dir, input: paths.join('\0') + '\0', encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, windowsHide: true });
+  if (r.status === 1) return new Set(); // ничего не игнорируется
+  if (r.status !== 0) throw new Error('git check-ignore: ' + String(r.stderr || r.error || '').trim());
+  return new Set(r.stdout.split('\0').filter(Boolean));
+}
+
+// Пути с незакоммиченной правкой: изменён, в индексе, удалён, неотслеживаемый (игнорируемые .gitignore — нет).
+function dirtyPaths(dir) {
+  const r = git(dir, ['--no-optional-locks', 'status', '--porcelain=v1', '-z', '-uall', '--no-renames']);
+  if (!r.ok) throw new Error('git status: ' + r.err);
+  return new Set(r.out.split('\0').filter((x) => x.length > 3).map((x) => x.slice(3)));
+}
+
+// Файл рабочей копии; нет файла (или на его месте папка, или над ним файл) — null. Другая ошибка чтения — исключение.
+function readWork(dir, rel) {
+  try {
+    return fs.readFileSync(path.join(dir, rel));
+  } catch (e) {
+    if (['ENOENT', 'ENOTDIR', 'EISDIR'].includes(e.code)) return null;
+    throw e;
+  }
+}
+
 // Расширения включённых File Watchers PhpStorm (Т-14): .idea/watcherTasks.xml, задачи <TaskOptions …> без isEnabled="false",
 // их <option name="fileExtension" value="…" /> — без точки, нижним регистром. Нет файла или не разобран — пустое множество.
 function watcherExts(dir) {
@@ -298,7 +336,9 @@ function mergeVersions({ ours = null, base = null, theirs = null } = {}) {
 // Строка для пользователя (Т-7). Массивы путей; skipped — [{ path, why }]. Числа — изменено/добавлено/удалено без kit (только
 // забранное коммитом синхронизации); merged — совмещённое с нашими незакоммиченными правками в этой синхронизации (Р-33);
 // conflicts — не совместилось само (Р-37: подробности и вопрос — строками ниже); conflictsAhead — не совместится само (--check,
-// Р-39: вопрос задаст синхронизация в основной папке). «Совпадает с git» — только если всё пусто.
+// Р-39: вопрос задаст синхронизация в основной папке). «Совпадает с git» — только если всё пусто. Без SSH (48.8): local —
+// [{ path, why }] не забранное, что лежит в рабочей копии и не в git (Р-68: разбор скачанного его не удаляет); ftp — в конце
+// одна фраза, что удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны (Р-67).
 const cleanText = (s) => String(s).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '?');
 const listOf = (items, fmt = cleanText) => items.slice(0, LIST_LIMIT).map(fmt).join(', ') +
   (items.length > LIST_LIMIT ? ' и ещё ' + (items.length - LIST_LIMIT) : '');
@@ -306,20 +346,23 @@ const listOf = (items, fmt = cleanText) => items.slice(0, LIST_LIMIT).map(fmt).j
 function summaryLine(input = {}) {
   const list = (v) => (Array.isArray(v) ? v : []);
   const { env } = input;
-  const keys = ['changed', 'added', 'removed', 'ours', 'merged', 'conflicts', 'conflictsAhead', 'skipped', 'waiting'];
+  const keys = ['changed', 'added', 'removed', 'ours', 'merged', 'conflicts', 'conflictsAhead', 'skipped', 'local', 'waiting'];
   const all = keys.map((k) => list(input[k]));
-  const [changed, added, removed, ours, merged, conflicts, ahead, skipped, waiting] = all;
+  const [changed, added, removed, ours, merged, conflicts, ahead, skipped, local, waiting] = all;
   const dev = env === 'дев';
   const head = '[kit] ' + (dev ? 'Синхронизация с девом: ' : 'Синхронизация с продом: ');
-  if (!all.some((a) => a.length)) return head + (dev ? 'дев' : 'прод') + ' совпадает с git.';
+  const ftp = input.ftp ? ' Удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны.' : '';
+  const why = (s) => cleanText(s.path) + ' (' + cleanText(s.why) + ')';
+  if (!all.some((a) => a.length)) return head + (dev ? 'дев' : 'прод') + ' совпадает с git.' + ftp;
   const parts = [`файлов без kit: изменено ${changed.length}, добавлено ${added.length}, удалено ${removed.length}.`];
   if (ours.length) parts.push(`Наши прошлые доработки среди изменённых (проверьте, не затёрты ли): ${listOf(ours)}.`);
   if (merged.length) parts.push(`Совмещено с нашими незакоммиченными правками — проверьте в панели изменений: ${listOf(merged)}.`);
   if (conflicts.length) parts.push(`Не совместилось само — вопрос ниже: ${listOf(conflicts)}.`);
   if (ahead.length) parts.push(`Не совместится само — вопрос задаст синхронизация в основной папке: ${listOf(ahead)}.`);
-  if (skipped.length) parts.push(`Не забрано, осталось на сервере: ${listOf(skipped, (s) => cleanText(s.path) + ' (' + cleanText(s.why) + ')')}.`);
+  if (skipped.length) parts.push(`Не забрано, осталось на сервере: ${listOf(skipped, why)}.`);
+  if (local.length) parts.push(`Не забрано, лежит в рабочей копии, в git не идёт — удали сам, если не нужен: ${listOf(local, why)}.`);
   if (waiting.length) parts.push(`Ждёт удаления с сервера: ${listOf(waiting)}.`);
-  return head + parts.join(' ');
+  return head + parts.join(' ') + ftp;
 }
 
 // ---- Имя пути, File Watchers и объём за раз, папка конфликтов ----------------------------------------------------------
@@ -348,6 +391,13 @@ function badName(p, win = process.platform === 'win32') {
   if (segs.some((seg) => /^ | $/.test(seg))) return true;
   if (!win) return false;
   return /[<>:"|?*]/.test(s) || segs.some((seg) => WIN_RESERVED.test(seg) || /\.$/.test(seg));
+}
+
+// Что не забирается (Р-17, Т-11) — по SSH и без SSH: недопустимое имя, запрещённое к коммиту (BASE_FORBIDDEN и «Не
+// коммитить»), архив, больше 10 МБ. → (путь, размер) → причина | null.
+function takeRule(info) {
+  const forbid = parseRules([...BASE_FORBIDDEN, ...info.params.list('Не коммитить')]);
+  return (p, size) => (badName(p) ? 'недопустимое имя' : matchRules(p, forbid) ? 'запрещён к коммиту' : skipTake(p, size));
 }
 
 // Размер для пользователя: меньше 1 МБ — в КБ (с округлением вверх), иначе в МБ до десятых, с запятой.
@@ -383,8 +433,9 @@ function bigOf(items, limit) {
   return { total, top: [...dirs].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1)).slice(0, 5) };
 }
 
-// Остановка (Р-31, Р-40): вотчеры и объём — одной остановкой, одним вопросом; последняя строка — что делать Claude.
-function stopLines(w, big, limit) {
+// Остановка (Р-31, Р-40): вотчеры и объём — одной остановкой, одним вопросом; последняя строка — что делать Claude. flags —
+// флаги режима перед ответом по объёму (без SSH — «--ftp-done », Р-62).
+function stopLines(w, big, limit, flags = '') {
   const said = [];
   const ask = [];
   if (w && w.hits.length) {
@@ -394,7 +445,7 @@ function stopLines(w, big, limit) {
   }
   if (big) {
     said.push(`Забрать за одну синхронизацию — ${mb(big.total)} (больше ${mb(limit)}); самые тяжёлые папки: ${big.top.map(([d, n]) => clean(d) + ' — ' + mb(n)).join(', ')}`);
-    ask.push('по объёму — Забрать всё (`prod-sync.js --big-ok`) / Не забирать папки (допиши их в .gitignore и повтори синхронизацию) / ' + SKIP);
+    ask.push('по объёму — Забрать всё (`prod-sync.js ' + flags + '--big-ok`) / Не забирать папки (допиши их в .gitignore и повтори синхронизацию) / ' + SKIP);
   }
   return ['Синхронизация остановлена, ничего не записано:', ...said.map((l) => '  ' + l),
     'спроси пользователя одним AskUserQuestion: ' + ask.join('; ') + (ask.length > 1 ? '; оба ответа «забирать» — флаги вместе' : '')];
@@ -524,6 +575,22 @@ async function blobVariants(dir, oids) {
   return out;
 }
 
+// Файлы с секретом (Т-11, Р-54) — по SSH и без SSH: versions — [{ path, data }] скачанного (data null — удалён на сервере, не
+// проверяется); secretFindings против HEAD-версии файла (s.headOid; нет в HEAD — все строки), с доп. шаблонами «Секреты»
+// проекта (c.secrets), как --cached у kit-commit.js. HEAD читается только для текстовых (двоичное secretFindings не
+// проверяет). → Set путей с находкой.
+async function secretPaths(c, s, versions) {
+  const texts = versions.filter((v) => v.data && !v.data.subarray(0, 8000).includes(0));
+  const heads = new Map();
+  await catBlobs(c.dir, [...new Set(texts.map((v) => s.headOid(v.path)).filter(Boolean))], (oid, buf) => heads.set(oid, Buffer.from(buf)));
+  const out = new Set();
+  for (const v of texts) {
+    const oid = s.headOid(v.path);
+    if (secretFindings(v.data, oid ? heads.get(oid) : null, v.path, c.secrets).length) out.add(v.path);
+  }
+  return out;
+}
+
 // ---- Отметка синхронизации --------------------------------------------------------------------------------------
 // Только named — уже названные в строке файлы «не забирать» (Т-11) — и pending — пути незаконченной синхронизации (Т-12).
 // Записей сессий нет (с 48.7): синхронизация — только по просьбе пользователя; поле первой редакции читается без ошибки и при
@@ -561,7 +628,8 @@ function writeMark(dir, mark) {
 }
 
 module.exports = {
-  ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake,
-  oursPaths, pendingDelete, inPending, watcherExts, mergeVersions, listOf, summaryLine, readMark, writeMark, hasMd5, UNKNOWN_SIZE, SKIP,
-  readText, clean, badName, watcherHits, bigOf, stopLines, conflictDir, md5Eol, catBlobs, blobHashes, blobVariants,
+  ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, REGULAR, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake,
+  oursPaths, pendingDelete, inPending, pendingEntry, ignoredOf, dirtyPaths, readWork, watcherExts, mergeVersions, listOf, summaryLine, readMark,
+  writeMark, hasMd5, UNKNOWN_SIZE, SKIP, readText, clean, badName, takeRule, watcherHits, bigOf, stopLines, conflictDir, md5Eol,
+  catBlobs, blobHashes, blobVariants, secretPaths,
 };

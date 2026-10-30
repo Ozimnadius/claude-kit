@@ -2,7 +2,8 @@
 // Синхронизация с продом по SSH (шаги 48.3–48.4, 48.6–48.7): prod-sync.js — сверка «сервера» (временная папка через заглушку
 // fake-ssh.js, хост sh) с git, забор изменённого без нас, коммит синхронизации через kit-commit.js, отметка .claude/kit-prod.json
 // (named и pending); наши незакоммиченные правки и совмещение, File Watchers PhpStorm и предел 50 МБ за раз; отмена --abort,
-// файлы с секретом. Сценарии сервера и их разбор — lib/prod-ssh.js, правила без SSH — lib/prod.js.
+// файлы с секретом. Сценарии сервера и их разбор — lib/prod-ssh.js, правила без SSH — lib/prod.js. Без SSH (48.8, lib/prod-ftp.js)
+// — список корней для скачивания по FTP и разбор скачанного (--ftp-done): «скачанное» тест кладёт прямо в рабочую копию.
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -160,20 +161,22 @@ function conflictOf(r, rel) {
 
 // ---- Разбор и правила ---------------------------------------------------------------------------------------------------
 
-test('parseArgs: --check, --ftp-done, --abort, --watchers-ok, --big-ok, --timeout 1…600 (по умолчанию 100); неизвестное и неверное — исключение; --abort — только с --timeout (Р-53)', () => {
-  const base = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, timeout: 100 };
+test('parseArgs: --check, --ftp-done, --abort, --watchers-ok, --big-ok, --dirty-ok, --timeout 1…600 (по умолчанию 100); неизвестное и неверное — исключение; --abort — только с --timeout (Р-53); --ftp-done — без --check (Р-65)', () => {
+  const base = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, dirtyOk: false, timeout: 100 };
   assert.deepEqual(ps.parseArgs([]), base);
-  assert.deepEqual(ps.parseArgs(['--check', '--ftp-done', '--watchers-ok', '--big-ok', '--timeout', '7']),
-    { ...base, check: true, ftpDone: true, watchersOk: true, bigOk: true, timeout: 7 });
+  assert.deepEqual(ps.parseArgs(['--check', '--watchers-ok', '--big-ok', '--dirty-ok', '--timeout', '7']),
+    { ...base, check: true, watchersOk: true, bigOk: true, dirtyOk: true, timeout: 7 });
+  assert.deepEqual(ps.parseArgs(['--ftp-done', '--watchers-ok', '--big-ok']), { ...base, ftpDone: true, watchersOk: true, bigOk: true });
   assert.deepEqual(ps.parseArgs(['--abort']), { ...base, abort: true });
   assert.deepEqual(ps.parseArgs(['--timeout', '5', '--abort']), { ...base, abort: true, timeout: 5 });
   for (const bad of [['--нет'], ['x'], ['--skip'], ['--hook'], ['--timeout'], ['--timeout', '0'], ['--timeout', '601'], ['--timeout', '1.5'], ['--timeout', '-3'],
-    ['--abort', '--check'], ['--ftp-done', '--abort'], ['--abort', '--watchers-ok'], ['--big-ok', '--abort']]) {
+    ['--abort', '--check'], ['--ftp-done', '--abort'], ['--abort', '--watchers-ok'], ['--big-ok', '--abort'], ['--dirty-ok', '--abort'],
+    ['--ftp-done', '--check'], ['--check', '--ftp-done']]) {
     assert.throws(() => ps.parseArgs(bad), bad.join(' '));
   }
 });
 
-test('--skip и --hook — код 4 (неизвестный флаг); --abort с --check и др. — код 4; --ftp-done — код 4 «в шаге 48.8»', () => {
+test('--skip и --hook — код 4 (неизвестный флаг); --abort с --check и др. — код 4; --ftp-done с --check и при заданном «SSH прод» — код 4 (Р-65)', () => {
   const ftp = site({ 'a.php': '1' }, { params: { 'SSH прод': '—' } });
   for (const args of [['--skip'], ['--hook'], ['--check', '--hook']]) {
     const r = cli({ cwd: ftp.dir, args });
@@ -181,15 +184,32 @@ test('--skip и --hook — код 4 (неизвестный флаг); --abort �
     assert.ok(r.stdout.startsWith('prod-sync: неизвестный аргумент ' + args[args.length - 1]), r.stdout);
     assert.ok(r.stdout.includes('Использование: node prod-sync.js [--check]'), r.stdout);
   }
-  for (const args of [['--abort', '--check'], ['--abort', '--ftp-done'], ['--abort', '--watchers-ok'], ['--abort', '--big-ok']]) {
+  for (const args of [['--abort', '--check'], ['--abort', '--ftp-done'], ['--abort', '--watchers-ok'], ['--abort', '--big-ok'], ['--abort', '--dirty-ok']]) {
     const r = cli({ cwd: ftp.dir, args });
     assert.equal(r.code, 4, args.join(' '));
     assert.match(r.stdout, /^prod-sync: --abort — только сам или с --timeout/, r.stdout);
   }
-  const r = cli({ cwd: ftp.dir, args: ['--ftp-done'] });
-  assert.equal(r.code, 4);
-  assert.equal(r.stdout.trim(), 'prod-sync: режим --ftp-done — в шаге 48.8');
-  assert.ok(!has(ftp.dir, '.claude/kit-prod.json'));
+  for (const args of [['--ftp-done', '--check'], ['--check', '--ftp-done']]) {
+    const r = cli({ cwd: ftp.dir, args });
+    assert.equal(r.code, 4, args.join(' '));
+    assert.match(r.stdout, /^prod-sync: --ftp-done — без --check/, r.stdout);
+  }
+  // «SSH прод» задан — синхронизация по SSH: --ftp-done — код 4, к серверу не подключается, ничего не пишет
+  const ssh = site({ 'a.php': '1\n' });
+  writeFiles(ssh.dir, { 'a.php': '2\n' });
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  const r = cli({ cwd: ssh.dir, args: ['--ftp-done'], env: { FAKE_SSH_LOG: log } });
+  assert.equal(r.code, 4, r.stdout);
+  assert.equal(r.stdout.trim(), 'есть SSH — синхронизация по SSH, без --ftp-done');
+  assert.ok(!fs.existsSync(log), 'к серверу не подключались');
+  assert.equal(count(ssh.dir), 1);
+  assert.ok(!has(ftp.dir, '.claude/kit-prod.json') && !has(ssh.dir, '.claude/kit-prod.json'));
+  // «SSH прод» задан, но неверный — тоже «есть SSH» (М-5 проверки 48.8)
+  const bad = site({ 'a.php': '1\n' }, { params: { 'SSH прод': 'alpha:~/www' } });
+  const rb = cli({ cwd: bad.dir, args: ['--ftp-done'] });
+  assert.equal(rb.code, 4, rb.stdout);
+  assert.equal(rb.stdout.trim(), 'есть SSH — синхронизация по SSH, без --ftp-done');
+  assert.ok(!has(bad.dir, '.claude/kit-prod.json'));
 });
 
 test('badName: небезопасный путь — везде; на Windows ещё <>:"|?*, CON/NUL/COM1/LPT1 (и с расширением), точка или пробел в конце части', () => {
@@ -635,7 +655,7 @@ test('worktree на ветке от старого коммита, шаг осн
   assert.match(last(own), /^есть изменения без kit — синхронизация в основной папке проекта/);
 });
 
-test('«Прод: —» и не kit-проект — код 2, файлов не пишет; «SSH прод» неверный — код 2; без SSH — код 2 «48.8»; не git — код 4; аргументы — код 4', () => {
+test('«Прод: —» и не kit-проект — код 2, файлов не пишет; «SSH прод» неверный — код 2; без SSH — код 1, список для FTP (48.8); не git — код 4; аргументы — код 4', () => {
   const plain = tmpDir('kit-prod-');
   g(plain, 'init', '-q');
   writeFiles(plain, { 'a.php': '1' });
@@ -659,8 +679,9 @@ test('«Прод: —» и не kit-проект — код 2, файлов не
 
   const ftp = site({ 'a.php': '1' }, { params: { 'SSH прод': '—' } });
   r = cli({ cwd: ftp.dir });
-  assert.equal(r.code, 2);
-  assert.equal(r.stdout.trim(), 'без SSH: синхронизация по FTP — шаг 48.8');
+  assert.equal(r.code, 1, r.stdout);
+  assert.equal(r.stdout.trim().split('\n').pop(), 'спроси пользователя: Скачал (`prod-sync.js --ftp-done`) / Не буду скачивать');
+  assert.ok(!has(ftp.dir, '.claude/kit-prod.json'));
 
   const nogit = writeFiles(tmpDir('kit-prod-'), { '.claude/CLAUDE.md': paramsMd({ ...PARAMS, 'SSH прод': 'sh:/srv/site' }), 'a.php': '1' });
   r = cli({ cwd: nogit });
@@ -1617,6 +1638,478 @@ test('М-3, М-2: md5 записанного не сошёлся — код 1; �
   assert.deepEqual(pendingOf(dir), []);
 });
 
+// ---- Без SSH: FTP (48.8) -----------------------------------------------------------------------------------------------
+// Адрес сервера задан («Прод»), «SSH прод» пуст. Сервер не нужен: «скачанное по FTP» тест кладёт прямо в рабочую копию.
+const ftpSite = (files, opts = {}) => site(files, { ...opts, params: { 'SSH прод': '—', ...(opts.params || {}) } }).dir;
+const FTP_NOTE = ' Удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны.';
+const SAME_FTP = '[kit] Синхронизация с продом: прод совпадает с git.' + FTP_NOTE;
+const FTP_SERVER = 'Сервер: прод — https://alpha.example.com (без SSH — по FTP)';
+const DOWNLOADED = 'спроси пользователя: Скачал (`prod-sync.js --ftp-done`) / Не буду скачивать';
+const DIRTY_ASK = 'спроси пользователя: Скачаю всё равно (`prod-sync.js --dirty-ok`) / Отложить';
+const AGAIN_FTP = 'спроси пользователя: Повторить (`prod-sync.js --ftp-done`) / Отменить (`prod-sync.js --abort`)';
+const ROOTS_HEAD = (n) => `Скачай с сервера по FTP — в папку проекта, с заменой файлов (${n}):`;
+const DIRTY_HEAD = (n) => `В рабочей копии незакоммиченные правки файлов сайта (${n}):`;
+const DIRTY_WHY = 'скачивание затрёт незакоммиченные правки, а правки файлов, которые скачивание не перезапишет, уйдут в коммит синхронизации как ' +
+  'изменения сервера';
+const PHPSTORM = (from) => `В PhpStorm: выдели эти папки и файлы в дереве проекта → Tools → Deployment → ${from}. Удалённые на сервере файлы и новые ` +
+  'вне перечисленных папок так не видны.';
+const ALWAYS_OFF = 'на время синхронизации выключи автозаливку PhpStorm (Tools → Deployment → Automatic Upload): иначе возврат файлов из HEAD ' +
+  'уйдёт на сервер';
+const LOCAL = 'Не забрано, лежит в рабочей копии, в git не идёт — удали сам, если не нужен: ';
+
+test('без SSH: код 1, список корней для FTP и подсказка PhpStorm; правки файлов сайта в рабочей копии — сначала предупреждение', async () => {
+  const dir = ftpSite({ 'a.php': '1\n', 'local/x.php': 'x\n', 'local/sub/y.php': 'y\n', 'bitrix/templates/t.php': 't\n' },
+    { gitignore: GITIGNORE + '/.idea/\n/bitrix/*\n!/bitrix/templates/\n' });
+  idea(dir);
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  // корни (Р-69): bitrix/ исключён .gitignore, кроме bitrix/templates/, — корень bitrix/templates/; .gitignore («Не выкладывать»)
+  // и .claude — не сайт
+  assert.deepEqual(r.out, [FTP_SERVER, ROOTS_HEAD(3), '  a.php', '  bitrix/templates/', '  local/', PHPSTORM('Download from alpha'), DOWNLOADED]);
+  assert.equal(markOf(dir), null, 'ничего не пишет');
+  assert.equal(status(dir), '');
+  // --check без SSH — как обычный запуск (Р-65)
+  const checked = await run(dir, { check: true });
+  assert.equal(checked.code, 1, text(checked));
+  assert.deepEqual(checked.out, r.out);
+  // нет .idea/deployment.xml — «с сервера автозаливки»
+  fs.rmSync(path.join(dir, '.idea'), { recursive: true });
+  assert.ok((await run(dir)).out.includes(PHPSTORM('Download from… — с сервера автозаливки')));
+
+  // правки файлов сайта (Р-60): изменён, удалён, новый; отличие только в \r, игнорируемое и не сайт — не правки
+  writeFiles(dir, { 'a.php': '2\n', 'n.php': 'n\n', 'local/sub/y.php': 'y\r\n', '.idea/x.xml': '<x/>', '.claude/docs/n.md': 'n' });
+  fs.rmSync(path.join(dir, 'local', 'x.php'));
+  const before = status(dir);
+  const d = await run(dir);
+  assert.equal(d.code, 1, text(d));
+  assert.deepEqual(d.out, [FTP_SERVER, DIRTY_HEAD(3), '  a.php', '  local/x.php', '  n.php', DIRTY_WHY, DIRTY_ASK]);
+  assert.equal(status(dir), before);
+  assert.equal(markOf(dir), null);
+  // «Скачаю всё равно» — список корней несмотря на правки; из командной строки — флаг --dirty-ok
+  const ok = await run(dir, { dirtyOk: true });
+  assert.equal(ok.code, 1, text(ok));
+  assert.deepEqual(ok.out, [FTP_SERVER, ROOTS_HEAD(3), '  a.php', '  bitrix/templates/', '  local/', PHPSTORM('Download from… — с сервера автозаливки'), DOWNLOADED]);
+  const viaCli = cli({ cwd: dir, args: ['--dirty-ok'] });
+  assert.equal(viaCli.code, 1, viaCli.stdout);
+  assert.equal(viaCli.stdout.trim().split('\n').pop(), DOWNLOADED);
+  assert.equal(status(dir), before);
+});
+
+test('без SSH: корни — все, по одному в строке, без «и ещё N» (Р-73); правок больше 30 — первые 30 и «и ещё N»', async () => {
+  const names = Array.from({ length: 36 }, (_, i) => `d${String(i).padStart(2, '0')}`);
+  const dir = ftpSite(Object.fromEntries(names.map((d) => [d + '/f.php', 'f\n'])));
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.equal(r.out[1], ROOTS_HEAD(36));
+  assert.deepEqual(r.out.slice(2, 38), names.map((d) => '  ' + d + '/'), 'все 36 корней');
+  assert.ok(!r.out.some((l) => /и ещё/.test(l)), text(r));
+  assert.equal(last(r), DOWNLOADED);
+  writeFiles(dir, Object.fromEntries(Array.from({ length: 32 }, (_, i) => [`n${String(i).padStart(2, '0')}.php`, 'n\n'])));
+  const d = await run(dir);
+  assert.equal(d.code, 1, text(d));
+  assert.equal(d.out[1], DIRTY_HEAD(32));
+  assert.equal(d.out[31], '  n29.php');
+  assert.equal(d.out[32], '  и ещё 2');
+  assert.equal(last(d), DIRTY_ASK);
+});
+
+test('--ftp-done: изменённое и добавленное без нас — в коммите синхронизации; наше незалитое, вернувшееся к базе, — восстановлено из HEAD', async () => {
+  const dir = ftpSite({ 'a.php': '1\n', 'b.php': 'b\n', 'c.php': 'c\n', 'd.php': 'd\n' });
+  writeFiles(dir, { 'b.php': 'b наш шаг\n', 'd.php': 'd наш шаг\n' });
+  commit(dir, '1.1: правка b.php и d.php'); // не залито: база — первый коммит
+  // скачано: a.php изменён без нас, new/n.php добавлен, b.php — версия базы поверх нашего незалитого, d.php — наш шаг уже на
+  // сервере (скачанное = HEAD); c.php удалён на сервере — по FTP этого не видно (локальный файл остался)
+  writeFiles(dir, { 'a.php': '2\n', 'new/n.php': 'n\n', 'b.php': 'b\n', 'd.php': 'd наш шаг\n' });
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 0, text(r));
+  assert.equal(count(dir), 3);
+  assert.match(subject(dir), ENTRY_RE);
+  assert.match(subject(dir), /^Прод: изменения без kit на \d{4}-\d{2}-\d{2} \(2 файла\)$/);
+  assert.equal(body(dir), 'изменён: a.php\nдобавлен: new/n.php');
+  assert.deepEqual(changed(dir), ['A\tnew/n.php', 'M\ta.php']);
+  assert.equal(read(dir, 'b.php'), 'b наш шаг\n', 'наше незалитое — из HEAD');
+  assert.equal(read(dir, 'c.php'), 'c\n');
+  assert.equal(status(dir), '');
+  assert.equal(r.out[0], FTP_SERVER);
+  assert.match(r.out[1], /^База: [0-9a-f]{7,} \(первый коммит репозитория\)$/);
+  assert.ok(r.out.includes('Восстановлено из HEAD — скачанное вернуло к базе наше незалитое: b.php'), text(r));
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 1, удалено 0.' + FTP_NOTE);
+  assert.equal(r.commit, g(dir, 'rev-parse', 'HEAD').trim());
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
+  // повтор без нового скачивания — забирать нечего; из командной строки — то же
+  const again = await run(dir, { ftpDone: true });
+  assert.equal(again.code, 0, text(again));
+  assert.equal(count(dir), 3);
+  assert.equal(last(again), SAME_FTP);
+  const c = cli({ cwd: dir, args: ['--ftp-done'] });
+  assert.equal(c.code, 0, c.stdout);
+  assert.equal(c.stdout.trim().split('\n').pop(), SAME_FTP);
+});
+
+test('--ftp-done: менялось и у нас, и на сервере — совмещено в рабочую копию, в коммите нет; конфликт — рабочая копия = HEAD, версия сервера во временной папке, код 1', async () => {
+  const dir = ftpSite({ 'm.php': FIVE, 'k.php': FIVE, 'b.php': 'b\n' });
+  const mine = { 'm.php': 'M1 наш шаг\nl2\nl3\nl4\nl5\n', 'k.php': 'наш шаг\nl2\nl3\nl4\nl5\n' };
+  writeFiles(dir, mine);
+  commit(dir, '1.1: правки m.php и k.php'); // не залито
+  writeFiles(dir, { 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n', 'k.php': 'сервер\nl2\nl3\nl4\nl5\n', 'b.php': 'b2\n' });
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 1, text(r));
+  assert.equal(count(dir), 3);
+  assert.deepEqual(changed(dir), ['M\tb.php']);
+  assert.equal(read(dir, 'm.php'), 'M1 наш шаг\nl2\nl3\nl4\nM5 сервер\n', 'наша — HEAD, их — скачанное');
+  assert.equal(g(dir, 'show', 'HEAD:m.php'), mine['m.php'], 'совмещённое — не в коммите');
+  assert.equal(read(dir, 'k.php'), mine['k.php'], 'конфликт — рабочая копия = HEAD');
+  assert.equal(status(dir), ' M m.php\n');
+  const k = conflictOf(r, 'k.php');
+  assert.equal(k.why, 'правки пересекаются');
+  assert.equal(k.ours, path.join(dir, 'k.php'));
+  assert.equal(fs.readFileSync(k.server, 'utf8'), 'сервер\nl2\nl3\nl4\nl5\n');
+  assert.equal(fs.readFileSync(k.base, 'utf8'), FIVE);
+  assert.ok(!k.server.startsWith(dir));
+  assert.ok(path.basename(path.dirname(path.dirname(k.server))).startsWith(conflictTag(dir)));
+  assert.ok(r.out.includes('Не совместилось само — рабочая копия этих файлов — как в HEAD (1):'), text(r));
+  assert.equal(summaryOf(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. ' + MERGED + 'm.php. ' +
+    'Не совместилось само — вопрос ниже: k.php.' + FTP_NOTE);
+  assert.match(last(r), /^синхронизация сделана, кроме этих файлов; спроси пользователя по каждому: Совместить вручную \(.+\) \/ Оставить нашу \(.+\) \/ Взять версию сервера \(.+\)$/);
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
+});
+
+test('--ftp-done: скачанные архив, файл больше 10 МБ и файл с секретом не в коммите — отслеживаемые из HEAD, новые лежат в рабочей копии (Р-68), названы', async () => {
+  const dir = ftpSite({ 'a.php': 'a\n', 'cfg.php': '<?php\n', 'files/big.dat': 'small\n', 'old.zip': 'PK0' });
+  const big = Buffer.alloc(FILE_LIMIT + 1, 120);
+  const downloaded = { 'a.php': 'a2\n', 'cfg.php': secretPhp(), 'files/big.dat': big, 'old.zip': 'PK1', 'backup.zip': 'PK', 'new.php': secretPhp(),
+    'media/huge.bin': big, 'ok.php': 'ok\n' };
+  writeFiles(dir, downloaded);
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['A\tok.php', 'M\ta.php']);
+  assert.equal(read(dir, 'cfg.php'), '<?php\n');
+  assert.equal(read(dir, 'files/big.dat'), 'small\n');
+  assert.equal(read(dir, 'old.zip'), 'PK0');
+  for (const p of ['backup.zip', 'new.php', 'media/huge.bin']) assert.deepEqual(fs.readFileSync(path.join(dir, p)), Buffer.from(downloaded[p]), p + ' — не удалён');
+  assert.equal(status(dir), '?? backup.zip\n?? media/huge.bin\n?? new.php\n');
+  assert.ok(!text(r).includes(SECRET), 'значение секрета не в выводе');
+  const fmt = (list) => list.map(([p, why]) => p + ' (' + why + ')').join(', ');
+  const tracked = [['cfg.php', SECRET_WHY], ['files/big.dat', 'больше 10 МБ'], ['old.zip', 'архив']];
+  const fresh = [['backup.zip', 'архив'], ['media/huge.bin', 'больше 10 МБ'], ['new.php', 'секрет']];
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 1, удалено 0. Не забрано, осталось на сервере: ' +
+    fmt(tracked) + '. ' + LOCAL + fmt(fresh) + '.' + FTP_NOTE);
+  assert.deepEqual(readMark(dir), { named: [...fresh, ...tracked].map(([p]) => p).sort(), pending: [] });
+  // новые не забираемые — не правки перед скачиванием (Р-68): сразу список корней
+  assert.equal(last(await run(dir)), DOWNLOADED);
+  // скачали снова — снова не в коммите и уже не названы (named)
+  writeFiles(dir, downloaded);
+  const again = await run(dir, { ftpDone: true });
+  assert.equal(again.code, 0, text(again));
+  assert.equal(count(dir), 2);
+  assert.equal(last(again), SAME_FTP);
+  assert.equal(status(dir), '?? backup.zip\n?? media/huge.bin\n?? new.php\n');
+});
+
+test('--ftp-done: CRLF в скачанном при LF в git — не изменение', async () => {
+  const dir = ftpSite({ 'a.php': 'a\nb\n', 'm.php': 'x\ny\nz\n', 'c.php': 'c\n', 'bin.dat': Buffer.from([0, 10, 1]) });
+  writeFiles(dir, { 'a.php': 'a\r\nb\r\n', 'm.php': 'x\r\ny\nz\r\n', 'c.php': 'c2\r\n', 'bin.dat': Buffer.from([0, 13, 10, 1]) });
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 0, text(r));
+  assert.equal(count(dir), 2);
+  assert.deepEqual(changed(dir), ['M\tc.php']);
+  assert.equal(read(dir, 'a.php'), 'a\nb\n', 'отличие только в \\r — из HEAD, без упоминания');
+  assert.equal(read(dir, 'm.php'), 'x\ny\nz\n');
+  assert.deepEqual(fs.readFileSync(path.join(dir, 'bin.dat')), Buffer.from([0, 10, 1]));
+  assert.equal(status(dir), '');
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0.' + FTP_NOTE);
+  assert.doesNotMatch(text(r), /a\.php|m\.php|bin\.dat/);
+  // одни переводы строк — «совпадает с git»
+  writeFiles(dir, { 'a.php': 'a\r\nb\r\n' });
+  const again = await run(dir, { ftpDone: true });
+  assert.equal(again.code, 0, text(again));
+  assert.equal(count(dir), 2);
+  assert.equal(last(again), SAME_FTP);
+});
+
+test('--ftp-done: скачанное под .gitignore и «Не выкладывать» не тронуто и не в коммите', async () => {
+  const dir = ftpSite({ 'a.php': 'a\n', 'bitrix/templates/t/x.php': 't\n', 'dist/keep.js': 'k\n', '.claude/docs/n.md': 'n\n' },
+    { gitignore: GITIGNORE + '/upload/\n/bitrix/*\n!/bitrix/templates/\n', params: { 'Не выкладывать': '.gitignore, /dist' } });
+  const downloaded = { 'upload/1.jpg': 'jpg', 'upload/arch.zip': 'PK', 'bitrix/modules/main/m.php': 'ядро\n', 'bitrix/templates/t/x.php': 't2\n',
+    'dist/keep.js': 'k2\n', 'dist/app.js': 'app\n', 'a.php': 'a2\n', '.claude/docs/n.md': 'наша правка\n' };
+  writeFiles(dir, downloaded);
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php', 'M\tbitrix/templates/t/x.php']);
+  for (const p of ['upload/1.jpg', 'upload/arch.zip', 'bitrix/modules/main/m.php', 'dist/keep.js', 'dist/app.js', '.claude/docs/n.md']) {
+    assert.equal(read(dir, p), downloaded[p], p);
+  }
+  assert.equal(status(dir), ' M .claude/docs/n.md\n M dist/keep.js\n?? dist/app.js\n', 'под «Не выкладывать» и служебное — не тронуто (Р-72)');
+  assert.doesNotMatch(text(r), /upload|modules|dist|\.claude/);
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 2, добавлено 0, удалено 0.' + FTP_NOTE);
+  assert.deepEqual(readMark(dir).named, []);
+});
+
+test('Р-72: незакоммиченная правка .gitignore («Не выкладывать») — не правка перед скачиванием; после --dirty-ok и --ftp-done цела, в выводе о ней ничего', async () => {
+  const dir = ftpSite({ 'a.php': 'a\n', 'b.php': 'b\n' });
+  const edited = GITIGNORE + '/tmp-local/\n';
+  writeFiles(dir, { '.gitignore': edited, 'b.php': 'b моя\n' }); // b.php — правка файла сайта: нужен --dirty-ok
+  const list = await run(dir);
+  assert.equal(list.code, 1, text(list));
+  assert.deepEqual(list.out.slice(1, 3), [DIRTY_HEAD(1), '  b.php'], '.gitignore — не файл сайта, не правка');
+  const ok = await run(dir, { dirtyOk: true });
+  assert.equal(last(ok), DOWNLOADED);
+  assert.ok(!ok.out.includes('  .gitignore'), '.gitignore не в корнях');
+  writeFiles(dir, { 'a.php': 'a2\n', 'b.php': 'b\n' }); // скачано: b.php затёрт версией сервера (= HEAD)
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(read(dir, '.gitignore'), edited, 'правка .gitignore цела');
+  assert.equal(status(dir), ' M .gitignore\n');
+  assert.doesNotMatch(text(r), /\.gitignore/);
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0.' + FTP_NOTE);
+});
+
+test('Р-61: --ftp-done после остановки kit-commit.js — pending с md5 скачанного; повтор не откатывает к HEAD, изменённое после остановки не трогает и называет', async () => {
+  const dir = ftpSite({ 'a.php': '1\n', 'b.php': 'b\n', 'c.php': 'c\n' });
+  writeFiles(dir, { 'a.php': '2\n', 'b.php': 'b2\n', 'n.php': 'n\n' });
+  hook(dir, 'pre-commit', 'exit 1');
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 1, text(r));
+  assert.match(text(r), /коммит синхронизации не сделан \(kit-commit\.js, код 2\)/);
+  assert.equal(last(r), AGAIN_FTP);
+  assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n') }, { path: 'b.php', md5: md5('b2\n') }, { path: 'n.php', md5: md5('n\n') }]);
+  assert.equal(read(dir, 'a.php'), '2\n');
+  // обычный запуск при незаконченной синхронизации — сначала ответ на неё; ничего не пишет
+  const m0 = markOf(dir);
+  const plain = await run(dir);
+  assert.equal(plain.code, 1, text(plain));
+  assert.equal(last(plain), AGAIN_FTP);
+  assert.equal(markOf(dir), m0);
+  // после остановки доработали b.php; хук убран — повтор доводит синхронизацию без отката к HEAD
+  writeFiles(dir, { 'b.php': 'b2 и моя\n' });
+  fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
+  const again = await run(dir, { ftpDone: true });
+  assert.equal(again.code, 0, text(again));
+  assert.deepEqual(changed(dir), ['A\tn.php', 'M\ta.php']);
+  assert.equal(read(dir, 'b.php'), 'b2 и моя\n', 'изменённое после остановки — не тронуто');
+  assert.ok(text(again).includes(UNTOUCHED('b.php')), text(again));
+  assert.equal(g(dir, 'diff', '--cached', '--name-only'), '', 'поставленное kit-commit.js в индекс снято');
+  assert.equal(status(dir), ' M b.php\n');
+  assert.deepEqual(pendingOf(dir), []);
+  assert.equal(last(again), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 1, удалено 0.' + FTP_NOTE);
+});
+
+test('Р-61: --abort после остановленной --ftp-done — забираемое к HEAD (скачанное отменяется), совмещённое цело', async () => {
+  const dir = ftpSite({ 'a.php': '1\n', 'm.php': FIVE });
+  writeFiles(dir, { 'm.php': 'M1 наш шаг\nl2\nl3\nl4\nl5\n' });
+  commit(dir, '1.1: правка m.php'); // не залито
+  writeFiles(dir, { 'a.php': '2\n', 'n.php': 'n\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n' });
+  hook(dir, 'pre-commit', 'exit 1');
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 1, text(r));
+  assert.equal(last(r), AGAIN_FTP);
+  const merged = 'M1 наш шаг\nl2\nl3\nl4\nM5 сервер\n';
+  assert.equal(read(dir, 'm.php'), merged);
+  assert.ok(r.out.includes('совмещённое с нашими правками осталось в рабочей копии: m.php'), text(r));
+  assert.deepEqual(pendingOf(dir), ['a.php', 'n.php']);
+  const a = await run(dir, { abort: true });
+  assert.equal(a.code, 0, text(a));
+  assert.deepEqual(a.out, ['[kit] Синхронизация отменена: к HEAD возвращено 2 файла']);
+  assert.equal(read(dir, 'a.php'), '1\n');
+  assert.ok(!has(dir, 'n.php'));
+  assert.equal(read(dir, 'm.php'), merged, 'совмещённое не тронуто');
+  assert.equal(g(dir, 'diff', '--cached', '--name-only'), '');
+  assert.equal(status(dir), ' M m.php\n');
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
+  assert.equal(count(dir), 2);
+});
+
+test('Р-62: --ftp-done — забираемого больше предела за раз — код 1 до любой записи, ответ --ftp-done --big-ok; File Watchers не проверяются', async () => {
+  const dir = ftpSite({ 'a.php': '1\n', 'b.php': 'b\n', 's.scss': '$a: 1;\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
+  idea(dir, { always: false, watchers: [['scss', true]] }); // при Always разбор не идёт вовсе (Р-70)
+  writeFiles(dir, { 'b.php': 'b наш шаг\n' });
+  commit(dir, '1.1: правка b.php'); // не залито
+  writeFiles(dir, { 'a.php': '2\n', 'b.php': 'b\n', 's.scss': '$a: 2;\n', 'big.php': 'x'.repeat(5000) });
+  const before = status(dir);
+  const r = await run(dir, { ftpDone: true, entryLimit: 1000 });
+  assert.equal(r.code, 1, text(r));
+  assert.match(text(r), /Забрать за одну синхронизацию — 5 КБ \(больше 1 КБ\); самые тяжёлые папки: big\.php — 5 КБ/);
+  assert.doesNotMatch(text(r), /File Watchers/);
+  assert.equal(last(r), 'спроси пользователя одним AskUserQuestion: по объёму — Забрать всё (`prod-sync.js --ftp-done --big-ok`) / ' +
+    'Не забирать папки (допиши их в .gitignore и повтори синхронизацию) / Отложить');
+  assert.equal(status(dir), before, 'ничего не записано — и из HEAD не восстановлено');
+  assert.equal(read(dir, 'b.php'), 'b\n');
+  assert.equal(markOf(dir), null);
+  assert.equal(count(dir), 2);
+  const ok = await run(dir, { ftpDone: true, entryLimit: 1000, bigOk: true });
+  assert.equal(ok.code, 0, text(ok));
+  assert.deepEqual(changed(dir), ['A\tbig.php', 'M\ta.php', 'M\ts.scss']);
+  assert.equal(read(dir, 'b.php'), 'b наш шаг\n');
+  assert.equal(status(dir), '');
+  // --watchers-ok при --ftp-done допустим и ничего не меняет
+  const w = cli({ cwd: dir, args: ['--ftp-done', '--watchers-ok'] });
+  assert.equal(w.code, 0, w.stdout);
+  assert.equal(w.stdout.trim().split('\n').pop(), SAME_FTP);
+});
+
+test('Р-63, Р-68: --ftp-done — скачанный файл, удалённый нашим шагом, не удаляется, «ждёт удаления с сервера» каждый раз; папка из плана — одной записью', async () => {
+  const dir = ftpSite({ 'a.php': 'a\n', 'c.php': 'c\n', 'd.php': 'd\n' });
+  g(dir, 'rm', '-q', 'c.php');
+  const s1 = commit(dir, '1.1: убрать c.php');
+  writeFiles(dir, { '.claude/docs/deploy-prod.md': planMd([['1.1', s1.slice(0, 9)]], ['old/']) });
+  commit(dir, '1.1а: план выкладки');
+  g(dir, 'rm', '-q', 'd.php');
+  commit(dir, '1.2: убрать d.php'); // не залито: d.php есть в базе
+  writeFiles(dir, { 'c.php': 'c\n', 'd.php': 'd\n', 'old/x.php': 'x', 'old/y.php': 'y', 'a.php': 'a2\n' });
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.ok(has(dir, 'c.php') && has(dir, 'd.php') && has(dir, 'old/x.php') && has(dir, 'old/y.php'), 'разбор не удаляет (Р-68)');
+  assert.equal(status(dir), '?? c.php\n?? d.php\n?? old/x.php\n?? old/y.php\n');
+  const waiting = 'Ждёт удаления с сервера: c.php, d.php, old/.';
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. ' + waiting + FTP_NOTE);
+  assert.deepEqual(readMark(dir).named, []);
+  // ждущее удаления — не правка перед скачиванием; называется каждый раз
+  assert.equal(last(await run(dir)), DOWNLOADED);
+  const again = await run(dir, { ftpDone: true });
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. ' + waiting + FTP_NOTE);
+  assert.equal(count(dir), 5);
+});
+
+test('Р-64: сессия в worktree без SSH — код 1 «синхронизация без SSH — в основной папке проекта», ничего не пишет и не читает скачанное', async () => {
+  const dir = ftpSite({ 'a.php': '1\n' });
+  const wt = path.join(tmpDir('kit-prod-wt-'), 'w');
+  g(dir, 'worktree', 'add', '-q', '-b', 'w', wt);
+  writeFiles(wt, { 'a.php': '2\n', 'n.php': 'n\n' });
+  for (const opts of [{}, { ftpDone: true }, { check: true }, { dirtyOk: true }]) {
+    const r = await run(wt, opts);
+    assert.equal(r.code, 1, JSON.stringify(opts) + '\n' + text(r));
+    assert.equal(r.out.length, 1, text(r));
+    assert.match(last(r), /^синхронизация без SSH — в основной папке проекта \(.+\)$/);
+    assert.ok(last(r).includes(path.basename(dir)), last(r));
+  }
+  assert.equal(status(wt), ' M a.php\n?? n.php\n');
+  assert.equal(count(wt), 1);
+  assert.equal(count(dir), 1);
+  assert.ok(!has(wt, '.claude/kit-prod.json') && !has(dir, '.claude/kit-prod.json'));
+});
+
+// ---- Раунд 1 проверки 48.8: не удалять, автозаливка, ветки без тестов -------------------------------------------------
+
+test('Р-68 (К-1): локальный неотслеживаемый dump.sql и файл, оставленный после git rm --cached, — не правки перед скачиванием; после --ftp-done целы, «осталось на сервере» о них нет', async () => {
+  const dir = ftpSite({ 'a.php': 'a\n', 'keep.php': 'k\n' });
+  g(dir, 'rm', '-q', '--cached', 'keep.php');
+  g(dir, 'commit', '-q', '-m', '1.1: keep.php — вне git'); // файл остался на диске и не игнорируется
+  writeFiles(dir, { 'dump.sql': 'INSERT 1;\n' });
+  const list = await run(dir);
+  assert.equal(list.code, 1, text(list));
+  assert.equal(last(list), DOWNLOADED, 'не правки: разбор их не заберёт и не тронет');
+  writeFiles(dir, { 'a.php': 'a2\n' }); // скачано
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(read(dir, 'dump.sql'), 'INSERT 1;\n');
+  assert.equal(read(dir, 'keep.php'), 'k\n');
+  assert.equal(status(dir), '?? dump.sql\n?? keep.php\n');
+  assert.doesNotMatch(text(r), /осталось на сервере/);
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. ' + LOCAL + 'dump.sql (архив). ' +
+    'Ждёт удаления с сервера: keep.php.' + FTP_NOTE);
+  assert.deepEqual(readMark(dir).named, ['dump.sql']);
+  const again = await run(dir, { ftpDone: true });
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. Ждёт удаления с сервера: keep.php.' + FTP_NOTE,
+    'не забираемое новое — один раз, ждущее удаления — каждый раз');
+  assert.ok(has(dir, 'dump.sql') && has(dir, 'keep.php'));
+});
+
+test('Р-70: автозаливка PhpStorm Always — в списке FTP строка «выключи автозаливку»; --ftp-done — код 1 до любой записи, и pending не тронут', async () => {
+  const dir = ftpSite({ 'a.php': '1\n', 'b.php': 'b\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
+  idea(dir, { always: true });
+  writeFiles(dir, { 'b.php': 'b наш шаг\n' });
+  commit(dir, '1.1: правка b.php'); // не залито
+  const list = await run(dir);
+  assert.equal(list.code, 1, text(list));
+  assert.deepEqual(list.out.slice(-3), [PHPSTORM('Download from alpha'), ALWAYS_OFF, DOWNLOADED]);
+  writeFiles(dir, { 'a.php': '2\n', 'b.php': 'b\n' }); // скачано: b.php — версия базы поверх нашего незалитого
+  writeMark(dir, { named: [], pending: [{ path: 'a.php', md5: md5('2\n') }] }); // прошлая остановка
+  const before = status(dir);
+  const m0 = markOf(dir);
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(r.out.slice(-2), ['автозаливка PhpStorm включена — выключи её (Tools → Deployment → Automatic Upload; PhpStorm записывает ' +
+    'настройку не сразу — File → Save All) и повтори', 'спроси пользователя: Выключил — повторить (`prod-sync.js --ftp-done`) / Отложить']);
+  assert.equal(status(dir), before, 'ничего не записано: и из HEAD не восстановлено');
+  assert.equal(read(dir, 'b.php'), 'b\n');
+  assert.equal(markOf(dir), m0, 'pending не тронут');
+  assert.equal(count(dir), 2);
+  // выключили — разбор идёт
+  idea(dir, { always: false });
+  const ok = await run(dir, { ftpDone: true });
+  assert.equal(ok.code, 0, text(ok));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(read(dir, 'b.php'), 'b наш шаг\n');
+  assert.deepEqual(pendingOf(dir), []);
+});
+
+test('--ftp-done (М-5): исключение после записи pending — код 1, «остановилась после записи» с ответами без SSH; повтор доводит синхронизацию', async () => {
+  const dir = ftpSite({ 'a.php': '1\n', 'm.php': FIVE });
+  writeFiles(dir, { 'm.php': 'M1 наш шаг\nl2\nl3\nl4\nl5\n' });
+  commit(dir, '1.1: правка m.php'); // не залито
+  writeFiles(dir, { 'a.php': '2\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n' });
+  const rename = fs.renameSync;
+  fs.renameSync = (from, to) => {
+    if (String(to).endsWith(path.sep + 'm.php')) throw Object.assign(new Error('тест: сбой диска'), { code: 'EIO' });
+    return rename(from, to);
+  };
+  let r;
+  try {
+    r = await run(dir, { ftpDone: true });
+  } finally {
+    fs.renameSync = rename;
+  }
+  assert.equal(r.code, 1, text(r));
+  assert.match(text(r), /^синхронизация остановилась после записи: /m);
+  assert.ok(r.out[r.out.length - 2].startsWith('забираемое из скачанного — в pending: «Повторить» разберёт скачанное заново'), text(r));
+  assert.equal(last(r), AGAIN_FTP);
+  assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n') }]);
+  assert.equal(read(dir, 'a.php'), '2\n');
+  const again = await run(dir, { ftpDone: true });
+  assert.equal(again.code, 0, text(again));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.equal(read(dir, 'm.php'), 'M1 наш шаг\nl2\nl3\nl4\nM5 сервер\n');
+  assert.equal(status(dir), ' M m.php\n');
+  assert.deepEqual(pendingOf(dir), []);
+});
+
+test('--ftp-done (М-5): секрет в скачанной версии совмещаемого файла — не совмещён, из HEAD, назван один раз', async () => {
+  const dir = ftpSite({ 's.php': FIVE });
+  const mine = 'L1 наш шаг\nl2\nl3\nl4\nl5\n';
+  writeFiles(dir, { 's.php': mine });
+  commit(dir, '1.1: правка s.php'); // не залито
+  writeFiles(dir, { 's.php': "l1\nl2\nl3\nl4\nreturn ['password' => '" + SECRET + "'];\n" });
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 0, text(r));
+  assert.equal(count(dir), 2);
+  assert.equal(read(dir, 's.php'), mine);
+  assert.equal(status(dir), '');
+  assert.ok(!text(r).includes(SECRET));
+  assert.deepEqual(conflictRoots(dir), [], 'версия с секретом во временную папку не пишется');
+  assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. Не забрано, осталось на сервере: s.php (' +
+    SECRET_WHY + ').' + FTP_NOTE);
+  assert.deepEqual(readMark(dir).named, ['s.php']);
+});
+
+test('--ftp-done (М-5): наше уже на сервере (скачанное = HEAD ≠ база), отличие только в \\r — из HEAD молча, ничего не названо', async () => {
+  const dir = ftpSite({ 'a.php': 'a\n' });
+  writeFiles(dir, { 'a.php': 'a наш шаг\nвторая\n' });
+  commit(dir, '1.1: правка a.php'); // залито автозаливкой, на сервере — с CRLF
+  writeFiles(dir, { 'a.php': 'a наш шаг\r\nвторая\r\n' });
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 0, text(r));
+  assert.equal(count(dir), 2);
+  assert.equal(read(dir, 'a.php'), 'a наш шаг\nвторая\n');
+  assert.equal(status(dir), '');
+  assert.equal(last(r), SAME_FTP);
+  assert.doesNotMatch(text(r), /Восстановлено/);
+});
+
 // ---- Имя и вывод (48.6) ------------------------------------------------------------------------------------------------
 
 // Р-48: вывод каждого вызова entry() и prod-sync.js проверяет noEntryWord (через run и cli) — сценарии: совпадает («ничего не
@@ -1625,7 +2118,7 @@ test('М-3, М-2: md5 записанного не сошёлся — код 1; �
 // ветки, до которых сценарии не доходят (исключение, отметка не записана, md5 записанного не совпал): слова нет во всех исходниках
 // синхронизации; и сам помощник.
 test('вывод синхронизации: ни в одной строке out нет слова «вход»', () => {
-  for (const rel of ['prod-sync.js', 'lib/prod-ssh.js', 'lib/prod.js']) {
+  for (const rel of ['prod-sync.js', 'lib/prod-ssh.js', 'lib/prod.js', 'lib/prod-ftp.js']) {
     const src = fs.readFileSync(path.join(ROOT, 'plugins', 'kit', 'scripts', rel), 'utf8').split('\n');
     assert.deepEqual(src.map((l, i) => i + 1 + ': ' + l).filter((l) => /вход/i.test(l)), [], rel);
   }
