@@ -15,7 +15,7 @@ const { matchRules } = require('./paths');
 const { ALWAYS_SKIP, isSsh, git } = require('./deploy');
 const {
   REGULAR, SKIP, md5NoCr, classify, treeOf, baseTree, pendingDelete, pendingEntry, ignoredOf, dirtyPaths, readWork, mergeVersions,
-  catBlobs, blobHashes, clean, secretPaths, syncRules, deploymentOf,
+  catBlobs, blobHashes, clean, secretPaths, syncRules, deploymentOf, newCode, readMark,
 } = require('./prod');
 
 // строк в списке правок (Р-60), дальше — «и ещё N»; корни выводятся все (Р-73): каждый скачивают вручную, иначе изменения на
@@ -120,8 +120,9 @@ function ftpRoots(dir, info) {
 // Правки перед скачиванием (Р-60, Р-68, Р-72): изменённые и удалённые отслеживаемые файлы сайта — по содержимому без \r
 // (отличие только в \r — не правка); неотслеживаемые файлы сайта (не игнорируемые .gitignore), кроме тех, что разбор не заберёт
 // и оставит как есть: есть в базе или ждёт удаления (pendingDelete), не забирается по Т-11 (c.whyNot — читается только
-// забираемое по имени и размеру; файл с секретом). Под c.rules (syncRules: «Не выкладывать», .claude…, служебные файлы git, исключённое в PhpStorm) — не
-// файлы сайта, не правки. c: { dir, info, b, rules, whyNot, secrets }. → [путь] по алфавиту.
+// забираемое по имени и размеру; файл с секретом), новый код, не забранный по ответу (Р-90б, Р-91: answered.code отметки). Под c.rules
+// (syncRules: «Не выкладывать», .claude…, служебные файлы git, исключённое в PhpStorm) — не файлы сайта, не правки. c: { dir, info,
+// b, rules, whyNot, secrets }. → [путь] по алфавиту.
 async function ftpDirty(c) {
   const { dir } = c;
   const head = treeOf(dir, 'HEAD');
@@ -130,6 +131,7 @@ async function ftpDirty(c) {
   const blobs = await blobHashes(dir, [...new Set(paths.filter(tracked).map((p) => head.get(p).oid))]);
   const base = baseTree(dir, c.b);
   const pend = pendingDelete(dir, c.info);
+  const skipped = new Set(readMark(dir).answered.code); // Р-91 (В-2): ответ «Не забирать» — не named
   const out = [];
   const fresh = [];
   for (const p of paths) {
@@ -144,7 +146,7 @@ async function ftpDirty(c) {
     } catch (e) {
       continue;
     }
-    if (!st.isFile() || base.has(p) || pendingEntry(pend, p) || c.whyNot(p, st.size)) continue;
+    if (!st.isFile() || base.has(p) || pendingEntry(pend, p) || c.whyNot(p, st.size) || skipped.has(p)) continue;
     const data = readWork(dir, p);
     if (data !== null) fresh.push({ path: p, data });
   }
@@ -180,7 +182,7 @@ function rootLines(dir, roots) {
 // kind, size }] — совместить, undo: Set путей к HEAD (все — в HEAD): не забирается, вернулось к базе, отличие от HEAD только в
 // \r, reverted: [путь] — скачанное вернуло к базе наше незалитое (Т-9), once: [{ path, why, local? }] — не
 // забирается (называется один раз; local — новое, лежит в рабочей копии), waiting: [запись] — ждёт удаления с сервера (Р-63),
-// baseOid(путь), headOid(путь) — blob или null }.
+// baseOid(путь), headOid(путь) — blob или null, code — newCode по путям HEAD (Р-90б: новый код — по ответу) }.
 async function ftpSurvey(c, skip = new Set()) {
   const { dir } = c;
   const site = (p) => !matchRules(p, c.rules);
@@ -242,6 +244,7 @@ async function ftpSurvey(c, skip = new Set()) {
   }
   return {
     take, merge, undo, reverted, once, waiting: [...waiting].sort(), baseOid: (p) => baseF.get(p) || null, headOid: (p) => headF.get(p) || null,
+    code: newCode(head.keys()),
   };
 }
 

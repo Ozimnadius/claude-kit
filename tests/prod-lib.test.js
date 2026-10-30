@@ -222,11 +222,16 @@ test('skipTake: архивы и бэкапы без регистра, преде
   for (const n of ['_old.back', '_old.back1.php', 'dir/_X.BACK2', 'a/b/_site_back.zip', 'x_back_2024.ZIP', 'site.tar.gz', 'site.tar.gz.1', 'a.zip',
     'a.RAR', 'a.7z', 'a.tar', 'a.gz', 'dump.SQL', 'a.bak', 'д/копия сайта.zip', 'win\\a.zip',
     // М-7 (48.11а): ещё архивы и бэкапы — без регистра
-    'site.tgz', 'a.TGZ', 'site.tar.bz2', 'a.bz2', 'site.tar.xz', 'a.XZ', 'index.php.old', 'b/x.OLD', 'index.php.orig', 'a.Orig']) {
+    'site.tgz', 'a.TGZ', 'site.tar.bz2', 'a.bz2', 'site.tar.xz', 'a.XZ', 'index.php.old', 'b/x.OLD', 'index.php.orig', 'a.Orig',
+    // Р-90в (48.12а): копии стилей и кода — расширение на «_», «-orig» в конце, «.orig» с чем угодно после (без регистра)
+    'local/style.cs_', 'a.PH_', 'b/x.js_', 'x._', '.htaccess_', 'style.css-orig', 'index-orig', 'a.b-ORIG', 'x.orig2', 'x.orig.php',
+    // Р-91 (М-1): «.orig» — отдельной частью имени
+    'S.ORIG_1', 'a.orig.css', 'a.css.orig2', 'b/c.Orig-1']) {
     assert.equal(skipTake(n, 10), 'архив', n);
   }
   for (const n of ['index.php', 'upload/a.jpg', 'backup.php', 'a/zip', 'a/sql/x.php', 'bak', 'a.zipx', 'x/back.php',
-    'old.php', 'origin.php', 'a.older', 'a.original', 'xz.php', 'a.tgz.php', 'old/x.php']) assert.equal(skipTake(n, 10), null, n);
+    'old.php', 'origin.php', 'a.older', 'xz.php', 'a.tgz.php', 'old/x.php', 'my_file_', 'x_.php', 'a_/b.php', 'a-origin.php', 'orig', 'origami.css',
+    'a-orig/x.php', 'a.original', 'logo.original.png', 'photo.Original.JPG', 'jquery.origin.js', 'x.origami.css', 'orig.css']) assert.equal(skipTake(n, 10), null, n);
   assert.equal(skipTake('big.bin', FILE_LIMIT), null);
   assert.equal(skipTake('big.bin', FILE_LIMIT + 1), 'больше 10 МБ');
   assert.equal(skipTake('a.zip', FILE_LIMIT + 1), 'архив', 'маска — раньше размера');
@@ -466,10 +471,11 @@ test('summaryLine: не больше 10 путей в части, дальше �
 
 test('отметка (48.7): только named и pending; старый файл с sessions читается без ошибки, при записи поле пропадает', () => {
   const dir = makeProject({});
-  const empty = { named: [], pending: [] };
+  const NO = { absent: [], code: [], taken: [] }; // Р-91 (В-2), Р-92: ответов нет
+  const empty = { named: [], pending: [], answered: NO };
   assert.deepEqual(readMark(dir), empty, 'файла нет');
   writeMark(dir, { named: ['x.zip'], pending: ['old.php'], sessions: { A: { at: new Date().toISOString(), result: 'need' } } });
-  assert.deepEqual(readMark(dir), { named: ['x.zip'], pending: [{ path: 'old.php' }] }, 'строка — md5 неизвестен');
+  assert.deepEqual(readMark(dir), { named: ['x.zip'], pending: [{ path: 'old.php' }], answered: NO }, 'строка — md5 неизвестен');
   const file = path.join(dir, MARK_FILE);
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { named: ['x.zip'], pending: ['old.php'] }, 'sessions не пишется');
 
@@ -477,7 +483,7 @@ test('отметка (48.7): только named и pending; старый фай�
   fs.writeFileSync(file, JSON.stringify({ sessions: { s1: { at: new Date().toISOString(), result: 'done', commit: 'abc1234' }, s2: { at: 'x', result: 'need' } },
     named: ['a.zip'], pending: ['p.php'] }));
   const old = readMark(dir);
-  assert.deepEqual(old, { named: ['a.zip'], pending: [{ path: 'p.php' }] });
+  assert.deepEqual(old, { named: ['a.zip'], pending: [{ path: 'p.php' }], answered: NO });
   writeMark(dir, { ...old, pending: [] });
   assert.equal(fs.readFileSync(file, 'utf8'), JSON.stringify({ named: ['a.zip'], pending: [] }, null, 2) + '\n');
 
@@ -491,7 +497,7 @@ test('отметка (48.7): только named и pending; старый фай�
   fs.writeFileSync(file, '{ не json');
   assert.deepEqual(readMark(dir), empty);
   writeMark(dir, { named: [], pending: ['n.php'] });
-  assert.deepEqual(readMark(dir), { named: [], pending: [{ path: 'n.php' }] });
+  assert.deepEqual(readMark(dir), { named: [], pending: [{ path: 'n.php' }], answered: NO });
 });
 
 test('отметка (Р-57): элемент pending — { path, md5 }: md5 записанного (md5NoCr), null — синхронизация файл удаляет; строка первой редакции — md5 неизвестен; битые элементы отброшены', () => {
@@ -508,6 +514,31 @@ test('отметка (Р-57): элемент pending — { path, md5 }: md5 за
   writeMark(dir, { named: [], pending: [{ path: 'n.php', md5: h, ftp: true }, { path: 'a.php', md5: h, ftp: 'да' }, { path: 'x.php', ftp: true }] });
   assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).pending, [{ path: 'n.php', md5: h, ftp: true }, { path: 'a.php', md5: h }, 'x.php']);
   assert.deepEqual(readMark(dir).pending, [{ path: 'n.php', md5: h, ftp: true }, { path: 'a.php', md5: h }, { path: 'x.php' }]);
+});
+
+test('отметка (Р-91, В-2): answered — ответы «Оставить у нас» (absent), «Не забирать» (code) и «Забрать» (taken, Р-92) отдельно от named; в файле — только непустые; старая отметка без answered читается', () => {
+  const dir = makeProject({});
+  const file = path.join(dir, MARK_FILE);
+  writeMark(dir, { named: ['a.md'], pending: [], answered: { absent: ['a.md'], code: ['x/i.php'], taken: ['y/n.php'] } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { named: ['a.md'], pending: [], answered: { absent: ['a.md'], code: ['x/i.php'], taken: ['y/n.php'] } });
+  assert.deepEqual(readMark(dir).answered, { absent: ['a.md'], code: ['x/i.php'], taken: ['y/n.php'] });
+  writeMark(dir, { ...readMark(dir), answered: { absent: [], code: [], taken: [] } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), { named: ['a.md'], pending: [] }, 'пустые ответы не пишутся — файл как в 3.4.0');
+  fs.writeFileSync(file, JSON.stringify({ named: ['b.zip'], pending: [] }));
+  assert.deepEqual(readMark(dir), { named: ['b.zip'], pending: [], answered: { absent: [], code: [], taken: [] } }, 'отметка 3.4.0');
+  fs.writeFileSync(file, JSON.stringify({ named: [], pending: [], answered: { absent: ['a', 5, null], code: 'x', taken: [{}, 'n.php'] } }));
+  assert.deepEqual(readMark(dir).answered, { absent: ['a'], code: [], taken: ['n.php'] }, 'не строки и не массив — отброшены');
+  fs.writeFileSync(file, JSON.stringify({ named: [], pending: [], answered: [1] }));
+  assert.deepEqual(readMark(dir).answered, { absent: [], code: [], taken: [] });
+});
+
+test('fingerprint (Р-91, В-1): 8 знаков md5 отсортированного списка путей — порядок не важен, другой список — другой отпечаток', () => {
+  const a = prod.fingerprint(['x/index.php', 'README.md']);
+  assert.match(a, /^[0-9a-f]{8}$/);
+  assert.equal(prod.fingerprint(['README.md', 'x/index.php']), a);
+  assert.equal(a, md5('README.md\0x/index.php').slice(0, 8));
+  assert.notEqual(prod.fingerprint(['README.md']), a);
+  assert.notEqual(prod.fingerprint(['README.md', 'x/index.php', 'y/new.php']), a);
 });
 
 // .idea/deployment.xml: сервер по умолчанию alpha с исключениями (Excluded Paths), у другого сервера — свои.
@@ -550,6 +581,67 @@ test('summaryLine (Р-88): kept — «Оставлено у нас: путь (п
     `[kit] Синхронизация с продом: файлов без kit: изменено 0, добавлено 0, удалено 0. Оставлено у нас: u.php (${why}).`);
 });
 
+test('summaryLine (Р-90а, Р-90б): absent — «Нет на сервере, оставлено у нас», code — «Новый код на сервере, не забран» (без SSH — лежит в рабочей копии), absentAhead (--check) — в числах', () => {
+  const head = '[kit] Синхронизация с продом: файлов без kit: ';
+  assert.equal(summaryLine({ env: 'прод', changed: ['a.php'], kept: [{ path: 'b/u.php', why: 'исключён' }], absent: ['README.md', 'local/NOTES.md'],
+    code: ['x/index.php'], local: [{ path: 'd.sql', why: 'архив' }], waiting: ['w.php'] }),
+  head + 'изменено 1, добавлено 0, удалено 0. Оставлено у нас: b/u.php (исключён). Нет на сервере, оставлено у нас: README.md, local/NOTES.md. ' +
+    'Новый код на сервере, не забран: x/index.php. Не забрано, лежит в рабочей копии, в git не идёт — удали сам, если не нужен: d.sql (архив). ' +
+    'Ждёт удаления с сервера: w.php.');
+  assert.equal(summaryLine({ env: 'прод', absent: ['a.php'] }), head + 'изменено 0, добавлено 0, удалено 0. Нет на сервере, оставлено у нас: a.php.');
+  assert.equal(summaryLine({ env: 'прод', code: ['x/i.php'], ftp: true }), head + 'изменено 0, добавлено 0, удалено 0. Новый код на сервере, не забран ' +
+    '(лежит в рабочей копии, в git не идёт — удали сам, если не нужен): x/i.php. Удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны.');
+  assert.equal(summaryLine({ env: 'прод', changed: ['a.php'], absentAhead: 3 }),
+    head + 'изменено 1, добавлено 0, удалено 0, нет на сервере: 3 (спросит синхронизация).');
+  assert.equal(summaryLine({ env: 'дев', absentAhead: 1 }),
+    '[kit] Синхронизация с девом: файлов без kit: изменено 0, добавлено 0, удалено 0, нет на сервере: 1 (спросит синхронизация).', 'одно — не «совпадает»');
+  assert.equal(summaryLine({ env: 'прод', absent: [], code: [], absentAhead: 0 }), '[kit] Синхронизация с продом: прод совпадает с git.');
+});
+
+test('newCode (Р-90б): код — по расширению и имени без регистра; любой файл в папке корня сайта, которой нет в HEAD; dirOf — эта папка', () => {
+  const { ask, dirOf } = prod.newCode(['index.php', 'local/a.php', 'local/img/x.png', '.claude/CLAUDE.md', 'bitrix/templates/t/a.php']);
+  const exts = ['php', 'PHP', 'phtml', 'pht', 'PHT', 'phar', 'php3', 'php4', 'php5', 'php6', 'php7', 'Php8', 'inc', 'js', 'MJS', 'cjs', 'py', 'sh', 'pl', 'cgi', 'asp',
+    'aspx', 'jsp'];
+  for (const p of [...exts.map((e) => 'local/f.' + e), 'a.php', 'local/.htaccess', 'local/.HTACCESS', '.htaccess', 'bitrix/.user.ini', '.User.Ini',
+    'x/readme.txt', 'x/img/a.png', 'new/index.html']) assert.equal(ask(p), true, p);
+  for (const p of ['local/img/a.png', 'local/s.css', 'robots.txt', 'local/a.json', 'local/x.php9', 'local/x.php2', 'local/a.jsx', 'local/php',
+    'local/x.html', 'local/user.ini', 'local/a.js.map', 'bitrix/templates/t/i.png', 'local/new/dir/b.png']) assert.equal(ask(p), false, p);
+  assert.equal(dirOf('x/img/a.png'), 'x/');
+  assert.equal(dirOf('local/a.js'), null);
+  assert.equal(dirOf('a.php'), null);
+  assert.equal(ask('Local/a.png'), true, 'папка Local/ — другая, чем local/ (регистр важен, как на сервере)');
+});
+
+test('askLines (Р-90а, Р-90б): до 30 строк, «и ещё N»; новая папка — одной строкой; массовое удаление — строка «проверь»; оба вопроса — одним AskUserQuestion', () => {
+  const cmds = { del: 'prod-sync.js --delete-ok', keep: 'prod-sync.js --keep-deleted', take: 'prod-sync.js --new-ok', skip: 'prod-sync.js --new-skip' };
+  const DEL = 'Удалить у нас (`prod-sync.js --delete-ok`) / Оставить у нас (`prod-sync.js --keep-deleted`) / Отложить';
+  const NEW = 'Забрать (`prod-sync.js --new-ok`) / Не забирать (`prod-sync.js --new-skip`) / Отложить';
+  assert.deepEqual(prod.askLines({ gone: ['b.md', 'a.md'], cmds }), ['Синхронизация остановлена, ничего не записано:',
+    '  нет на сервере, есть у нас в git (2):', '    a.md', '    b.md', 'спроси пользователя: ' + DEL]);
+  const gone = Array.from({ length: 35 }, (_, i) => `f/${String(i).padStart(2, '0')}.php`);
+  const many = prod.askLines({ gone, mass: { line: 'на сервере нет 35 из 40 файлов сайта — проверь «SSH прод» (/kit:project-init)', ssh: 'SSH прод' }, cmds });
+  assert.equal(many[1], '  на сервере нет 35 из 40 файлов сайта — проверь «SSH прод» (/kit:project-init)');
+  assert.equal(many[2], '  нет на сервере, есть у нас в git (35):');
+  assert.deepEqual(many.slice(3, 33), gone.slice(0, 30).map((p) => '    ' + p));
+  assert.equal(many[33], '    и ещё 5');
+  assert.equal(many.length, 35);
+  // Р-91 (М-2): массово — первым «Отложить» с проверкой SSH и пометкой «(Рекомендую)»
+  assert.equal(many[34], 'спроси пользователя: Отложить — проверь «SSH прод» (/kit:project-init) (Рекомендую) / ' +
+    'Удалить у нас (`prod-sync.js --delete-ok`) / Оставить у нас (`prod-sync.js --keep-deleted`)');
+  const dirOf = (p) => (p.startsWith('x/') ? 'x/' : null);
+  const fresh = ['x/index.php', 'local/a.js', 'x/img/1.png', ...Array.from({ length: 10 }, (_, i) => `x/f${i}.css`)];
+  const both = prod.askLines({ gone: ['a.md'], fresh, dirOf, cmds });
+  assert.deepEqual(both.slice(1), ['  нет на сервере, есть у нас в git (1):', '    a.md', '  новый код и новые папки на сервере (13):', '    local/a.js',
+    '    x/ — новая папка (12 файлов): f0.css, f1.css, f2.css, f3.css, f4.css, f5.css, f6.css, f7.css, f8.css, f9.css и ещё 2',
+    'спроси пользователя одним AskUserQuestion: по удалённым — ' + DEL + '; по новому коду — ' + NEW + '; два ответа — флаги вместе']);
+  assert.equal(prod.askLines({ fresh: ['local/a.js'], dirOf, cmds }).pop(), 'спроси пользователя: ' + NEW);
+  // строк больше 30 — «и ещё N» считает файлы
+  const lots = Array.from({ length: 31 }, (_, i) => `l/${String(i).padStart(2, '0')}.js`).concat(['x/a.php', 'x/b.php']);
+  const cut = prod.askLines({ fresh: lots, dirOf, cmds });
+  assert.equal(cut[cut.length - 2], '    и ещё 3');
+  assert.equal(cut.length, 1 + 1 + 30 + 1 + 1);
+});
+
 test('ftpRoots (Р-83): .gitignore и .gitattributes не в «Не выкладывать» — не корни; исключённое в PhpStorm — не корень, папка над ним дробится', () => {
   const { ftpRoots } = require('../plugins/kit/scripts/lib/prod-ftp');
   const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd(PARAMS), '.gitignore': 'x\n', '.gitattributes': '* text=auto\n', 'a.php': '1',
@@ -567,13 +659,13 @@ test('отметка: поля не того типа — пустые; BOM не
   const file = path.join(dir, MARK_FILE);
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify({ sessions: { ok: { at: new Date().toISOString(), result: 'need' } }, named: ['a', 3, null, 'b'], pending: 'нет' }));
-  assert.deepEqual(readMark(dir), { named: ['a', 'b'], pending: [] });
+  assert.deepEqual(readMark(dir), { named: ['a', 'b'], pending: [], answered: { absent: [], code: [], taken: [] } });
   for (const raw of ['[]', 'null', '5', '"s"', '{"sessions":[1],"named":{}}']) {
     fs.writeFileSync(file, raw);
-    assert.deepEqual(readMark(dir), { named: [], pending: [] }, raw);
+    assert.deepEqual(readMark(dir), { named: [], pending: [], answered: { absent: [], code: [], taken: [] } }, raw);
   }
   fs.writeFileSync(file, String.fromCharCode(0xfeff) + JSON.stringify({ named: ['z.zip'] }));
-  assert.deepEqual(readMark(dir), { named: ['z.zip'], pending: [] }, 'BOM не мешает');
+  assert.deepEqual(readMark(dir), { named: ['z.zip'], pending: [], answered: { absent: [], code: [], taken: [] } }, 'BOM не мешает');
   for (const name of ['markSession', 'sessionDone', 'lastNeed']) assert.equal(prod[name], undefined, name);
   const src = fs.readFileSync(require.resolve('../plugins/kit/scripts/lib/prod'), 'utf8');
   assert.doesNotMatch(src, /sessions|MARK_TTL/, 'записей сессий в lib/prod.js нет');
@@ -669,4 +761,8 @@ test('bigOf и stopLines (48.6): «Синхронизация остановле
   ]);
   assert.equal(stopLines(null, big, ENTRY_LIMIT).pop(), ask + bySize);
   assert.equal(stopLines({ exts: ['scss'], hits: ['a.scss'] }, null, ENTRY_LIMIT).pop(), ask + byWatchers);
+  // 48.12а: флаги уже данных ответов — в обеих командах (иначе ответ по вотчерам или объёму снова спросил бы об удалённых и новом коде)
+  assert.equal(stopLines({ exts: ['scss'], hits: ['a.scss'] }, big, ENTRY_LIMIT, '--delete-ok --new-ok ').pop(), ask +
+    byWatchers.replace('--watchers-ok', '--delete-ok --new-ok --watchers-ok') + '; ' + bySize.replace('--big-ok', '--delete-ok --new-ok --big-ok') +
+    '; оба ответа «забирать» — флаги вместе');
 });

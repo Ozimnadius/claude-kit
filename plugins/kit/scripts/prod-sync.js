@@ -15,21 +15,30 @@
 //                                               правки и совмещённое не трогает (их в pending нет); в worktree — «отменять
 //                                               нечего»; автозаливка PhpStorm Always — код 1 до любой записи (Р-84)
 //   --watchers-ok — забирать, хотя среди забираемого исходники File Watchers при PhpStorm Always; --big-ok — забирать больше
-//   50 МБ за раз; --delete-ok — удалять у нас, хотя на сервере нет многих файлов сайта (Р-83); --abort с --check, --ftp-done,
-//   --watchers-ok, --big-ok, --dirty-ok, --delete-ok — код 4
+//   50 МБ за раз; ответы на вопрос до записи (Р-90а, Р-90б): --delete-ok=<отпечаток> / --keep-deleted=<отпечаток> — удалить у нас /
+//   оставить у нас отслеживаемые файлы, которых нет на сервере; --new-ok=<отпечаток> / --new-skip=<отпечаток> — забрать / не
+//   забирать новый код с сервера. Р-91 (В-1): отпечаток — 8 знаков md5 списка вопроса (скрипт печатает флаг в команде ответа);
+//   список сейчас другой — ответ не действует, вопрос заново. Флаг ответа без отпечатка, оба ответа на один вопрос, --abort с
+//   --check, --ftp-done, --dirty-ok и любым флагом ответа — код 4
 // Вне синхронизации (Т-4, Р-83; по SSH и без SSH — syncRules из lib/prod.js): не файлы сайта (ALWAYS_SKIP, «Не выкладывать»),
 // служебные файлы git (.gitignore, .gitattributes в любой папке) и исключённое у сервера автозаливки PhpStorm — не сверяются, не
 // забираются, не удаляются, не восстанавливаются. Р-88: при «Выкладка: Claude по SSH» исключённое в PhpStorm заливает
 // ssh-deploy.js — оно сверяется как файлы сайта, но нет на сервере — у нас не удаляется («Оставлено у нас», один раз — named).
-// По SSH на сервере нет больше 20 файлов сайта и больше 10 % отслеживаемых — до любой записи код 1 (неверный «SSH <окружение>»
-// или переналитый сайт), без --delete-ok ничего не удаляется. Повтор с непустым pending по SSH откатывает его к HEAD — при
+// Р-90а: отслеживаемый файл сайта, которого нет на сервере, без ответа у нас не удаляется — до любой записи код 1, список и вопрос
+// «Удалить у нас / Оставить у нас / Отложить»; на сервере нет больше 20 файлов сайта и больше 10 % отслеживаемых — в вопросе строка
+// «проверь SSH» (неверный «SSH <окружение>» или переналитый сайт), первый вариант — «Отложить» (Рекомендую). Оставленные — в
+// answered отметки (Р-91 В-2, отдельно от named): «Нет на сервере, оставлено у нас» один раз, дальше без вопроса. Р-90б: новый файл на сервере — код (newCode: .php, .js, .htaccess…) или любой файл в новой папке корня сайта —
+// без ответа не забирается: до скачивания код 1 и вопрос «Забрать / Не забирать / Отложить»; не забранный — на сервере, в answered,
+// «Новый код на сервере, не забран» один раз. Р-92: ответ «Забрать» тоже в answered (taken) — пока путь не в git, без вопроса. Вопросы по удалённым и по новому коду — одной остановкой. --check и worktree не
+// спрашивают: «нет на сервере: N (спросит синхронизация)». Повтор с непустым pending по SSH откатывает его к HEAD — при
 // PhpStorm Always откат уехал бы на сервер: код 1 до любой записи (Р-84).
 // Без SSH (Т-9, 48.8): адрес сервера задан («Прод» / «Дев»), «SSH <окружение>» пуст — lib/prod-ftp.js.
 //   node prod-sync.js [--check] [--dirty-ok]   ничего не пишет: незаконченная синхронизация — «Повторить / Отменить»;
 //                                               правки файлов сайта в рабочей копии (Р-60) — скачивание затрёт их, «Скачаю
 //                                               всё равно (--dirty-ok) / Отложить»; иначе корни для скачивания по FTP в PhpStorm
 //                                               — «Скачал (--ftp-done) / Не буду скачивать»
-//   node prod-sync.js --ftp-done [--big-ok]     разбор скачанного: «сервер» — файлы сайта на диске, правила Т-5 те же;
+//   node prod-sync.js --ftp-done [--big-ok] [--new-ok=<отпечаток> | --new-skip=<отпечаток>]
+//                                               разбор скачанного: «сервер» — файлы сайта на диске, правила Т-5 те же;
 //                                               изменённое и добавленное без нас — в коммит синхронизации; наше незалитое,
 //                                               вернувшееся к базе, — из HEAD; совмещение: наша — HEAD, их — скачанное;
 //                                               конфликт — рабочая копия = HEAD, скачанное — во временную папку; не забираемое
@@ -37,7 +46,9 @@
 //                                               (новое не забираемое, ждущее удаления), не удаляется (Р-68). pending прошлой
 //                                               остановки к HEAD не откатывается (Р-61); автозаливка PhpStorm Always — код 1
 //                                               до любой записи (Р-70); File Watchers не проверяются, --watchers-ok ничего не
-//                                               меняет (Р-62); удалённые на сервере и новые вне скачанных папок не видны.
+//                                               меняет (Р-62); новый код из скачанного — по ответу (Р-90б), не забранный
+//                                               лежит в рабочей копии вне git; удалённые на сервере и новые вне скачанных папок
+//                                               не видны.
 //   --ftp-done с --check или при заданном «SSH <окружение>» — код 4; сессия в worktree — код 1, синхронизация без SSH — в
 //   основной папке (Р-64)
 // Папка проекта — корень git текущей папки; сервер — «Окружение» (прод или дев), куда — «SSH прод» / «SSH дев». Три версии
@@ -57,8 +68,9 @@
 // называется один раз (named). Файл забора и «наша» совмещаемого пишутся, только если на диске то, что видела сверка
 // (Р-58); иначе — «изменён во время синхронизации», каждый раз.
 // Коды: 0 — синхронизация сделана (или нечего забирать; с --check — синхронизация ничего не запишет; с --abort — отменено или
-// отменять нечего); 1 — нужен ответ пользователя (не совместилось — синхронизация сделана без этих файлов; File Watchers,
-// больше 50 МБ, на сервере нет многих файлов сайта, откат при автозаливке Always — ничего не записано; остановка после записи — kit-commit.js не сделал или не проверил коммит, записано не то,
+// отменять нечего); 1 — нужен ответ пользователя (не совместилось — синхронизация сделана без этих файлов; нет на сервере
+// отслеживаемых файлов, новый код на сервере, File Watchers, больше 50 МБ, откат при автозаливке Always — ничего не записано;
+// остановка после записи — kit-commit.js не сделал или не проверил коммит, записано не то,
 // что скачано: «Повторить / Отменить»; записано не то, что совмещено, а забора не было — «Повторить / Отложить»; с --check —
 // есть что забрать; без SSH до скачивания — всегда: правки, список корней или незаконченная синхронизация; worktree без
 // SSH); 2 — синхронизировать не с чем, параметр неверный или на сервере нет папки сайта; 3 — нет подключения, обрыв, вышло
@@ -79,11 +91,13 @@ const { ftpRoots, ftpDirty, dirtyLines, rootLines, ftpSurvey, ftpPlan, autoUploa
 const {
   ENTRY_LIMIT, UNKNOWN_SIZE, SKIP, REGULAR, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, oursPaths,
   pendingDelete, pendingEntry, ignoredOf, dirtyPaths, readWork, mergeVersions, listOf, summaryLine, readMark, writeMark, hasMd5, readText, clean,
-  takeRule, watcherHits, bigOf, stopLines, conflictDir, md5Eol, catBlobs, blobHashes, blobVariants, secretPaths, syncRules, ideaKeep,
+  takeRule, watcherHits, bigOf, stopLines, conflictDir, md5Eol, catBlobs, blobHashes, blobVariants, secretPaths, syncRules, ideaKeep, newCode, askLines,
+  fingerprint,
 } = require('./lib/prod');
 
-const USAGE = 'Использование: node prod-sync.js [--check] [--watchers-ok] [--big-ok] [--delete-ok] [--dirty-ok] [--timeout сек] | ' +
-  '--ftp-done [--big-ok] [--timeout сек] | --abort [--timeout сек]';
+const USAGE = 'Использование: node prod-sync.js [--check] [--watchers-ok] [--big-ok] [--delete-ok=<отпечаток> | --keep-deleted=<отпечаток>] ' +
+  '[--new-ok=<отпечаток> | --new-skip=<отпечаток>] [--dirty-ok] [--timeout сек] | --ftp-done [--big-ok] [--new-ok=<отпечаток> | ' +
+  '--new-skip=<отпечаток>] [--timeout сек] | --abort [--timeout сек]';
 // Меньше предела инструмента Bash (120 с): зависший сервер — код 3, а не оборванный вызов. Срок — общий на все подключения
 // синхронизации.
 const DEFAULT_TIMEOUT = 100;
@@ -98,17 +112,15 @@ const ASK = 'спроси пользователя: Повторить / ' + SKI
 const AGAIN = 'спроси пользователя: Повторить / Отменить (`prod-sync.js --abort`)';
 const KEPT = 'записанное синхронизацией — в pending: «Повторить» вернёт эти файлы к HEAD и доведёт синхронизацию до конца, ' +
   '«Отменить» вернёт их к HEAD; изменённые после остановки, наши правки и совмещённое оба ответа не тронут';
-// Те же ответы без SSH (Р-61): повтор — с --ftp-done, и pending к HEAD он не откатывает (на диске — скачанное).
-const TAIL = {
-  ssh: { ask: ASK, again: AGAIN, kept: KEPT },
-  ftp: {
-    ask: 'спроси пользователя: Повторить (`prod-sync.js --ftp-done`) / ' + SKIP,
-    again: 'спроси пользователя: Повторить (`prod-sync.js --ftp-done`) / Отменить (`prod-sync.js --abort`)',
-    kept: 'забираемое из скачанного — в pending: «Повторить» разберёт скачанное заново, без отката к HEAD, «Отменить» вернёт ' +
-      'забираемое отслеживаемое к HEAD, а новые файлы оставит в рабочей копии; изменённые после остановки, восстановленное из ' +
-      'HEAD и совмещённое оба ответа не тронут',
-  },
-};
+// Те же ответы без SSH (Р-61): повтор — с --ftp-done, и pending к HEAD он не откатывает (на диске — скачанное). Р-91 (В-3): команда
+// «Повторить» — с флагами ответов этого запуска (flags — flagsOf), иначе повтор снова задал бы отвеченный вопрос.
+const tailOf = (ftp, flags = '') => (!ftp ? { ask: ASK, again: AGAIN, kept: KEPT } : {
+  ask: 'спроси пользователя: Повторить (`prod-sync.js --ftp-done' + flags + '`) / ' + SKIP,
+  again: 'спроси пользователя: Повторить (`prod-sync.js --ftp-done' + flags + '`) / Отменить (`prod-sync.js --abort`)',
+  kept: 'забираемое из скачанного — в pending: «Повторить» разберёт скачанное заново, без отката к HEAD, «Отменить» вернёт ' +
+    'забираемое отслеживаемое к HEAD, а новые файлы оставит в рабочей копии; изменённые после остановки, восстановленное из ' +
+    'HEAD и совмещённое оба ответа не тронут',
+});
 const NOTHING = '[kit] Отменять нечего: незаконченной синхронизации нет';
 const SECRET_WHY = 'секрет — заливка нашей правки этого файла затрёт серверную'; // Т-11: называется один раз
 const MOVED_WHY = 'изменён во время синхронизации — повтори'; // файл поменялся до записи забора или совмещённого: каждый раз
@@ -117,23 +129,56 @@ const LEFT_WHY = 'новый файл оставлен в рабочей коп�
 const ROLLBACK_WHY = 'откат к git уйдёт на сервер'; // Р-84: автозаливка Always — повтор с откатом и отмена не идут
 const IDEA_KEPT_WHY = 'нет на сервере — не удалён: исключён в PhpStorm'; // Р-88: «Claude по SSH», называется один раз
 const KIND = { changed: 'изменён', added: 'добавлен', removed: 'удалён' };
-// Р-83: на сервере нет больше MASS_DELETE файлов сайта и больше MASS_SHARE отслеживаемых — до записи вопрос, а не удаление у нас
+const ABSENT_WHY = 'нет на сервере — оставлен у нас по ответу'; // Р-90а: --keep-deleted, называется один раз
+const CODE_WHY = 'новый код на сервере — не забран по ответу'; // Р-90б: --new-skip, называется один раз
+// Р-83: на сервере нет больше MASS_DELETE файлов сайта и больше MASS_SHARE отслеживаемых — в вопросе по удалённым (Р-90а) строка
+// «проверь SSH»: скорее неверный «SSH <окружение>» или переналитый сайт
 const MASS_DELETE = 20;
 const MASS_SHARE = 0.1;
 
 const FLAGS = {
   '--check': 'check', '--ftp-done': 'ftpDone', '--abort': 'abort', '--watchers-ok': 'watchersOk', '--big-ok': 'bigOk', '--dirty-ok': 'dirtyOk',
-  '--delete-ok': 'deleteOk',
+  '--delete-ok': 'deleteOk', '--keep-deleted': 'keepDeleted', '--new-ok': 'newOk', '--new-skip': 'newSkip',
 };
-// Флаги ответа запуска по SSH — для «повторить» в вопросе (Р-84): те же, что у этого запуска, в порядке USAGE.
-const flagsOf = (o) => [['watchersOk', '--watchers-ok'], ['bigOk', '--big-ok'], ['deleteOk', '--delete-ok']]
-  .filter(([k]) => o[k]).map(([, f]) => ' ' + f).join('');
+// Р-91 (В-1): ответы на вопрос по удалённым и по новому коду — только с отпечатком списка вопроса (--new-ok=1a2b3c4d,
+// lib/prod.js: fingerprint); значение — строка, без отпечатка — код 4.
+const LISTED = new Set(['deleteOk', 'keepDeleted', 'newOk', 'newSkip']);
+const PRINT = /^[0-9a-f]{8}$/;
+// Флаги ответов запуска — для «повторить» и для команд в вопросах (Р-84, 48.12а): те же, что у этого запуска, в порядке USAGE.
+const ANSWERS = [['watchersOk', '--watchers-ok'], ['bigOk', '--big-ok'], ['deleteOk', '--delete-ok'], ['keepDeleted', '--keep-deleted'],
+  ['newOk', '--new-ok'], ['newSkip', '--new-skip']];
+const flagsOf = (o) => ANSWERS.filter(([k]) => o[k]).map(([k, f]) => ' ' + f + (typeof o[k] === 'string' ? '=' + o[k] : '')).join('');
+// Уже данные ответы перед флагом вопроса о вотчерах и объёме (stopLines): «--delete-ok=… --new-ok=… » или ''.
+const answered = (o) => flagsOf(o).slice(1) + (flagsOf(o) ? ' ' : '');
+// Команды ответов на вопрос по удалённым и новому коду (askLines): запуск (cmd) с флагами этого запуска и флагом ответа с отпечатком
+// спрашиваемого списка (prints — { gone, fresh }: отпечатки спрашиваемых списков или null — этот вопрос не задан). Прежний ответ на
+// спрашиваемый вопрос (к другому списку) из команд убирается, верный ответ на другой — остаётся.
+function answerCmds(cmd, o, prints) {
+  const base = { ...o };
+  if (prints.gone) Object.assign(base, { deleteOk: false, keepDeleted: false });
+  if (prints.fresh) Object.assign(base, { newOk: false, newSkip: false });
+  return {
+    del: cmd + flagsOf({ ...base, deleteOk: prints.gone }), keep: cmd + flagsOf({ ...base, keepDeleted: prints.gone }),
+    take: cmd + flagsOf({ ...base, newOk: prints.fresh }), skip: cmd + flagsOf({ ...base, newSkip: prints.fresh }),
+  };
+}
 
 function parseArgs(argv) {
-  const o = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, dirtyOk: false, deleteOk: false, timeout: DEFAULT_TIMEOUT };
+  const o = {
+    check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, dirtyOk: false, deleteOk: false, keepDeleted: false, newOk: false,
+    newSkip: false, timeout: DEFAULT_TIMEOUT,
+  };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (Object.prototype.hasOwnProperty.call(FLAGS, a)) o[FLAGS[a]] = true;
+    const eq = a.indexOf('=');
+    const name = eq < 0 ? a : a.slice(0, eq);
+    const key = Object.prototype.hasOwnProperty.call(FLAGS, name) ? FLAGS[name] : null;
+    if (key && LISTED.has(key)) {
+      const v = eq < 0 ? '' : a.slice(eq + 1);
+      if (!PRINT.test(v)) throw new Error(`${name} — ответ с отпечатком списка вопроса: ${name}=<8 знаков> (флаг — из строки prod-sync.js, как есть)`);
+      if (o[key] && o[key] !== v) throw new Error(`${name} дан дважды с разными отпечатками — ответ один`);
+      o[key] = v;
+    } else if (key && eq < 0) o[key] = true;
     else if (a === '--timeout') {
       const v = argv[++i];
       if (v === undefined || !/^\d+$/.test(v) || Number(v) < 1 || Number(v) > 600) throw new Error('--timeout: секунды, от 1 до 600');
@@ -141,9 +186,12 @@ function parseArgs(argv) {
     } else throw new Error('неизвестный аргумент ' + a);
   }
   // Р-53: отмена ничего не сверяет и не забирает — с режимами синхронизации не сочетается
-  if (o.abort && (o.check || o.ftpDone || o.watchersOk || o.bigOk || o.dirtyOk || o.deleteOk)) throw new Error('--abort — только сам или с --timeout');
+  if (o.abort && (o.check || o.ftpDone || o.dirtyOk || ANSWERS.some(([k]) => o[k]))) throw new Error('--abort — только сам или с --timeout');
   // Р-65: разбор скачанного пишет — со сверкой без записи не сочетается
   if (o.ftpDone && o.check) throw new Error('--ftp-done — без --check: разбор скачанного записывает и коммитит');
+  // Р-90а, Р-90б: на один вопрос — один ответ
+  if (o.deleteOk && o.keepDeleted) throw new Error('--delete-ok и --keep-deleted вместе нельзя: ответ один — удалить у нас или оставить');
+  if (o.newOk && o.newSkip) throw new Error('--new-ok и --new-skip вместе нельзя: ответ один — забрать или не забирать');
   return o;
 }
 
@@ -390,7 +438,7 @@ async function download(c, items) {
 // once: [{ path, why }] — называются один раз, each: [{ path, why }] — каждый раз, waiting: [запись], findFailed,
 // judge(путь, версия сервера), work — наши правки (null — кандидатов нет), baseOid(путь) и headOid(путь) — blob базы и HEAD
 // или null, headVer(путь) — версия HEAD (md5 без \r; нет в HEAD — null), total — сколько файлов сайта сверено как отслеживаемые
-// (HEAD ∪ база; Р-83) }. Файлы сайта — не под c.rules (syncRules).
+// (HEAD ∪ база; Р-83), code — newCode по путям HEAD (Р-90б) }. Файлы сайта — не под c.rules (syncRules).
 async function survey(c) {
   const { dir } = c;
   const site = (p) => !matchRules(p, c.rules);
@@ -527,6 +575,7 @@ async function survey(c) {
   return {
     items: keep.sort(byPath), once, each, waiting: [...waiting].sort(), findFailed: list.findFailed, judge, work,
     baseOid: (p) => baseF.get(p) || null, headOid: (p) => headF.get(p) || null, headVer: (p) => ver(headF.get(p)), total: tracked.length,
+    code: newCode(head.keys()),
   };
 }
 
@@ -633,8 +682,8 @@ function applyMerges(dir, mp, cands) {
 
 // Коммит(ы) синхронизации через kit-commit.js (Р-16): по части путей на вызов, --push — у последней; после каждой
 // закоммиченной части — onPart(её пути) (М-1: убрать их из pending). → { code: 0, commit } | { code: 1, lines } — остановка
-// после записи (Р-51): вывод kit-commit.js, причина, «Повторить / Отменить» (t — ответы по SSH или без SSH, TAIL).
-function commitEntry(dir, env, take, remoteName, argLimit, out, onPart, t = TAIL.ssh) {
+// после записи (Р-51): вывод kit-commit.js, причина, «Повторить / Отменить» (t — ответы по SSH или без SSH, tailOf).
+function commitEntry(dir, env, take, remoteName, argLimit, out, onPart, t = tailOf(false)) {
   const kind = new Map(take.map((it) => [it.path, it.kind]));
   const parts = byLength(take.map((it) => it.path), argLimit);
   let commit = null;
@@ -735,17 +784,20 @@ const noBase = (b) => ['синхронизация не сделана: ' + b.er
 // Строка (Р-33, Р-37): числа — забранное коммитом синхронизации (в --check — что синхронизация запишет); наши доработки — только
 // при непустом заборе (М-4); extra — merged, conflicts или conflictsAhead. once и each читаются при вызове (их дополняют после
 // скачивания; once с local — без SSH: новое, что лежит в рабочей копии, Р-68; once с kept — нет на сервере, у нас не удалено,
-// Р-88). x: { home, env, once, each, named, waiting, ftp —
-// без SSH: фраза об удалённых на сервере (Р-67) }.
+// Р-88; once с absent — нет на сервере, оставлено по ответу, Р-90а; once с code — новый код, не забран по ответу, Р-90б). x: { home,
+// env, once, each, named, waiting, ftp — без SSH: фраза об удалённых на сервере (Р-67) }.
 const lineOf = (x) => (take, extra = {}) => {
   const kindOf = (it) => (it.kind === 'added' ? 'added' : it.gone ? 'removed' : 'changed');
   const [changed, added, removed] = ['changed', 'added', 'removed'].map((k) => take.filter((it) => kindOf(it) === k).map((it) => it.path));
   const ours = changed.length || removed.length ? oursPaths(x.home) : new Set();
-  const fresh = x.once.filter((it) => !x.named.has(it.path));
-  const skipped = [...fresh.filter((it) => !it.local && !it.kept), ...x.each].sort(byPath);
+  // Р-91 (В-2): ответы (absent, code) — в строке в том запуске, где даны (now), а не по named: путь мог быть назван раньше по другой причине
+  const fresh = x.once.filter((it) => (it.absent || it.code ? it.now : !x.named.has(it.path)));
+  const skipped = [...fresh.filter((it) => !it.local && !it.kept && !it.absent && !it.code), ...x.each].sort(byPath);
+  const pathsOf = (k) => fresh.filter((it) => it[k]).map((it) => it.path).sort();
   return summaryLine({
     env: x.env, changed, added, removed, ours: [...changed, ...removed].filter((p) => ours.has(p)).sort(), skipped,
-    kept: fresh.filter((it) => it.kept).sort(byPath), local: fresh.filter((it) => it.local).sort(byPath), waiting: x.waiting, ftp: x.ftp, ...extra,
+    kept: fresh.filter((it) => it.kept).sort(byPath), absent: pathsOf('absent'), code: pathsOf('code'), local: fresh.filter((it) => it.local).sort(byPath),
+    waiting: x.waiting, ftp: x.ftp, ...extra,
   });
 };
 
@@ -753,14 +805,46 @@ const CONFLICT_ASK = 'синхронизация сделана, кроме эт
   'версии сервера) / Оставить нашу (при следующей синхронизации вопрос повторится, пока наша версия не залита) / Взять версию сервера ' +
   '(скопируй её в рабочую копию; «сервера — нет» — удали файл)';
 
+// Р-90а, Р-90б, Р-91: вопрос до записи — по удалённым на сервере (gone — пути «удалён без нас») и по новому коду (fresh — пути по
+// newCode). answered — ответы прошлых раз из отметки: их пути молча оставляются и не забираются (В-2: только они, а не named);
+// остальное — спрашивается. Флаг ответа (opts) действует, только если его отпечаток — отпечаток нынешнего списка (В-1): пока
+// отвечали, на сервере могло появиться или пропасть ещё. check (--check, worktree) не спрашивает: удалённые — вне забора. → { goneAsk —
+// не отвеченные удалённые, askGone, askFresh — о чём спросить, asked — { gone, fresh }: отпечатки спрашиваемых списков или null
+// (для answerCmds), absent — оставить у нас, skipCode — не забирать, once — в строку и в отметку (now — ответ дан в этот раз),
+// taken — ответ «Забрать» в силе (Р-92: раньше или сейчас; забираются как обычно — секрет и др. не пустят, тогда назван один раз
+// по своей причине — и больше не спрашиваются) }.
+function questionOf({ gone, fresh }, answered, opts, check) {
+  const keptBefore = new Set(answered.absent);
+  const skippedBefore = new Set(answered.code);
+  const takenBefore = new Set(answered.taken);
+  const goneAsk = gone.filter((p) => !keptBefore.has(p));
+  const freshAsk = fresh.filter((p) => !skippedBefore.has(p) && !takenBefore.has(p));
+  const prints = { gone: goneAsk.length ? fingerprint(goneAsk) : null, fresh: freshAsk.length ? fingerprint(freshAsk) : null };
+  const is = (v, print) => !!print && v === print;
+  const [del, keep] = [opts.deleteOk, opts.keepDeleted].map((v) => is(v, prints.gone));
+  const [take, skip] = [opts.newOk, opts.newSkip].map((v) => is(v, prints.fresh));
+  const absent = check ? gone : [...gone.filter((p) => keptBefore.has(p)), ...(keep ? goneAsk : [])];
+  const skipCode = [...fresh.filter((p) => skippedBefore.has(p)), ...(!check && skip ? freshAsk : [])];
+  const once = check ? [] : [
+    ...absent.map((p) => ({ path: p, why: ABSENT_WHY, absent: true, now: !keptBefore.has(p) })),
+    ...skipCode.map((p) => ({ path: p, why: CODE_WHY, code: true, now: !skippedBefore.has(p) })),
+  ];
+  const askGone = check || del || keep ? [] : goneAsk;
+  const askFresh = check || take || skip ? [] : freshAsk;
+  // в командах вопроса — отпечатки только спрашиваемых списков; ответ на другой (верный) остаётся флагом запуска
+  const asked = { gone: askGone.length ? prints.gone : null, fresh: askFresh.length ? prints.fresh : null };
+  const taken = [...fresh.filter((p) => takenBefore.has(p)), ...(take ? freshAsk : [])];
+  return { goneAsk, absent, skipCode, once, askGone, askFresh, asked, taken };
+}
+
 // Хвост синхронизации — по SSH и без SSH, после записи забора. Совмещённое — в рабочую копию, мимо pending и коммита
 // синхронизации (Р-26, Р-29); пишется до коммита — его остановка совмещённое не откатывает (Р-34): повтор совместит заново с тем
 // же результатом. «Наша» поменялась после чтения — не пишется, называется каждый раз. Затем коммит(ы) синхронизации, отметка
 // (pending = [], named), строка и вопрос по конфликтам. x: { home, env, info, argLimit, out, st, stop, saveMark, each, once, line,
-// take, mp, cands — кандидаты на совмещение, ftp }.
+// take, mp, cands — кандидаты на совмещение, ftp, opts — флаги запуска: в команде «Повторить» без SSH (Р-91), taken — ответ «Забрать» в силе (Р-92) }.
 function finish(x) {
   const { home, out, stop, take } = x;
-  const t = x.ftp ? TAIL.ftp : TAIL.ssh;
+  const t = tailOf(x.ftp, flagsOf(x.opts));
   const ap = applyMerges(home, x.mp, x.cands);
   x.each.push(...ap.moved.map((p) => ({ path: p, why: MOVED_WHY })));
   if (ap.wrong.length) {
@@ -791,6 +875,11 @@ function finish(x) {
   const bad = x.saveMark((m) => {
     m.pending = [];
     m.named = [...new Set(x.once.map((it) => it.path))].sort(); // названное один раз; исчезнувшее с сервера — забывается
+    // Р-91 (В-2): ответы «Оставить у нас» и «Не забирать» — те, что в силе в этот раз (вернувшееся на сервер и исчезнувшее — уходит)
+    const paths = (k) => [...new Set(x.once.filter((it) => it[k]).map((it) => it.path))].sort();
+    // Р-92: ответ «Забрать» — пока путь не в git (забранное этим коммитом уходит)
+    const committed = new Set(take.map((it) => it.path));
+    m.answered = { absent: paths('absent'), code: paths('code'), taken: [...new Set(x.taken.filter((p) => !committed.has(p)))].sort() };
   });
   if (bad) return bad;
   x.st.written = false;
@@ -802,7 +891,7 @@ function finish(x) {
 }
 
 // Синхронизация (и отмена) для тестов и main. opts: { check, abort, ftpDone, dirtyOk, env, timeoutMs, argLimit, entryLimit,
-// watchersOk, bigOk, deleteOk }. → { code, out: [строки], commit? (хеш последнего коммита синхронизации) }.
+// watchersOk, bigOk, deleteOk, keepDeleted, newOk, newSkip }. → { code, out: [строки], commit? (хеш последнего коммита синхронизации) }.
 async function entry(dir, opts = {}) {
   const out = [];
   // written — пути забора уже в pending, запись началась (до отметки с pending = []); ftp — разбор скачанного (--ftp-done)
@@ -810,13 +899,13 @@ async function entry(dir, opts = {}) {
   try {
     return await enter(dir, opts, out, st);
   } catch (e) {
-    const t = st.ftp ? TAIL.ftp : TAIL.ssh;
+    const t = tailOf(st.ftp, flagsOf(opts));
     // Р-51: остановка после записи — по pending работают и повтор, и отмена
     if (st.written) {
       out.push('синхронизация остановилась после записи: ' + e.message, t.kept, t.again);
       return { code: 1, out };
     }
-    out.push('синхронизация не сделана: ' + e.message + ' — повтор prod-sync.js' + (st.ftp ? ' --ftp-done' : '') +
+    out.push('синхронизация не сделана: ' + e.message + ' — повтор prod-sync.js' + (st.ftp ? ' --ftp-done' : '') + flagsOf(opts) +
       ' безопасен; не проходит — скажи пользователю');
     return { code: 4, out };
   }
@@ -882,12 +971,24 @@ async function enter(dir, opts, out, st) {
   const s = await survey(c);
   if (s.fail) return failed(s.fail);
   if (s.findFailed) out.push('find на сервере прочитал не всё — новые файлы в нечитаемых папках не сверены');
-  const named = new Set(readMark(home).named);
+  const mark = readMark(home);
+  const named = new Set(mark.named);
   const each = [...s.each];
   const once = [...s.once]; // и файлы с секретом — они находятся после скачивания (Т-11)
   const line = lineOf({ home, env, once, each, named, waiting: s.waiting });
-  const takeSide = s.items.filter((it) => it.side === 'take');
-  const mergeSide = s.items.filter((it) => it.side === 'merge');
+  // Р-90а: отслеживаемый файл сайта, которого нет на сервере («удалён без нас»), без ответа у нас не удаляется — правило «что было
+  // в git при заливке, было и на сервере» неверно для файлов, которых туда не лили. Р-90б: новый код с сервера (newCode) без ответа
+  // не забирается. Р-91 (В-2): отвеченные раньше («Оставить у нас», «Не забирать» — answered отметки, не named) — как в прошлый раз,
+  // молча. Р-91 (В-1): ответ-флаг действует, только если его отпечаток — отпечаток нынешнего списка вопроса (q). --check и worktree
+  // не спрашивают: удалённые — не в заборе, в строке — «нет на сервере: N».
+  const q = questionOf({
+    gone: s.items.filter((it) => it.side === 'take' && it.gone).map((it) => it.path),
+    fresh: s.items.filter((it) => it.kind === 'added' && s.code.ask(it.path)).map((it) => it.path),
+  }, mark.answered, opts, check);
+  for (const it of q.once) once.push(it);
+  const drop = new Set([...q.absent, ...q.skipCode]);
+  const takeSide = s.items.filter((it) => it.side === 'take' && !drop.has(it.path));
+  const mergeSide = s.items.filter((it) => it.side === 'merge' && !drop.has(it.path));
 
   if (check) {
     // Р-39: план синхронизации без записи — неясные скачиваются, кандидаты на совмещение совмещаются в памяти; в проект ничего
@@ -901,8 +1002,8 @@ async function enter(dir, opts, out, st) {
     each.push(...got.each, ...mp.each);
     once.push(...got.secret, ...mp.secret);
     const writes = [...got.take, ...mp.merged.map((m) => ({ path: m.path, kind: 'changed', gone: false }))].sort(byPath);
-    const sum = line(writes, { conflictsAhead: mp.conflicts.map((k) => k.path) });
-    if (writes.length || readMark(home).pending.length) {
+    const sum = line(writes, { conflictsAhead: mp.conflicts.map((k) => k.path), absentAhead: q.goneAsk.length });
+    if (writes.length || q.goneAsk.length || readMark(home).pending.length) {
       // М-5: в основной папке синхронизация — здесь же, без --check; в worktree — в основной папке
       return stop(1, sum, wt === null ? 'есть изменения без kit — запусти синхронизацию: /kit:sync'
         : `есть изменения без kit — синхронизация в основной папке проекта (${wt})`);
@@ -910,22 +1011,23 @@ async function enter(dir, opts, out, st) {
     return stop(0, sum);
   }
 
-  // Р-83 (М-1): на сервере нет многих файлов сайта — скорее «SSH <окружение>» указывает не на ту папку или сайт переналили:
-  // удалить их у нас одним коммитом без вопроса нельзя. До любой записи — вопрос; --delete-ok — удалять. Р-89: доля — от файлов
-  // сайта без оставленных в этот раз (Р-88: нет на сервере, у нас не удаляются — kept из сверки, а не только named прошлых раз),
-  // иначе сотни путей под исключённой папкой раздували бы знаменатель.
-  const gone = takeSide.filter((it) => it.gone).map((it) => it.path);
-  const total = s.total - s.once.filter((it) => it.kept).length;
-  if (!opts.deleteOk && gone.length > MASS_DELETE && gone.length > total * MASS_SHARE) {
-    return stop(1, `на сервере нет ${gone.length} из ${total} файлов сайта — проверь «${sshKey}» (/kit:project-init)`, '  например: ' + listOf(gone),
-      `спроси пользователя: Удалить у нас (\`prod-sync.js${flagsOf({ ...opts, deleteOk: true })}\`) / Проверить «${sshKey}» / ${SKIP}`);
+  // Р-90а, Р-90б: до любой записи и до скачивания — один вопрос по удалённым на сервере и по новому коду (ответ на один — флагом,
+  // второй спросится снова). Р-83 (М-1): на сервере нет многих файлов сайта — скорее «SSH <окружение>» указывает не на ту папку или
+  // сайт переналили: в вопросе — строка «проверь». Р-89: доля — от файлов сайта без оставленных в этот раз (Р-88: нет на сервере, у
+  // нас не удаляются — kept из сверки), иначе сотни путей под исключённой папкой раздували бы знаменатель.
+  if (q.askGone.length || q.askFresh.length) {
+    const total = s.total - s.once.filter((it) => it.kept).length;
+    const n = q.askGone.length;
+    const mass = n > MASS_DELETE && n > total * MASS_SHARE
+      ? { line: `на сервере нет ${n} из ${total} файлов сайта — проверь «${sshKey}» (/kit:project-init)`, ssh: sshKey } : null;
+    return stop(1, ...askLines({ gone: q.askGone, mass, fresh: q.askFresh, dirOf: s.code.dirOf, cmds: answerCmds('prod-sync.js', opts, q.asked) }));
   }
 
   // Р-40 (1): объём — по всем кандидатам (забор и совмещение), до любого скачивания; остановка по объёму — сразу и вотчеры по всем
-  // кандидатам, одним вопросом.
-  const sized = s.items.filter((it) => !it.gone);
+  // кандидатам, одним вопросом. В командах ответов — и уже данные ответы (48.12а).
+  const sized = [...takeSide, ...mergeSide].filter((it) => !it.gone);
   const big = opts.bigOk ? null : bigOf(sized, entryLimit);
-  if (big) return stop(1, ...stopLines(opts.watchersOk ? null : watcherHits(home, sized.map((it) => it.path)), big, entryLimit));
+  if (big) return stop(1, ...stopLines(opts.watchersOk ? null : watcherHits(home, sized.map((it) => it.path)), big, entryLimit, answered(opts)));
   // (2) кандидатов на совмещение — скачать и совместить в памяти.
   const mp = await mergePlan(c, s, mergeSide);
   if (mp.fail) return failed(mp.fail);
@@ -933,7 +1035,7 @@ async function enter(dir, opts, out, st) {
   // остального забора и до любой записи — ничего не записано, отметка не меняется.
   if (!opts.watchersOk) {
     const w = watcherHits(home, [...takeSide.filter((it) => !it.gone).map((it) => it.path), ...mp.merged.map((m) => m.path)]);
-    if (w.hits.length) return stop(1, ...stopLines(w, null, entryLimit));
+    if (w.hits.length) return stop(1, ...stopLines(w, null, entryLimit, answered(opts)));
   }
   // (4) забор: скачать (файлы с секретом — не забираются, Т-11), записать.
   const got = await collect(c, s, takeSide);
@@ -957,7 +1059,7 @@ async function enter(dir, opts, out, st) {
     const wrong = files.filter((it) => md5(fs.readFileSync(path.join(home, it.path))) !== md5(it.data)).map((it) => clean(it.path));
     if (wrong.length) return stop(1, 'записано не то, что скачано (md5 не совпал): ' + wrong.join(', '), KEPT, AGAIN);
   }
-  return finish({ home, env, info, argLimit, out, st, stop, saveMark, each, once, line, take, mp, cands: mergeSide, ftp: false });
+  return finish({ home, env, info, argLimit, out, st, stop, saveMark, each, once, line, take, mp, cands: mergeSide, ftp: false, opts, taken: q.taken });
 }
 
 // Без SSH (Т-9, 48.8): адрес сервера задан, «SSH <окружение>» пуст — скачивание по FTP в PhpStorm (lib/prod-ftp.js). Без
@@ -979,7 +1081,7 @@ async function ftpEnter(home, wt, info, env, opts, out, st) {
     // прошлая синхронизация остановилась после записи (Т-10): новое скачивание поверх записанного её спутало бы
     if (pending.length) {
       const n = pending.length;
-      return stop(1, `прошлая синхронизация остановилась после записи: в pending ${n} ${plural(n, 'файл', 'файла', 'файлов')}`, TAIL.ftp.kept, TAIL.ftp.again);
+      return stop(1, `прошлая синхронизация остановилась после записи: в pending ${n} ${plural(n, 'файл', 'файла', 'файлов')}`, tailOf(true, flagsOf(opts)).kept, tailOf(true, flagsOf(opts)).again);
     }
     const dirty = opts.dirtyOk ? [] : await ftpDirty(c);
     if (dirty.length) return stop(1, ...dirtyLines(dirty));
@@ -997,12 +1099,23 @@ async function ftpEnter(home, wt, info, env, opts, out, st) {
   const moved = pending.filter((e) => hasMd5(e) && diskVer(home, e.path) !== e.md5).map((e) => e.path);
   if (moved.length) out.push('Повтор после остановки: ' + untouched(moved) + '; в этот раз не разбирается');
   const s = await ftpSurvey(c, new Set(moved));
-  const named = new Set(readMark(home).named);
+  const mark = readMark(home);
+  const named = new Set(mark.named);
   const each = [];
   const once = [...s.once];
+  // Р-90б: новый код из скачанного (нет в HEAD; newCode) — до любой записи вопрос; «Не забирать» (сейчас или отвеченное раньше,
+  // Р-91 В-2) — не забирается, лежит в рабочей копии вне git (как Р-68), называется один раз; флаг ответа — к нынешнему списку
+  // (Р-91 В-1). Удалённые на сервере по FTP не видны — вопроса о них нет.
+  const q = questionOf({ gone: [], fresh: s.take.filter((it) => it.kind === 'added' && s.code.ask(it.path)).map((it) => it.path) }, mark.answered, opts, false);
+  if (q.askFresh.length) {
+    return stop(1, ...askLines({ fresh: q.askFresh, dirOf: s.code.dirOf, cmds: answerCmds('prod-sync.js --ftp-done', opts, q.asked) }));
+  }
+  for (const it of q.once) once.push(it);
+  const skipCode = new Set(q.skipCode);
+  s.take = s.take.filter((it) => !skipCode.has(it.path));
   // Р-62: объём забираемого — до любой записи
   const big = opts.bigOk ? null : bigOf(s.take, entryLimit);
-  if (big) return stop(1, ...stopLines(null, big, entryLimit, '--ftp-done '));
+  if (big) return stop(1, ...stopLines(null, big, entryLimit, '--ftp-done ' + answered(opts)));
   // Т-11: скачанное с секретом не забирается и не совмещается — отслеживаемое к HEAD, новое лежит (Р-68); названо один раз;
   // совмещение — в памяти. Пропавшее после разбора — называется каждый раз.
   const { take, cands, mp, secret, secretLocal, gone } = await ftpPlan(c, s);
@@ -1025,7 +1138,7 @@ async function ftpEnter(home, wt, info, env, opts, out, st) {
   restore(home, [...s.undo].sort(), argLimit);
   if (s.reverted.length) out.push('Восстановлено из HEAD — скачанное вернуло к базе наше незалитое: ' + listOf(s.reverted));
   const line = lineOf({ home, env, once, each, named, waiting: s.waiting, ftp: true });
-  return finish({ home, env, info, argLimit, out, st, stop, saveMark, each, once, line, take, mp, cands, ftp: true });
+  return finish({ home, env, info, argLimit, out, st, stop, saveMark, each, once, line, take, mp, cands, ftp: true, opts, taken: q.taken });
 }
 
 async function main(argv) {
@@ -1041,7 +1154,7 @@ async function main(argv) {
   const dir = top.ok && top.out.trim() ? path.resolve(top.out.trim()) : cwd;
   const r = await entry(dir, {
     check: o.check, abort: o.abort, ftpDone: o.ftpDone, dirtyOk: o.dirtyOk, timeoutMs: o.timeout * 1000, watchersOk: o.watchersOk, bigOk: o.bigOk,
-    deleteOk: o.deleteOk,
+    deleteOk: o.deleteOk, keepDeleted: o.keepDeleted, newOk: o.newOk, newSkip: o.newSkip,
   });
   console.log(r.out.join('\n'));
   return r.code;

@@ -15,7 +15,7 @@ const { ROOT, writeFiles, tmpDir, runScript, findSh, shPath } = require('./helpe
 const { paramsMd, WORK_GITIGNORE, WORK_RULE } = require('./fixtures');
 const ps = require('../plugins/kit/scripts/prod-sync');
 const { pruneRules, findPrune, listScript, parseList, fetchScript, parseFetch } = require('../plugins/kit/scripts/lib/prod-ssh');
-const { ENTRY_RE, FILE_LIMIT, readMark, writeMark, badName } = require('../plugins/kit/scripts/lib/prod');
+const { ENTRY_RE, FILE_LIMIT, readMark, writeMark, badName, fingerprint } = require('../plugins/kit/scripts/lib/prod');
 
 // Локальный sh с GNU find (-printf), xargs, cut и mktemp — «сервер» для сверки; нет — такие тесты пропускаются.
 const SH = (() => {
@@ -68,6 +68,27 @@ const markOf = (dir) => (has(dir, '.claude/kit-prod.json') ? read(dir, '.claude/
 const pendingOf = (dir) => readMark(dir).pending.map((e) => e.path);
 const text = (r) => r.out.join('\n');
 const last = (r) => r.out[r.out.length - 1];
+
+// Р-90а, Р-90б (48.12а): чего нет на сервере, у нас без ответа не удаляется; новый код с сервера без ответа не забирается — один
+// вопрос со списком до любой записи (по SSH — и до скачивания). Флаги ответов в командах — в порядке USAGE.
+const STOPPED = 'Синхронизация остановлена, ничего не записано:';
+const GONE_HEAD = (n) => `  нет на сервере, есть у нас в git (${n}):`;
+const NEW_HEAD = (n) => `  новый код и новые папки на сервере (${n}):`;
+// Р-91 (В-1): флаг ответа — с отпечатком списка вопроса (fingerprint: 8 знаков md5 отсортированных путей); FP — отпечаток путей.
+const FP = (...paths) => fingerprint(paths);
+const NOANS = { absent: [], code: [], taken: [] }; // Р-91 (В-2), Р-92: ответов «Оставить у нас», «Не забирать», «Забрать» в отметке нет
+const DEL_ANSWERS = (fp, f = '') => `Удалить у нас (\`prod-sync.js --delete-ok=${fp}${f}\`) / Оставить у нас (\`prod-sync.js --keep-deleted=${fp}${f}\`) / Отложить`;
+const NEW_ANSWERS = (fp, f = '', ftp = false) => `Забрать (\`prod-sync.js${ftp ? ' --ftp-done' : ''}${f} --new-ok=${fp}\`) / Не забирать ` +
+  `(\`prod-sync.js${ftp ? ' --ftp-done' : ''}${f} --new-skip=${fp}\`) / Отложить`;
+const ASK_GONE = (...paths) => 'спроси пользователя: ' + DEL_ANSWERS(FP(...paths));
+const ASK_NEW = (...paths) => 'спроси пользователя: ' + NEW_ANSWERS(FP(...paths));
+const ASK_BOTH = (gone, fresh) => 'спроси пользователя одним AskUserQuestion: по удалённым — ' + DEL_ANSWERS(FP(...gone)) + '; по новому коду — ' +
+  NEW_ANSWERS(FP(...fresh)) + '; два ответа — флаги вместе';
+// Р-91 (М-2): массовое удаление — первым «Отложить» с проверкой SSH (Рекомендую)
+const ASK_MASS = (...paths) => 'спроси пользователя: Отложить — проверь «SSH прод» (/kit:project-init) (Рекомендую) / Удалить у нас (`prod-sync.js ' +
+  `--delete-ok=${FP(...paths)}\`) / Оставить у нас (\`prod-sync.js --keep-deleted=${FP(...paths)}\`)`;
+const SYNC = '[kit] Синхронизация с продом: файлов без kit: ';
+const SAME = '[kit] Синхронизация с продом: прод совпадает с git.';
 
 // Проект в git и «сервер» — временная папка с файлами сайта (по умолчанию — теми же). host — хост заглушки: sh, shdrop, down, hang,
 // fixed (готовый ответ FAKE_SSH_OUT); ssh — параметр с адресом («SSH прод» или «SSH дев»).
@@ -168,19 +189,31 @@ function conflictOf(r, rel) {
 // ---- Разбор и правила ---------------------------------------------------------------------------------------------------
 
 test('parseArgs: --check, --ftp-done, --abort, --watchers-ok, --big-ok, --dirty-ok, --delete-ok, --timeout 1…600 (по умолчанию 100); неизвестное и неверное — исключение; --abort — только с --timeout (Р-53); --ftp-done — без --check (Р-65)', () => {
-  const base = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, dirtyOk: false, deleteOk: false, timeout: 100 };
+  const base = { check: false, ftpDone: false, abort: false, watchersOk: false, bigOk: false, dirtyOk: false, deleteOk: false, keepDeleted: false,
+    newOk: false, newSkip: false, timeout: 100 };
   assert.deepEqual(ps.parseArgs([]), base);
-  assert.deepEqual(ps.parseArgs(['--check', '--watchers-ok', '--big-ok', '--dirty-ok', '--delete-ok', '--timeout', '7']),
-    { ...base, check: true, watchersOk: true, bigOk: true, dirtyOk: true, deleteOk: true, timeout: 7 });
+  assert.deepEqual(ps.parseArgs(['--check', '--watchers-ok', '--big-ok', '--dirty-ok', '--delete-ok=0123abcd', '--timeout', '7']),
+    { ...base, check: true, watchersOk: true, bigOk: true, dirtyOk: true, deleteOk: '0123abcd', timeout: 7 });
   assert.deepEqual(ps.parseArgs(['--ftp-done', '--watchers-ok', '--big-ok']), { ...base, ftpDone: true, watchersOk: true, bigOk: true });
-  assert.deepEqual(ps.parseArgs(['--delete-ok']), { ...base, deleteOk: true });
+  // Р-90а, Р-90б (48.12а), Р-91 (В-1): ответы по удалённым на сервере и по новому коду — с отпечатком списка вопроса
+  assert.deepEqual(ps.parseArgs(['--keep-deleted=deadbeef', '--new-ok=00000000']), { ...base, keepDeleted: 'deadbeef', newOk: '00000000' });
+  assert.deepEqual(ps.parseArgs(['--delete-ok=a1b2c3d4', '--new-skip=ffffffff']), { ...base, deleteOk: 'a1b2c3d4', newSkip: 'ffffffff' });
+  assert.deepEqual(ps.parseArgs(['--ftp-done', '--new-skip=12345678']), { ...base, ftpDone: true, newSkip: '12345678' });
+  assert.deepEqual(ps.parseArgs(['--new-ok=12345678', '--new-ok=12345678']), { ...base, newOk: '12345678' }, 'повтор того же ответа — не ошибка');
   assert.deepEqual(ps.parseArgs(['--abort']), { ...base, abort: true });
   assert.deepEqual(ps.parseArgs(['--timeout', '5', '--abort']), { ...base, abort: true, timeout: 5 });
   for (const bad of [['--нет'], ['x'], ['--skip'], ['--hook'], ['--timeout'], ['--timeout', '0'], ['--timeout', '601'], ['--timeout', '1.5'], ['--timeout', '-3'],
-    ['--abort', '--check'], ['--ftp-done', '--abort'], ['--abort', '--watchers-ok'], ['--big-ok', '--abort'], ['--dirty-ok', '--abort'], ['--abort', '--delete-ok'],
-    ['--ftp-done', '--check'], ['--check', '--ftp-done']]) {
+    ['--abort', '--check'], ['--ftp-done', '--abort'], ['--abort', '--watchers-ok'], ['--big-ok', '--abort'], ['--dirty-ok', '--abort'], ['--abort', '--delete-ok=0123abcd'],
+    ['--ftp-done', '--check'], ['--check', '--ftp-done'], ['--abort', '--keep-deleted=0123abcd'], ['--new-ok=0123abcd', '--abort'], ['--abort', '--new-skip=0123abcd'],
+    ['--delete-ok=0123abcd', '--keep-deleted=0123abcd'], ['--new-ok=0123abcd', '--new-skip=0123abcd'],
+    // Р-91 (В-1): флаг ответа без отпечатка, с неверным отпечатком, отпечаток у флага без значения, два разных ответа одним флагом
+    ['--delete-ok'], ['--keep-deleted'], ['--new-ok'], ['--new-skip'], ['--new-ok='], ['--new-ok=1234567'], ['--new-ok=123456789'], ['--new-ok=ABCDEF12'],
+    ['--new-ok=1234567g'], ['--big-ok=12345678'], ['--check=1'], ['--new-ok=12345678', '--new-ok=87654321']]) {
     assert.throws(() => ps.parseArgs(bad), bad.join(' '));
   }
+  assert.throws(() => ps.parseArgs(['--keep-deleted=0123abcd', '--delete-ok=0123abcd']), /--delete-ok и --keep-deleted вместе нельзя/);
+  assert.throws(() => ps.parseArgs(['--new-skip=0123abcd', '--new-ok=0123abcd']), /--new-ok и --new-skip вместе нельзя/);
+  assert.throws(() => ps.parseArgs(['--new-ok']), /--new-ok — ответ с отпечатком списка вопроса: --new-ok=<8 знаков>/);
 });
 
 test('--skip и --hook — код 4 (неизвестный флаг); --abort с --check и др. — код 4; --ftp-done с --check и при заданном «SSH прод» — код 4 (Р-65)', () => {
@@ -192,10 +225,23 @@ test('--skip и --hook — код 4 (неизвестный флаг); --abort �
     assert.ok(r.stdout.includes('Использование: node prod-sync.js [--check]'), r.stdout);
   }
   for (const args of [['--abort', '--check'], ['--abort', '--ftp-done'], ['--abort', '--watchers-ok'], ['--abort', '--big-ok'], ['--abort', '--dirty-ok'],
-    ['--abort', '--delete-ok']]) {
+    ['--abort', '--delete-ok=0123abcd'], ['--abort', '--keep-deleted=0123abcd'], ['--abort', '--new-ok=0123abcd'], ['--abort', '--new-skip=0123abcd']]) {
     const r = cli({ cwd: ftp.dir, args });
     assert.equal(r.code, 4, args.join(' '));
     assert.match(r.stdout, /^prod-sync: --abort — только сам или с --timeout/, r.stdout);
+  }
+  // Р-90а, Р-90б: два ответа на один вопрос — код 4, ничего не делается
+  for (const args of [['--delete-ok=0123abcd', '--keep-deleted=0123abcd'], ['--new-ok=0123abcd', '--new-skip=0123abcd']]) {
+    const r = cli({ cwd: ftp.dir, args });
+    assert.equal(r.code, 4, args.join(' '));
+    assert.match(r.stdout, /^prod-sync: --(delete|new)-ok и --(keep-deleted|new-skip) вместе нельзя/, r.stdout);
+    assert.ok(r.stdout.includes('Использование: node prod-sync.js'), r.stdout);
+  }
+  // Р-91 (В-1): флаг ответа без отпечатка списка — код 4
+  for (const flag of ['--delete-ok', '--keep-deleted', '--new-ok', '--new-skip']) {
+    const r = cli({ cwd: ftp.dir, args: [flag] });
+    assert.equal(r.code, 4, flag);
+    assert.ok(r.stdout.startsWith(`prod-sync: ${flag} — ответ с отпечатком списка вопроса: ${flag}=<8 знаков>`), r.stdout);
   }
   for (const args of [['--ftp-done', '--check'], ['--check', '--ftp-done']]) {
     const r = cli({ cwd: ftp.dir, args });
@@ -387,7 +433,8 @@ test('изменён, добавлен, удалён без нас → один 
   const { dir, server } = site({ 'a.php': 'a\n', 'b.php': 'b\n', 'c.php': 'c\n' });
   writeFiles(server, { 'a.php': 'a2\n', 'new/n.php': 'n\n' });
   fs.rmSync(path.join(server, 'c.php'));
-  const r = await run(dir);
+  // Р-90а, Р-90б (48.12а): удаление у нас и новый код — по ответу
+  const r = await run(dir, { deleteOk: FP('c.php'), newOk: FP('new/n.php') });
   assert.equal(r.code, 0, text(r));
   assert.equal(count(dir), 2);
   assert.match(subject(dir), ENTRY_RE);
@@ -423,7 +470,7 @@ test('отметка: после синхронизации в kit-prod.json т�
   writeFiles(server, { 'a.php': '2\n', 'old.zip': 'PK' });
   // файл первой редакции: записи сессий, названное раньше (с сервера уже исчезло)
   writeFiles(dir, { '.claude/kit-prod.json': JSON.stringify({ sessions: { s1: { at: new Date().toISOString(), result: 'need' } }, named: ['gone.zip'], pending: [] }) });
-  assert.deepEqual(readMark(dir), { named: ['gone.zip'], pending: [] });
+  assert.deepEqual(readMark(dir), { named: ['gone.zip'], pending: [], answered: NOANS });
   const r = await run(dir);
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['M\ta.php']);
@@ -510,7 +557,7 @@ test('удалённый нашим шагом файл лежит на серв
 test('архив и файл больше 10 МБ — не забраны и названы; вторая синхронизация их не называет', { skip: !SH }, async () => {
   const { dir, server } = site({ 'a.php': 'a\n' });
   writeFiles(server, { 'backup.zip': 'PK', 'files/big.dat': Buffer.alloc(FILE_LIMIT + 1, 120), 'ok.php': 'ok\n' });
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('ok.php') }); // ok.php — новый код (Р-90б)
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['A\tok.php']);
   assert.ok(!has(dir, 'backup.zip') && !has(dir, 'files/big.dat'));
@@ -540,7 +587,7 @@ test("путь с пробелом, кириллицей и ' — забран �
   const N = "новая папка/x 'y'.php";
   const { dir, server } = site({ [P]: 'старый\n', 'a.php': 'a\n' });
   writeFiles(server, { [P]: 'новый\n', [N]: 'н\n' });
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP(N) });
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['A\t' + N, 'M\t' + P]);
   assert.equal(read(dir, P), 'новый\n');
@@ -595,14 +642,14 @@ test('нет подключения — код 3 с причиной и вопр
   const { dir, server } = site({ 'a.php': '1\n', 'b.php': 'b\n' }, { host: 'shdrop' });
   writeFiles(server, { 'a.php': '2\n', 'n.php': 'n\n' });
   await withEnv({ FAKE_SSH_COUNT: path.join(tmpDir('kit-prod-cnt-'), 'n'), FAKE_SSH_DROP: '2' }, async () => {
-    const r = await run(dir);
+    const r = await run(dir, { newOk: FP('n.php') });
     assert.equal(r.code, 3, text(r));
     assert.match(text(r), /closed by remote host/);
     assert.equal(read(dir, 'a.php'), '1\n');
     assert.ok(!has(dir, 'n.php'));
     assert.ok(!has(dir, '.claude/kit-prod.json'), 'отметка не записана');
     assert.equal(count(dir), 1);
-    const again = await run(dir);
+    const again = await run(dir, { newOk: FP('n.php') });
     assert.equal(again.code, 0, text(again));
     assert.deepEqual(changed(dir), ['A\tn.php', 'M\ta.php']);
   });
@@ -614,7 +661,7 @@ test('повтор (ревью 5): pending, часть файлов записа
   // прошлая синхронизация оборвалась после записи: a.php и n.php записаны, c.php — прежней версией сервера
   writeFiles(dir, { 'a.php': '2\n', 'n.php': 'n\n', 'c.php': 'c старая версия сервера\n' });
   writeMark(dir, { named: [], pending: ['a.php', 'b.php', 'c.php', 'n.php'] });
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('n.php') });
   assert.equal(r.code, 0, text(r));
   assert.equal(count(dir), 2);
   assert.deepEqual(changed(dir), ['A\tn.php', 'M\ta.php', 'M\tb.php']);
@@ -772,7 +819,7 @@ test('новый неотслеживаемый файл, уже залитый 
   writeFiles(server, { 'mine.php': 'моё\n', 'win.php': 'x\r\ny\r\n', 'b.php': 'b\n', 'mine.zip': 'PK' });
   const before = status(dir);
   const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
-  const r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir));
+  const r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir, { newOk: FP('b.php') }));
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['A\tb.php']);
   assert.equal(status(dir), before);
@@ -841,7 +888,7 @@ test('конфликт совмещения — код 1, рабочая коп�
   const { dir, server } = site({ 'a.php': FIVE, 'b.php': 'b\n', 'm.php': FIVE });
   writeFiles(dir, { 'a.php': 'наша\nl2\nl3\nl4\nl5\n', 'm.php': 'M1 наша\nl2\nl3\nl4\nl5\n' });
   writeFiles(server, { 'a.php': 'сервер\nl2\nl3\nl4\nl5\n', 'b.php': 'b2\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n', 'n.php': 'n\n' });
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('n.php') });
   assert.equal(r.code, 1, text(r));
   assert.deepEqual(changed(dir), ['A\tn.php', 'M\tb.php']);
   const head = g(dir, 'rev-parse', 'HEAD').trim();
@@ -995,7 +1042,9 @@ test('больше 50 МБ за раз — код 1 до скачивания; -
   writeFiles(server, { 'media/one/x/deep/1.bin': nine, 'media/one/x/deep/2.bin': nine, 'media/one/x/3.bin': nine, 'media/two/4.bin': nine,
     'video/5.bin': nine, '6.bin': nine, 'a.php': '2\n' });
   const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
-  let r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir));
+  // media/ и video/ — новые папки корня (Р-90б): ответ «Забрать» — --new-ok, он же в команде ответа по объёму
+  const MEDIA = FP('media/one/x/deep/1.bin', 'media/one/x/deep/2.bin', 'media/one/x/3.bin', 'media/two/4.bin', 'video/5.bin');
+  let r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir, { newOk: MEDIA }));
   assert.equal(r.code, 1, text(r));
   assert.ok(!fetched(log), 'ничего не скачано');
   assert.ok(!has(dir, '6.bin') && !has(dir, 'media'));
@@ -1003,19 +1052,20 @@ test('больше 50 МБ за раз — код 1 до скачивания; -
   assert.equal(markOf(dir), null, 'отметка не записана');
   assert.ok(text(r).includes('Забрать за одну синхронизацию — 54 МБ (больше 50 МБ); самые тяжёлые папки: media/one/x/ — 27 МБ, 6.bin — 9 МБ, media/two/ — 9 МБ, video/ — 9 МБ, a.php — 1 КБ'), text(r));
   assert.doesNotMatch(text(r), /File Watchers/);
-  assert.match(last(r), /^спроси пользователя одним AskUserQuestion: по объёму — Забрать всё \(`prod-sync\.js --big-ok`\) \/ Не забирать папки \(.*\.gitignore.*\) \/ Отложить$/);
+  assert.match(last(r), /^спроси пользователя одним AskUserQuestion: по объёму — Забрать всё \(`prod-sync\.js --new-ok=[0-9a-f]{8} --big-ok`\) \/ Не забирать папки \(.*\.gitignore.*\) \/ Отложить$/);
 
   idea(dir, { always: true, watchers: [['scss', true]] });
   writeFiles(server, { 's.scss': '$a: 2;\n' });
-  r = await run(dir);
+  r = await run(dir, { newOk: MEDIA });
   assert.equal(r.code, 1, text(r));
   assert.match(text(r), /File Watchers PhpStorm \(scss\) — среди забираемого 1 файл: s\.scss;/);
   assert.match(text(r), /Забрать за одну синхронизацию — 54 МБ/);
   assert.match(last(r), /по вотчерам — .+; по объёму — .+; оба ответа «забирать» — флаги вместе$/);
-  r = await run(dir, { bigOk: true });
+  r = await run(dir, { bigOk: true, newOk: MEDIA });
   assert.equal(r.code, 1, 'File Watchers без своего флага — всё ещё остановка');
   assert.doesNotMatch(text(r), /МБ/);
-  r = await run(dir, { bigOk: true, watchersOk: true });
+  assert.match(last(r), /по вотчерам — Забирать \(`prod-sync\.js --big-ok --new-ok=[0-9a-f]{8} --watchers-ok`;/, 'данные ответы — в команде (48.12а)');
+  r = await run(dir, { bigOk: true, watchersOk: true, newOk: MEDIA });
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['A\t6.bin', 'A\tmedia/one/x/3.bin', 'A\tmedia/one/x/deep/1.bin', 'A\tmedia/one/x/deep/2.bin', 'A\tmedia/two/4.bin',
     'A\tvideo/5.bin', 'M\ta.php', 'M\ts.scss']);
@@ -1054,13 +1104,13 @@ test('удалённые на сервере, «не забирать» и М-6 
   fs.rmSync(path.join(server, 'gone.scss'));
   const blob = 'x'.repeat(5000);
   writeFiles(server, { 'a.php': '2\n', 'arch.zip': blob, 'dir.scss': blob });
-  const r = await run(dir, { entryLimit: 1000 });
+  const r = await run(dir, { entryLimit: 1000, deleteOk: FP('gone.scss') });
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['D\tgone.scss', 'M\ta.php']);
   assert.match(last(r), /Не забрано, осталось на сервере: arch\.zip \(архив\), dir\.scss \(у нас на этом месте папка\)\.$/);
   // забираемое больше малого предела — остановка по объёму; вотчеров среди него нет
   writeFiles(server, { 'big.php': blob });
-  const big = await run(dir, { entryLimit: 1000 });
+  const big = await run(dir, { entryLimit: 1000, newOk: FP('big.php') });
   assert.equal(big.code, 1, text(big));
   assert.match(text(big), /Забрать за одну синхронизацию — 5 КБ \(больше 1 КБ\); самые тяжёлые папки: big\.php — 5 КБ$/m);
   assert.doesNotMatch(text(big), /File Watchers/);
@@ -1101,7 +1151,7 @@ test('повтор убирает временные файлы <путь>.*.kit
   writeFiles(server, { 'a.php': '2\n', 'sub/n.php': 'n\n' });
   writeFiles(dir, { 'a.php.4242.kit-tmp': '2\n', 'sub/n.php.77.kit-tmp': 'n' });
   writeMark(dir, { named: [], pending: ['a.php', 'sub/n.php'] });
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('sub/n.php') });
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['A\tsub/n.php', 'M\ta.php']);
   assert.ok(!has(dir, 'a.php.4242.kit-tmp'));
@@ -1193,7 +1243,7 @@ test('повтор после остановки kit-commit.js (М-10): инде
   writeFiles(dir, { 'm.php': 'M1 наша\nl2\nl3\nl4\nl5\n' });
   writeFiles(server, { 'cfg.php': '<?php\nreturn [1];\n', 'new.php': 'n\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n' });
   hook(dir, 'pre-commit', 'exit 1');
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('new.php') });
   assert.equal(r.code, 1, text(r));
   assert.equal(last(r), AGAIN);
   assert.deepEqual(g(dir, 'diff', '--cached', '--name-only').trim().split('\n').sort(), ['cfg.php', 'new.php']);
@@ -1328,7 +1378,7 @@ test('сквозное отрезание с рабочими папками (WO
   });
   assert.deepEqual(g(dir, 'ls-files').trim().split('\n').filter((p) => p.startsWith('bitrix/')), ['bitrix/php_interface/init.php', 'bitrix/templates/theme/a.php']);
   writeFiles(server, { 'bitrix/templates/theme/new.php': 'n\n', 'bitrix/modules/main/y.php': 'ядро 2\n', 'upload/docs/d.txt': 'd' });
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('bitrix/templates/theme/new.php', 'upload/docs/d.txt') }); // new.php — код, upload/ — новая папка корня (Р-90б)
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['A\tbitrix/templates/theme/new.php', 'A\tupload/docs/d.txt']);
   assert.doesNotMatch(text(r), /modules|dbconn|1\.jpg/);
@@ -1362,7 +1412,7 @@ test('--abort после остановки kit-commit.js: записанное 
   writeFiles(dir, { 'm.php': 'M1 наша\nl2\nl3\nl4\nl5\n', 'x.php': 'моя\n' });
   writeFiles(server, { 'a.php': '2\n', 'n.php': 'n\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n' });
   hook(dir, 'pre-commit', 'exit 1');
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('n.php') });
   assert.equal(r.code, 1, text(r));
   assert.equal(last(r), AGAIN);
   assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n') }, { path: 'n.php', md5: md5('n\n') }], 'md5 записанного (Р-57)');
@@ -1392,7 +1442,7 @@ test('--abort после остановки kit-commit.js: записанное 
   assert.equal(one.code, 0, text(one));
   assert.deepEqual(one.out, ['[kit] Синхронизация отменена: к HEAD возвращён 1 файл']);
   assert.equal(read(dir, 'a.php'), '1\n');
-  assert.deepEqual(readMark(dir), { named: ['old.zip'], pending: [] });
+  assert.deepEqual(readMark(dir), { named: ['old.zip'], pending: [], answered: NOANS });
 });
 
 test('--abort без pending — «отменять нечего», код 0, рабочая копия и git не меняются; в worktree — тоже, основная папка не тронута (Р-53)', { skip: !SH }, async () => {
@@ -1449,13 +1499,13 @@ test('код 3 — «Повторить / Отложить»; строка с с
   assert.ok(!text(r).includes(SECRET), 'значение секрета не в выводе');
   assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. Не забрано, осталось на сервере: cfg.php (' +
     SECRET_WHY + ').');
-  assert.deepEqual(readMark(dir), { named: ['cfg.php'], pending: [] });
+  assert.deepEqual(readMark(dir), { named: ['cfg.php'], pending: [], answered: NOANS });
 });
 
 test('секрет в скачанном: файл не записан и не в коммите, остальное забрано, причина «секрет»; второй запуск его не называет', { skip: !SH }, async () => {
   const { dir, server } = site({ 'cfg.php': '<?php\n', 'a.php': 'a\n' }, { params: { 'Секреты': 'ZZTEST-' } });
   writeFiles(server, { 'cfg.php': secretPhp(), 'new.php': secretPhp(), 'k.php': "<?php $k = 'ZZTEST-777';\n", 'a.php': 'a2\n' });
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('k.php', 'new.php') });
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['M\ta.php']);
   assert.equal(body(dir), 'изменён: a.php');
@@ -1465,7 +1515,8 @@ test('секрет в скачанном: файл не записан и не �
   assert.ok(!text(r).includes(SECRET) && !text(r).includes('ZZTEST-777'), 'значений в выводе нет');
   assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. Не забрано, осталось на сервере: ' +
     ['cfg.php', 'k.php', 'new.php'].map((p) => p + ' (' + SECRET_WHY + ')').join(', ') + '.');
-  assert.deepEqual(JSON.parse(markOf(dir)), { named: ['cfg.php', 'k.php', 'new.php'], pending: [] });
+  // Р-92: ответ «Забрать» запомнен — повтор без вопроса; секрет снова — молча (назван раньше)
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: ['cfg.php', 'k.php', 'new.php'], pending: [], answered: { ...NOANS, taken: ['k.php', 'new.php'] } });
   const again = await run(dir);
   assert.equal(again.code, 0, text(again));
   assert.equal(last(again), '[kit] Синхронизация с продом: прод совпадает с git.');
@@ -1532,7 +1583,7 @@ test('Р-57: правка файла из pending после остановки 
   const { dir, server } = site({ 'a.php': '1\n', 'b.php': 'b\n' });
   writeFiles(server, { 'a.php': '2\n', 'b.php': 'b2\n', 'n.php': 'n\n' });
   hook(dir, 'pre-commit', 'exit 1');
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('n.php') });
   assert.equal(r.code, 1, text(r));
   assert.deepEqual(pendingOf(dir), ['a.php', 'b.php', 'n.php']);
   // после остановки доработали забранное: изменённый a.php и новый n.php
@@ -1574,7 +1625,7 @@ test('Р-58: файл забора изменён во время скачива
   // пока скачивается забор, пользователь сохранил b.php (изменён на сервере) и d.php (удалён на сервере)
   const when = "^g [0-9]+ 'b[.]php'$";
   const touch = JSON.stringify([{ match: when, file: path.join(dir, 'b.php'), text: 'b моя\n' }, { match: when, file: path.join(dir, 'd.php'), text: 'd моя\n' }]);
-  const r = await withEnv({ FAKE_SSH_TOUCH: touch }, () => run(dir));
+  const r = await withEnv({ FAKE_SSH_TOUCH: touch }, () => run(dir, { deleteOk: FP('d.php') }));
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['M\tc.php']);
   assert.equal(read(dir, 'b.php'), 'b моя\n', 'правка не затёрта');
@@ -1582,7 +1633,7 @@ test('Р-58: файл забора изменён во время скачива
   assert.equal(status(dir), ' M b.php\n M d.php\n');
   assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0. ' +
     'Не забрано, осталось на сервере: b.php (изменён во время синхронизации — повтори), d.php (изменён во время синхронизации — повтори).');
-  assert.deepEqual(readMark(dir), { named: [], pending: [] });
+  assert.deepEqual(readMark(dir), { named: [], pending: [], answered: NOANS });
 });
 
 test('М-1: упал не первый коммит синхронизации — закоммиченные части уходят из pending, --abort возвращает только остальное', { skip: !SH }, async () => {
@@ -1613,7 +1664,7 @@ test('М-3: исключение после начала записи — код
   };
   let r;
   try {
-    r = await run(dir);
+    r = await run(dir, { newOk: FP('n.php') });
   } finally {
     fs.renameSync = rename;
   }
@@ -1624,7 +1675,7 @@ test('М-3: исключение после начала записи — код
   assert.equal(read(dir, 'a.php'), '2\n');
   assert.ok(!has(dir, 'n.php'));
   assert.deepEqual(fs.readdirSync(dir).filter((f) => f.endsWith('.kit-tmp')), []);
-  const again = await run(dir);
+  const again = await run(dir, { newOk: FP('n.php') });
   assert.equal(again.code, 0, text(again));
   assert.deepEqual(changed(dir), ['A\tn.php', 'M\ta.php']);
   assert.doesNotMatch(text(again), /изменён после остановки/, 'не записанный n.php — не «правка после остановки»');
@@ -1676,7 +1727,8 @@ const SAME_FTP = '[kit] Синхронизация с продом: прод с�
 const FTP_SERVER = 'Сервер: прод — https://alpha.example.com (без SSH — по FTP)';
 const DOWNLOADED = 'спроси пользователя: Скачал (`prod-sync.js --ftp-done`) / Не буду скачивать';
 const DIRTY_ASK = 'спроси пользователя: Скачаю всё равно (`prod-sync.js --dirty-ok`) / Отложить';
-const AGAIN_FTP = 'спроси пользователя: Повторить (`prod-sync.js --ftp-done`) / Отменить (`prod-sync.js --abort`)';
+// Р-91 (В-3): «Повторить» без SSH — с флагами ответов этого запуска
+const AGAIN_FTP = (f = '') => 'спроси пользователя: Повторить (`prod-sync.js --ftp-done' + f + '`) / Отменить (`prod-sync.js --abort`)';
 const ROOTS_HEAD = (n) => `Скачай с сервера по FTP — в папку проекта, с заменой файлов (${n}):`;
 const DIRTY_HEAD = (n) => `В рабочей копии незакоммиченные правки файлов сайта (${n}):`;
 const DIRTY_WHY = 'скачивание затрёт незакоммиченные правки, а правки файлов, которые скачивание не перезапишет, уйдут в коммит синхронизации как ' +
@@ -1752,7 +1804,7 @@ test('--ftp-done: изменённое и добавленное без нас �
   // скачано: a.php изменён без нас, new/n.php добавлен, b.php — версия базы поверх нашего незалитого, d.php — наш шаг уже на
   // сервере (скачанное = HEAD); c.php удалён на сервере — по FTP этого не видно (локальный файл остался)
   writeFiles(dir, { 'a.php': '2\n', 'new/n.php': 'n\n', 'b.php': 'b\n', 'd.php': 'd наш шаг\n' });
-  const r = await run(dir, { ftpDone: true });
+  const r = await run(dir, { ftpDone: true, newOk: FP('new/n.php') }); // new/n.php — новый код (Р-90б)
   assert.equal(r.code, 0, text(r));
   assert.equal(count(dir), 3);
   assert.match(subject(dir), ENTRY_RE);
@@ -1812,7 +1864,7 @@ test('--ftp-done: скачанные архив, файл больше 10 МБ �
   const downloaded = { 'a.php': 'a2\n', 'cfg.php': secretPhp(), 'files/big.dat': big, 'old.zip': 'PK1', 'backup.zip': 'PK', 'new.php': secretPhp(),
     'media/huge.bin': big, 'ok.php': 'ok\n' };
   writeFiles(dir, downloaded);
-  const r = await run(dir, { ftpDone: true });
+  const r = await run(dir, { ftpDone: true, newOk: FP('new.php', 'ok.php') }); // ok.php и new.php — новый код (Р-90б)
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['A\tok.php', 'M\ta.php']);
   assert.equal(read(dir, 'cfg.php'), '<?php\n');
@@ -1826,11 +1878,13 @@ test('--ftp-done: скачанные архив, файл больше 10 МБ �
   const fresh = [['backup.zip', 'архив'], ['media/huge.bin', 'больше 10 МБ'], ['new.php', 'секрет']];
   assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 1, удалено 0. Не забрано, осталось на сервере: ' +
     fmt(tracked) + '. ' + LOCAL + fmt(fresh) + '.' + FTP_NOTE);
-  assert.deepEqual(readMark(dir), { named: [...fresh, ...tracked].map(([p]) => p).sort(), pending: [] });
+  // Р-92: ответ «Забрать» о new.php (секрет — не забран) запомнен; ok.php забран — из ответов ушёл
+  assert.deepEqual(readMark(dir), { named: [...fresh, ...tracked].map(([p]) => p).sort(), pending: [], answered: { ...NOANS, taken: ['new.php'] } });
   // новые не забираемые — не правки перед скачиванием (Р-68): сразу список корней
   assert.equal(last(await run(dir)), DOWNLOADED);
   // скачали снова — снова не в коммите и уже не названы (named)
   writeFiles(dir, downloaded);
+  // Р-92: ответ «Забрать» о new.php запомнен — без вопроса; секрет снова — молча (назван раньше)
   const again = await run(dir, { ftpDone: true });
   assert.equal(again.code, 0, text(again));
   assert.equal(count(dir), 2);
@@ -1901,10 +1955,10 @@ test('Р-61: --ftp-done после остановки kit-commit.js — pending 
   const dir = ftpSite({ 'a.php': '1\n', 'b.php': 'b\n', 'c.php': 'c\n' });
   writeFiles(dir, { 'a.php': '2\n', 'b.php': 'b2\n', 'n.php': 'n\n' });
   hook(dir, 'pre-commit', 'exit 1');
-  const r = await run(dir, { ftpDone: true });
+  const r = await run(dir, { ftpDone: true, newOk: FP('n.php') }); // n.php — новый код (Р-90б)
   assert.equal(r.code, 1, text(r));
   assert.match(text(r), /коммит синхронизации не сделан \(kit-commit\.js, код 2\)/);
-  assert.equal(last(r), AGAIN_FTP);
+  assert.equal(last(r), AGAIN_FTP(' --new-ok=' + FP('n.php')));
   assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n'), ftp: true }, { path: 'b.php', md5: md5('b2\n'), ftp: true },
     { path: 'n.php', md5: md5('n\n'), ftp: true }], 'Р-85: записано разбором скачанного — с пометкой ftp');
   assert.equal(read(dir, 'a.php'), '2\n');
@@ -1912,12 +1966,12 @@ test('Р-61: --ftp-done после остановки kit-commit.js — pending 
   const m0 = markOf(dir);
   const plain = await run(dir);
   assert.equal(plain.code, 1, text(plain));
-  assert.equal(last(plain), AGAIN_FTP);
+  assert.equal(last(plain), AGAIN_FTP());
   assert.equal(markOf(dir), m0);
   // после остановки доработали b.php; хук убран — повтор доводит синхронизацию без отката к HEAD
   writeFiles(dir, { 'b.php': 'b2 и моя\n' });
   fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
-  const again = await run(dir, { ftpDone: true });
+  const again = await run(dir, { ftpDone: true, newOk: FP('n.php') });
   assert.equal(again.code, 0, text(again));
   assert.deepEqual(changed(dir), ['A\tn.php', 'M\ta.php']);
   assert.equal(read(dir, 'b.php'), 'b2 и моя\n', 'изменённое после остановки — не тронуто');
@@ -1934,9 +1988,9 @@ test('Р-61, Р-85: --abort после остановленной --ftp-done —
   commit(dir, '1.1: правка m.php'); // не залито
   writeFiles(dir, { 'a.php': '2\n', 'n.php': 'n\n', 'm.php': 'l1\nl2\nl3\nl4\nM5 сервер\n' });
   hook(dir, 'pre-commit', 'exit 1');
-  const r = await run(dir, { ftpDone: true });
+  const r = await run(dir, { ftpDone: true, newOk: FP('n.php') });
   assert.equal(r.code, 1, text(r));
-  assert.equal(last(r), AGAIN_FTP);
+  assert.equal(last(r), AGAIN_FTP(' --new-ok=' + FP('n.php')));
   const merged = 'M1 наш шаг\nl2\nl3\nl4\nM5 сервер\n';
   assert.equal(read(dir, 'm.php'), merged);
   assert.ok(r.out.includes('совмещённое с нашими правками осталось в рабочей копии: m.php'), text(r));
@@ -1960,17 +2014,20 @@ test('Р-62: --ftp-done — забираемого больше предела �
   commit(dir, '1.1: правка b.php'); // не залито
   writeFiles(dir, { 'a.php': '2\n', 'b.php': 'b\n', 's.scss': '$a: 2;\n', 'big.php': 'x'.repeat(5000) });
   const before = status(dir);
-  const r = await run(dir, { ftpDone: true, entryLimit: 1000 });
+  // big.php — новый код (Р-90б): сначала вопрос о нём, ответ «Забрать» — и в команде ответа по объёму
+  const q = await run(dir, { ftpDone: true, entryLimit: 1000 });
+  assert.equal(last(q), 'спроси пользователя: ' + NEW_ANSWERS(FP('big.php'), '', true));
+  const r = await run(dir, { ftpDone: true, entryLimit: 1000, newOk: FP('big.php') });
   assert.equal(r.code, 1, text(r));
   assert.match(text(r), /Забрать за одну синхронизацию — 5 КБ \(больше 1 КБ\); самые тяжёлые папки: big\.php — 5 КБ/);
   assert.doesNotMatch(text(r), /File Watchers/);
-  assert.equal(last(r), 'спроси пользователя одним AskUserQuestion: по объёму — Забрать всё (`prod-sync.js --ftp-done --big-ok`) / ' +
+  assert.equal(last(r), 'спроси пользователя одним AskUserQuestion: по объёму — Забрать всё (`prod-sync.js --ftp-done --new-ok=' + FP('big.php') + ' --big-ok`) / ' +
     'Не забирать папки (допиши их в .gitignore и повтори синхронизацию) / Отложить');
   assert.equal(status(dir), before, 'ничего не записано — и из HEAD не восстановлено');
   assert.equal(read(dir, 'b.php'), 'b\n');
   assert.equal(markOf(dir), null);
   assert.equal(count(dir), 2);
-  const ok = await run(dir, { ftpDone: true, entryLimit: 1000, bigOk: true });
+  const ok = await run(dir, { ftpDone: true, entryLimit: 1000, bigOk: true, newOk: FP('big.php') });
   assert.equal(ok.code, 0, text(ok));
   assert.deepEqual(changed(dir), ['A\tbig.php', 'M\ta.php', 'M\ts.scss']);
   assert.equal(read(dir, 'b.php'), 'b наш шаг\n');
@@ -2100,7 +2157,7 @@ test('--ftp-done (М-5): исключение после записи pending �
   assert.equal(r.code, 1, text(r));
   assert.match(text(r), /^синхронизация остановилась после записи: /m);
   assert.ok(r.out[r.out.length - 2].startsWith('забираемое из скачанного — в pending: «Повторить» разберёт скачанное заново'), text(r));
-  assert.equal(last(r), AGAIN_FTP);
+  assert.equal(last(r), AGAIN_FTP());
   assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n'), ftp: true }]);
   assert.equal(read(dir, 'a.php'), '2\n');
   const again = await run(dir, { ftpDone: true });
@@ -2208,7 +2265,7 @@ test('Р-88 (Н-1): «Claude по SSH», Excluded Paths PhpStorm над рабо
   const chk = await run(dir, { check: true });
   assert.equal(chk.code, 1, text(chk));
   assert.match(chk.out[chk.out.length - 2], /изменено 1, добавлено 1, удалено 0\./);
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('bitrix/templates/sol/v.php') }); // v.php — новый код (Р-90б); оставленные Р-88 — без вопроса
   assert.equal(r.code, 0, text(r));
   assert.deepEqual(changed(dir), ['A\tbitrix/templates/sol/v.php', 'M\tbitrix/templates/sol/t.php']);
   assert.equal(read(dir, 'bitrix/templates/sol/t.php'), 'l1\nl2\nl3\nl4\nl5 обновление\n');
@@ -2237,11 +2294,9 @@ test('Р-89 (Н-2): «Claude по SSH», под исключённой bitrix 30
   writeFiles(server, { 'other.txt': 'x\n' }); // не тот сайт
   const r = await run(dir);
   assert.equal(r.code, 1, text(r));
-  assert.deepEqual(r.out.slice(-3), [
-    'на сервере нет 25 из 25 файлов сайта — проверь «SSH прод» (/kit:project-init)',
-    '  например: ' + [...outside].sort().slice(0, 10).join(', ') + ' и ещё 15',
-    'спроси пользователя: Удалить у нас (`prod-sync.js --delete-ok`) / Проверить «SSH прод» / Отложить',
-  ]);
+  // Р-90а (48.12а): массовое удаление — тот же вопрос по удалённым, со строкой «проверь SSH»
+  assert.deepEqual(r.out.slice(-29), [STOPPED, '  на сервере нет 25 из 25 файлов сайта — проверь «SSH прод» (/kit:project-init)', GONE_HEAD(25),
+    ...[...outside].sort().map((p) => '    ' + p), ASK_MASS(...outside)]);
   assert.equal(count(dir), 1);
   assert.equal(status(dir), '');
   assert.ok(outside.every((p) => has(dir, p)), 'ничего не удалено');
@@ -2264,40 +2319,40 @@ test('Р-83 (К-1), без SSH: .gitignore и исключённое в PhpStorm
   assert.equal(last(r), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 0.' + FTP_NOTE);
 });
 
-test('Р-83 (М-1): на сервере нет больше 20 файлов и больше 10 % файлов сайта — код 1 до записи, примеры путей и вопрос; --delete-ok — удалены и закоммичены; 20 файлов или не больше 10 % — без вопроса', { skip: !SH }, async () => {
+test('Р-83 (М-1), Р-90а: на сервере нет больше 20 файлов и больше 10 % файлов сайта — в вопросе по удалённым строка «проверь SSH»; --delete-ok — удалены и закоммичены; 20 файлов или не больше 10 % — тот же вопрос без неё', { skip: !SH }, async () => {
   const names = Array.from({ length: 100 }, (_, i) => `f/${String(i).padStart(3, '0')}.php`);
   const { dir, server } = site(Object.fromEntries(names.map((p) => [p, p + '\n'])));
   for (const p of names.slice(0, 25)) fs.rmSync(path.join(server, p));
   writeFiles(server, { 'f/050.php': 'клиент\n' });
   const r = await run(dir);
   assert.equal(r.code, 1, text(r));
-  assert.deepEqual(r.out.slice(-3), [
-    'на сервере нет 25 из 100 файлов сайта — проверь «SSH прод» (/kit:project-init)',
-    '  например: ' + names.slice(0, 10).join(', ') + ' и ещё 15',
-    'спроси пользователя: Удалить у нас (`prod-sync.js --delete-ok`) / Проверить «SSH прод» / Отложить',
-  ]);
+  assert.deepEqual(r.out.slice(-29), [STOPPED, '  на сервере нет 25 из 100 файлов сайта — проверь «SSH прод» (/kit:project-init)', GONE_HEAD(25),
+    ...names.slice(0, 25).map((p) => '    ' + p), ASK_MASS(...names.slice(0, 25))]);
   assert.equal(count(dir), 1);
   assert.equal(status(dir), '');
   assert.equal(read(dir, 'f/050.php'), 'f/050.php\n', 'ничего не записано');
   assert.equal(markOf(dir), null, 'и отметка не тронута');
   // ответ «Удалить у нас» — из командной строки
-  const ok = cli({ cwd: dir, args: ['--delete-ok'] });
+  const ok = cli({ cwd: dir, args: ['--delete-ok=' + FP(...names.slice(0, 25))] });
   assert.equal(ok.code, 0, ok.stdout);
   assert.equal(ok.stdout.trim().split('\n').pop(), '[kit] Синхронизация с продом: файлов без kit: изменено 1, добавлено 0, удалено 25.');
   assert.deepEqual(changed(dir), [...names.slice(0, 25).map((p) => 'D\t' + p), 'M\tf/050.php'].sort());
   assert.equal(status(dir), '');
-  // 20 из 75 — не больше 20: без вопроса
+  // 20 из 75 — не больше 20: вопрос без строки «проверь SSH»
   for (const p of names.slice(25, 45)) fs.rmSync(path.join(server, p));
   const twenty = await run(dir);
-  assert.equal(twenty.code, 0, text(twenty));
-  assert.match(last(twenty), /удалено 20\.$/);
-  // 25 из 250 — не больше 10 %: без вопроса
+  assert.equal(twenty.code, 1, text(twenty));
+  assert.deepEqual(twenty.out.slice(-23), [STOPPED, GONE_HEAD(20), ...names.slice(25, 45).map((p) => '    ' + p), ASK_GONE(...names.slice(25, 45))]);
+  assert.match(last(await run(dir, { deleteOk: FP(...names.slice(25, 45)) })), /удалено 20\.$/);
+  // 25 из 250 — не больше 10 %: тоже без неё
   const many = Array.from({ length: 250 }, (_, i) => `g/${String(i).padStart(3, '0')}.php`);
   const big = site(Object.fromEntries(many.map((p) => [p, p + '\n'])));
   for (const p of many.slice(0, 25)) fs.rmSync(path.join(big.server, p));
   const tenth = await run(big.dir);
-  assert.equal(tenth.code, 0, text(tenth));
-  assert.match(last(tenth), /удалено 25\.$/);
+  assert.equal(tenth.code, 1, text(tenth));
+  assert.doesNotMatch(text(tenth), /проверь «SSH/);
+  assert.equal(last(tenth), ASK_GONE(...many.slice(0, 25)));
+  assert.match(last(await run(big.dir, { deleteOk: FP(...many.slice(0, 25)) })), /удалено 25\.$/);
 });
 
 const ALWAYS_ROLLBACK = 'автозаливка PhpStorm включена — откат к git уйдёт на сервер; выключи её (Tools → Deployment → Automatic Upload; ' +
@@ -2307,7 +2362,7 @@ test('Р-84 (В-1): автозаливка PhpStorm Always и незаконче
   const { dir, server } = site({ 'a.php': '1\n', 'b.php': 'b\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
   writeFiles(server, { 'a.php': '2 клиент\n', 'n.php': 'n клиент\n' });
   hook(dir, 'pre-commit', 'exit 1');
-  const r = await run(dir);
+  const r = await run(dir, { newOk: FP('n.php') });
   assert.equal(r.code, 1, text(r));
   assert.equal(last(r), AGAIN);
   assert.deepEqual(pendingOf(dir), ['a.php', 'n.php']);
@@ -2342,7 +2397,7 @@ test('Р-84 (В-1): автозаливка PhpStorm Always и незаконче
   unchanged('--check');
   // выключили — повтор доводит синхронизацию
   idea(dir, { always: false });
-  const ok = await run(dir);
+  const ok = await run(dir, { newOk: FP('n.php') });
   assert.equal(ok.code, 0, text(ok));
   assert.deepEqual(changed(dir), ['A\tn.php', 'M\ta.php']);
   assert.deepEqual(pendingOf(dir), []);
@@ -2355,9 +2410,9 @@ test('Р-85 (В-2): без SSH — --dirty-ok, наш незакоммиченн
   assert.equal(last(await run(dir, { dirtyOk: true })), DOWNLOADED);
   writeFiles(dir, { 'a.php': '2\n' }); // скачано
   hook(dir, 'pre-commit', 'exit 1');
-  const r = await run(dir, { ftpDone: true });
+  const r = await run(dir, { ftpDone: true, newOk: FP('n.php') }); // n.php — новый код (Р-90б): его забор — по ответу
   assert.equal(r.code, 1, text(r));
-  assert.equal(last(r), AGAIN_FTP);
+  assert.equal(last(r), AGAIN_FTP(' --new-ok=' + FP('n.php')));
   assert.deepEqual(readMark(dir).pending, [{ path: 'a.php', md5: md5('2\n'), ftp: true }, { path: 'n.php', md5: md5('наш новый\n'), ftp: true }]);
   fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
   // автозаливка Always — и отмена без SSH: код 1, ничего не тронуто
@@ -2386,6 +2441,301 @@ test('Р-85 (В-2): без SSH — --dirty-ok, наш незакоммиченн
   assert.deepEqual(old.out, ['[kit] Синхронизация отменена: к HEAD возвращён 1 файл']);
   assert.ok(!has(dir, 'x.php'));
   assert.equal(read(dir, 'n.php'), 'наш новый\n');
+});
+
+// ---- Р-90 (48.12а): нет на сервере и новый код — по ответу; маски копий --------------------------------------------------
+
+test('Р-90а: отслеживаемые файлы, которых нет на сервере (не массово), — код 1 до записи со списком; --check — «нет на сервере: N (спросит синхронизация)»; --delete-ok — удалены и в коммите', { skip: !SH }, async () => {
+  const { dir } = site({ 'index.php': 'i\n', 'README.md': 'r\n', 'local/a/NOTES.md': 'n\n', 'local/b.php': 'b\n' },
+    { server: { 'index.php': 'i клиент\n', 'local/b.php': 'b\n' } });
+  const GONE = ['README.md', 'local/a/NOTES.md'];
+  const chk = await run(dir, { check: true });
+  assert.equal(chk.code, 1, text(chk));
+  assert.equal(chk.out[chk.out.length - 2], SYNC + 'изменено 1, добавлено 0, удалено 0, нет на сервере: 2 (спросит синхронизация).');
+  assert.equal(markOf(dir), null);
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  const r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir));
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(r.out.slice(2), [STOPPED, GONE_HEAD(2), '    README.md', '    local/a/NOTES.md', ASK_GONE(...GONE)]);
+  assert.ok(!fetched(log), 'ничего не скачано');
+  assert.equal(read(dir, 'index.php'), 'i\n', 'ничего не записано');
+  assert.ok(has(dir, 'README.md') && has(dir, 'local/a/NOTES.md'));
+  assert.equal(count(dir), 1);
+  assert.equal(status(dir), '');
+  assert.equal(markOf(dir), null, 'и отметка не тронута');
+  const ok = await run(dir, { deleteOk: FP(...GONE) });
+  assert.equal(ok.code, 0, text(ok));
+  assert.deepEqual(changed(dir), ['D\tREADME.md', 'D\tlocal/a/NOTES.md', 'M\tindex.php']);
+  assert.ok(!has(dir, 'README.md') && !has(dir, 'local/a'));
+  assert.equal(last(ok), SYNC + 'изменено 1, добавлено 0, удалено 2.');
+  assert.equal(status(dir), '');
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: [], pending: [] });
+});
+
+test('Р-90а: --keep-deleted — не удалены, остальное синхронизировано, «Нет на сервере, оставлено у нас» один раз; повтор не спрашивает; о новом удалённом — вопрос только о нём', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'index.php': 'i\n', 'README.md': 'r\n', 'local/a/NOTES.md': 'n\n', 'local/b.php': 'b\n' },
+    { server: { 'index.php': 'i клиент\n', 'local/b.php': 'b\n' } });
+  const GONE = ['README.md', 'local/a/NOTES.md'];
+  const r = cli({ cwd: dir, args: ['--keep-deleted=' + FP(...GONE)] });
+  assert.equal(r.code, 0, r.stdout);
+  assert.deepEqual(changed(dir), ['M\tindex.php']);
+  assert.equal(read(dir, 'README.md'), 'r\n');
+  assert.equal(read(dir, 'local/a/NOTES.md'), 'n\n');
+  assert.equal(status(dir), '');
+  assert.equal(r.stdout.trim().split('\n').pop(), SYNC + 'изменено 1, добавлено 0, удалено 0. Нет на сервере, оставлено у нас: README.md, local/a/NOTES.md.');
+  assert.deepEqual(readMark(dir), { named: ['README.md', 'local/a/NOTES.md'], pending: [], answered: { ...NOANS, absent: GONE } });
+  // повтор и --check — не спрашивают и не называют
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), SAME);
+  assert.deepEqual(readMark(dir).named, ['README.md', 'local/a/NOTES.md']);
+  const chk = await run(dir, { check: true });
+  assert.equal(chk.code, 0, text(chk));
+  assert.equal(last(chk), SAME);
+  // ещё один пропал с сервера — вопрос только о нём; --delete-ok удаляет только его (об оставленных вопроса не было)
+  fs.rmSync(path.join(server, 'local', 'b.php'));
+  const next = await run(dir);
+  assert.equal(next.code, 1, text(next));
+  assert.deepEqual(next.out.slice(2), [STOPPED, GONE_HEAD(1), '    local/b.php', ASK_GONE('local/b.php')]);
+  const del = await run(dir, { deleteOk: FP('local/b.php') });
+  assert.equal(del.code, 0, text(del));
+  assert.deepEqual(changed(dir), ['D\tlocal/b.php']);
+  assert.ok(has(dir, 'README.md') && has(dir, 'local/a/NOTES.md'));
+  assert.equal(last(del), SYNC + 'изменено 0, добавлено 0, удалено 1.');
+  // заливка вернула файл на сервер — из named уходит
+  writeFiles(server, { 'README.md': 'r\n' });
+  const back = await run(dir);
+  assert.equal(last(back), SAME);
+  assert.deepEqual(readMark(dir).named, ['local/a/NOTES.md']);
+  assert.deepEqual(readMark(dir).answered, { ...NOANS, absent: ['local/a/NOTES.md'] }, 'вернувшийся — и из ответов');
+});
+
+test('Р-90б: новый x/index.php в новой папке корня и новый local/a.js — код 1 до скачивания; --new-skip — не забраны, на сервере, в строке один раз; local/img/a.png и robots.txt — без вопроса', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'index.php': 'i\n', 'local/b.php': 'b\n', 'local/img/old.png': 'o' });
+  writeFiles(server, { 'index.php': 'i клиент\n', 'x/index.php': '<?php echo 1;\n', 'x/style.css': 'a{}\n', 'local/a.js': 'a\n', 'local/img/a.png': 'png',
+    'robots.txt': 'r\n' });
+  const CODE = ['local/a.js', 'x/index.php', 'x/style.css'];
+  const chk = await run(dir, { check: true });
+  assert.equal(chk.code, 1, text(chk));
+  assert.match(chk.out[chk.out.length - 2], /изменено 1, добавлено 5, удалено 0\.$/);
+  const log = path.join(tmpDir('kit-prod-log-'), 'log.json');
+  const r = await withEnv({ FAKE_SSH_LOG: log }, () => run(dir));
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(r.out.slice(2), [STOPPED, NEW_HEAD(3), '    local/a.js', '    x/ — новая папка (2 файла): index.php, style.css', ASK_NEW(...CODE)]);
+  assert.ok(!fetched(log), 'ничего не скачано');
+  assert.equal(read(dir, 'index.php'), 'i\n');
+  assert.equal(count(dir), 1);
+  assert.equal(status(dir), '');
+  assert.equal(markOf(dir), null);
+  const skip = await run(dir, { newSkip: FP(...CODE) });
+  assert.equal(skip.code, 0, text(skip));
+  assert.deepEqual(changed(dir), ['A\tlocal/img/a.png', 'A\trobots.txt', 'M\tindex.php']);
+  assert.ok(!has(dir, 'x') && !has(dir, 'local/a.js'), 'не забраны');
+  assert.ok(has(server, 'x/index.php') && has(server, 'local/a.js'), 'остались на сервере');
+  assert.equal(status(dir), '');
+  assert.equal(last(skip), SYNC + 'изменено 1, добавлено 2, удалено 0. Новый код на сервере, не забран: local/a.js, x/index.php, x/style.css.');
+  assert.deepEqual(readMark(dir), { named: ['local/a.js', 'x/index.php', 'x/style.css'], pending: [], answered: { ...NOANS, code: CODE } });
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), SAME, 'повторно не спрашивает и не называет');
+  const chk2 = await run(dir, { check: true });
+  assert.equal(chk2.code, 0, text(chk2));
+  assert.equal(last(chk2), SAME);
+});
+
+test('Р-90б: --new-ok — новый код забран (и .htaccess, .user.ini); новый код в повторе после остановки — снова вопрос, флаг в «Повторить» сохраняется', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'index.php': 'i\n', 'local/b.php': 'b\n' }, { gitignore: GITIGNORE + '/.idea/\n' });
+  writeFiles(server, { 'x/index.php': '<?php\n', 'local/a.js': 'a\n', '.htaccess': 'Options -Indexes\n', 'local/.user.ini': 'x=1\n', 'local/s.css': 's\n' });
+  const CODE = ['.htaccess', 'local/.user.ini', 'local/a.js', 'x/index.php'];
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(r.out.slice(2), [STOPPED, NEW_HEAD(4), '    .htaccess', '    local/.user.ini', '    local/a.js', '    x/ — новая папка (1 файл): index.php',
+    ASK_NEW(...CODE)]);
+  hook(dir, 'pre-commit', 'exit 1');
+  const stopped = await run(dir, { newOk: FP(...CODE) });
+  assert.equal(stopped.code, 1, text(stopped));
+  assert.equal(last(stopped), AGAIN);
+  fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
+  // при Always «повторить» — с тем же флагом ответа
+  idea(dir, { always: true });
+  assert.equal(last(await run(dir, { newOk: FP(...CODE) })), 'спроси пользователя: Выключил — повторить (`prod-sync.js --new-ok=' + FP(...CODE) + '`) / Отложить');
+  idea(dir, { always: false });
+  // повтор без флага откатывает pending и снова спрашивает
+  const plain = await run(dir);
+  assert.equal(plain.code, 1, text(plain));
+  assert.equal(last(plain), ASK_NEW(...CODE));
+  const ok = await run(dir, { newOk: FP(...CODE) });
+  assert.equal(ok.code, 0, text(ok));
+  assert.deepEqual(changed(dir), ['A\t.htaccess', 'A\tlocal/.user.ini', 'A\tlocal/a.js', 'A\tlocal/s.css', 'A\tx/index.php']);
+  assert.equal(last(ok), SYNC + 'изменено 0, добавлено 5, удалено 0.');
+  assert.equal(status(dir), '');
+});
+
+test('Р-90а, Р-90б: удалённые и новый код одновременно — одна остановка, один вопрос на оба; один ответ — второй вопрос с ним в командах; --delete-ok --new-ok — всё', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'index.php': 'i\n', 'README.md': 'r\n', 'local/b.php': 'b\n' });
+  fs.rmSync(path.join(server, 'README.md'));
+  writeFiles(server, { 'x/index.php': '<?php\n', 'local/b.php': 'b клиент\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(r.out.slice(2), [STOPPED, GONE_HEAD(1), '    README.md', NEW_HEAD(1), '    x/ — новая папка (1 файл): index.php', ASK_BOTH(['README.md'], ['x/index.php'])]);
+  assert.equal(markOf(dir), null);
+  const onlyNew = await run(dir, { newOk: FP('x/index.php') });
+  assert.equal(onlyNew.code, 1, text(onlyNew));
+  assert.deepEqual(onlyNew.out.slice(2), [STOPPED, GONE_HEAD(1), '    README.md', 'спроси пользователя: ' + DEL_ANSWERS(FP('README.md'), ' --new-ok=' + FP('x/index.php'))]);
+  const onlyDel = await run(dir, { deleteOk: FP('README.md') });
+  assert.equal(last(onlyDel), 'спроси пользователя: ' + NEW_ANSWERS(FP('x/index.php'), ' --delete-ok=' + FP('README.md')));
+  assert.equal(count(dir), 1);
+  const ok = cli({ cwd: dir, args: ['--delete-ok=' + FP('README.md'), '--new-ok=' + FP('x/index.php')] });
+  assert.equal(ok.code, 0, ok.stdout);
+  assert.deepEqual(changed(dir), ['A\tx/index.php', 'D\tREADME.md', 'M\tlocal/b.php']);
+  assert.equal(ok.stdout.trim().split('\n').pop(), SYNC + 'изменено 1, добавлено 1, удалено 1.');
+});
+
+test('Р-90б, Р-40: после ответа о новом коде остановка по объёму — флаг ответа в её команде', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n' });
+  writeFiles(server, { 'media/1.bin': 'x'.repeat(3000), 'a.php': '2\n' });
+  const r = await run(dir, { entryLimit: 1000 });
+  assert.equal(last(r), ASK_NEW('media/1.bin'), 'новая папка media/ — сначала вопрос');
+  const big = await run(dir, { entryLimit: 1000, newOk: FP('media/1.bin') });
+  assert.equal(big.code, 1, text(big));
+  assert.match(last(big), /по объёму — Забрать всё \(`prod-sync\.js --new-ok=[0-9a-f]{8} --big-ok`\)/);
+  const ok = await run(dir, { entryLimit: 1000, newOk: FP('media/1.bin'), bigOk: true });
+  assert.equal(ok.code, 0, text(ok));
+  assert.deepEqual(changed(dir), ['A\tmedia/1.bin', 'M\ta.php']);
+});
+
+test('Р-90б без SSH: --ftp-done, новый x/index.php — вопрос до записи; --new-skip — лежит в рабочей копии, не в коммите, назван один раз; следующий запуск не считает его правкой', async () => {
+  const dir = ftpSite({ 'a.php': '1\n', 'local/b.php': 'b\n' });
+  writeFiles(dir, { 'a.php': '2\n', 'x/index.php': '<?php\n', 'local/img/a.png': 'png' }); // скачано
+  const r = await run(dir, { ftpDone: true });
+  assert.equal(r.code, 1, text(r));
+  assert.deepEqual(r.out.slice(2), [STOPPED, NEW_HEAD(1), '    x/ — новая папка (1 файл): index.php', 'спроси пользователя: ' + NEW_ANSWERS(FP('x/index.php'), '', true)]);
+  assert.equal(markOf(dir), null, 'ничего не записано');
+  assert.equal(count(dir), 1);
+  assert.equal(status(dir), ' M a.php\n?? local/img/a.png\n?? x/index.php\n');
+  const skip = await run(dir, { ftpDone: true, newSkip: FP('x/index.php') });
+  assert.equal(skip.code, 0, text(skip));
+  assert.deepEqual(changed(dir), ['A\tlocal/img/a.png', 'M\ta.php']);
+  assert.equal(status(dir), '?? x/index.php\n', 'лежит в рабочей копии, не в коммите');
+  assert.equal(last(skip), SYNC + 'изменено 1, добавлено 1, удалено 0. Новый код на сервере, не забран (лежит в рабочей копии, в git не идёт — удали ' +
+    'сам, если не нужен): x/index.php.' + FTP_NOTE);
+  assert.deepEqual(readMark(dir), { named: ['x/index.php'], pending: [], answered: { ...NOANS, code: ['x/index.php'] } });
+  // следующий запуск: не правка перед скачиванием (как Р-68) — сразу корни; разбор снова — не спрашивает и не называет
+  assert.equal(last(await run(dir)), DOWNLOADED);
+  const again = await run(dir, { ftpDone: true });
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), SAME_FTP);
+  assert.equal(status(dir), '?? x/index.php\n');
+  // --new-ok забирает новый, названный раньше — нет (о нём вопроса не было)
+  writeFiles(dir, { 'local/n.js': 'n\n' });
+  const q = await run(dir, { ftpDone: true, bigOk: true });
+  assert.equal(last(q), 'спроси пользователя: ' + NEW_ANSWERS(FP('local/n.js'), ' --big-ok', true));
+  const ok = await run(dir, { ftpDone: true, newOk: FP('local/n.js') });
+  assert.equal(ok.code, 0, text(ok));
+  assert.deepEqual(changed(dir), ['A\tlocal/n.js']);
+  assert.equal(status(dir), '?? x/index.php\n');
+});
+
+test('Р-90в: копии стилей и кода (style.cs_, style.css-orig, x.php.orig2) — не забраны, «архив», один раз', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'index.php': 'i\n', 'local/t/style.css': 's\n' });
+  writeFiles(server, { 'local/t/style.cs_': 's old\n', 'local/t/style.css-orig': 's orig\n', 'local/t/x.php.orig2': '<?php\n', 'local/t/style.css': 's2\n' });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\tlocal/t/style.css']);
+  assert.ok(!has(dir, 'local/t/style.cs_') && !has(dir, 'local/t/style.css-orig') && !has(dir, 'local/t/x.php.orig2'));
+  assert.equal(last(r), SYNC + 'изменено 1, добавлено 0, удалено 0. Не забрано, осталось на сервере: local/t/style.cs_ (архив), ' +
+    'local/t/style.css-orig (архив), local/t/x.php.orig2 (архив).');
+  assert.deepEqual(readMark(dir).named, ['local/t/style.cs_', 'local/t/style.css-orig', 'local/t/x.php.orig2']);
+});
+
+// ---- Р-91 (48.12а, раунд 1): ответ привязан к списку вопроса; ответы — отдельно от named; «Повторить» без SSH — с флагами ----
+
+test('Р-91 (В-1): пока отвечали, на сервере появился новый код и пропал файл — ответ к прежним спискам не применён, вопрос заново с новыми; один список прежний — его ответ действует; ответ на новый — всё', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'index.php': 'i\n', 'README.md': 'r\n', 'local/c.txt': 'c\n' });
+  fs.rmSync(path.join(server, 'README.md'));
+  writeFiles(server, { 'x/index.php': '<?php\n' });
+  assert.equal(last(await run(dir)), ASK_BOTH(['README.md'], ['x/index.php']));
+  // пока пользователь отвечал: подбросили y/new.php, пропал local/c.txt
+  writeFiles(server, { 'y/new.php': '<?php\n' });
+  fs.rmSync(path.join(server, 'local', 'c.txt'));
+  const GONE = ['README.md', 'local/c.txt'];
+  const CODE = ['x/index.php', 'y/new.php'];
+  const stale = await run(dir, { deleteOk: FP('README.md'), newOk: FP('x/index.php') });
+  assert.equal(stale.code, 1, text(stale));
+  assert.deepEqual(stale.out.slice(2), [STOPPED, GONE_HEAD(2), '    README.md', '    local/c.txt', NEW_HEAD(2), '    x/ — новая папка (1 файл): index.php',
+    '    y/ — новая папка (1 файл): new.php', ASK_BOTH(GONE, CODE)]);
+  assert.equal(count(dir), 1);
+  assert.equal(status(dir), '');
+  assert.equal(markOf(dir), null, 'ничего не записано');
+  // ответ по удалённым — к нынешнему списку, по новому коду — к прежнему: вопрос только о новом коде, в командах — данный ответ
+  const half = await run(dir, { deleteOk: FP(...GONE), newOk: FP('x/index.php') });
+  assert.equal(half.code, 1, text(half));
+  assert.equal(last(half), 'спроси пользователя: ' + NEW_ANSWERS(FP(...CODE), ' --delete-ok=' + FP(...GONE)));
+  assert.equal(count(dir), 1);
+  const ok = cli({ cwd: dir, args: ['--delete-ok=' + FP(...GONE), '--new-ok=' + FP(...CODE)] });
+  assert.equal(ok.code, 0, ok.stdout);
+  assert.deepEqual(changed(dir), ['A\tx/index.php', 'A\ty/new.php', 'D\tREADME.md', 'D\tlocal/c.txt']);
+});
+
+test('Р-92: новый код с секретом — вопрос, «Забрать» (--new-ok) — не забран, назван «секрет»; повтор — ни вопроса, ни повторного названия; секрет на сервере убрали — забран без вопроса', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'index.php': 'i\n' });
+  writeFiles(server, { 'local/conf.php': secretPhp() });
+  assert.equal(last(await run(dir)), ASK_NEW('local/conf.php'));
+  const r = await run(dir, { newOk: FP('local/conf.php') });
+  assert.equal(r.code, 0, text(r));
+  assert.ok(!has(dir, 'local/conf.php'), 'секрет — не забран');
+  assert.equal(last(r), SYNC + 'изменено 0, добавлено 0, удалено 0. Не забрано, осталось на сервере: local/conf.php (' + SECRET_WHY + ').');
+  assert.deepEqual(readMark(dir), { named: ['local/conf.php'], pending: [], answered: { ...NOANS, taken: ['local/conf.php'] } }, 'ответ «Забрать» запомнен');
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.equal(last(again), SAME, 'ни вопроса, ни повторного названия');
+  const chk = await run(dir, { check: true });
+  assert.equal(chk.code, 0, text(chk));
+  assert.equal(last(chk), SAME);
+  // секрет на сервере убрали — забран без вопроса, из ответов ушёл (он уже в git)
+  writeFiles(server, { 'local/conf.php': '<?php\nreturn [];\n' });
+  const ok = await run(dir);
+  assert.equal(ok.code, 0, text(ok));
+  assert.deepEqual(changed(dir), ['A\tlocal/conf.php']);
+  assert.equal(last(ok), SYNC + 'изменено 0, добавлено 1, удалено 0.');
+  assert.deepEqual(readMark(dir), { named: [], pending: [], answered: NOANS });
+});
+
+test('Р-91 (В-2): «уже отвечено» — только по ответам в отметке: отслеживаемый, названный раньше по другой причине (секрет) и пропавший с сервера, — вопрос; «Оставить у нас» — в строке и в ответах', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'index.php': 'i\n', 'cfg.php': '<?php\n' });
+  writeFiles(server, { 'cfg.php': secretPhp() });
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(readMark(dir), { named: ['cfg.php'], pending: [], answered: NOANS }, 'назван — не значит отвечен');
+  fs.rmSync(path.join(server, 'cfg.php'));
+  const chk = await run(dir, { check: true });
+  assert.equal(chk.code, 1, text(chk));
+  assert.match(chk.out[chk.out.length - 2], /добавлено 0, удалено 0, нет на сервере: 1 \(спросит синхронизация\)\.$/);
+  const q = await run(dir);
+  assert.equal(q.code, 1, text(q));
+  assert.deepEqual(q.out.slice(2), [STOPPED, GONE_HEAD(1), '    cfg.php', ASK_GONE('cfg.php')]);
+  const ok = await run(dir, { keepDeleted: FP('cfg.php') });
+  assert.equal(ok.code, 0, text(ok));
+  assert.equal(count(dir), 1);
+  assert.equal(read(dir, 'cfg.php'), '<?php\n');
+  assert.equal(last(ok), SYNC + 'изменено 0, добавлено 0, удалено 0. Нет на сервере, оставлено у нас: cfg.php.', 'названный раньше — в строке ответа');
+  assert.deepEqual(readMark(dir), { named: ['cfg.php'], pending: [], answered: { ...NOANS, absent: ['cfg.php'] } });
+  assert.equal(last(await run(dir)), SAME, 'отвеченное — молча');
+});
+
+test('Р-91 (В-3): без SSH «Повторить» после сбоя коммита — с флагами ответов этого запуска; повтор с ними доводит синхронизацию без второго вопроса', async () => {
+  const dir = ftpSite({ 'a.php': '1\n' });
+  writeFiles(dir, { 'a.php': '2\n', 'x/index.php': '<?php\n' }); // скачано
+  hook(dir, 'pre-commit', 'exit 1');
+  const opts = { ftpDone: true, newOk: FP('x/index.php') };
+  const r = await run(dir, opts);
+  assert.equal(r.code, 1, text(r));
+  assert.equal(last(r), AGAIN_FTP(' --new-ok=' + FP('x/index.php')));
+  fs.rmSync(path.join(dir, '.git', 'hooks', 'pre-commit'));
+  const again = await run(dir, opts);
+  assert.equal(again.code, 0, text(again));
+  assert.deepEqual(changed(dir), ['A\tx/index.php', 'M\ta.php']);
+  assert.equal(status(dir), '');
 });
 
 test('вывод синхронизации: ни в одной строке out нет слова «вход»', () => {

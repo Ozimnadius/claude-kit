@@ -1,7 +1,8 @@
 'use strict';
 // Синхронизация с продом (этап 48): правила сверки сервера с git без SSH — три версии файла (база, HEAD, сервер), база
 // синхронизации, что вне синхронизации (syncRules), что не забирать (недопустимое имя пути, файл с секретом), наши доработки, ждущее удаления, совмещение (git merge-file) и папка
-// конфликтов, File Watchers PhpStorm и объём за раз, строки для пользователя, отметка синхронизации; blob из git и md5 его
+// конфликтов, File Watchers PhpStorm и объём за раз, новый код с сервера (newCode) и вопрос по нему и по удалённым на сервере
+// (askLines), строки для пользователя, отметка синхронизации; blob из git и md5 его
 // вариантов переводов строк; правки рабочей копии (git status) и чтение её файла. Только правила и git; сценарии для сервера и
 // их разбор — lib/prod-ssh.js; без SSH (FTP) — lib/prod-ftp.js; подключение, скачивание, запись и коммит — prod-sync.js.
 // Отметка — `.claude/kit-prod.json`: читается без исключений, пишется атомарно.
@@ -171,15 +172,43 @@ function ideaKeep(dir, info) {
 }
 
 // Что не забирается: бэкапы и архивы (как при первом скачивании в /kit:project-init; М-7 — ещё *.tgz, *.bz2, *.xz, *.old,
-// *.orig) и файлы больше предела. Маски — по имени файла, без регистра. size не число — размер неизвестен, только маски.
+// *.orig; Р-90в — копии стилей и кода: расширение на «_» — *.cs_, *.ph_, *.js_ (маска *.*_), *-orig, *.*-orig; Р-91 (М-1) —
+// «.orig» отдельной частью имени: a.orig, a.orig.css, a.css.orig2, но не logo.original.png и не jquery.origin.js) и файлы больше
+// предела. Маски — по имени файла, без регистра. size не число — размер неизвестен, только маски.
 const SKIP_MASKS = ['_*.back*', '*_back*.zip', '*.tar.gz*', '*.zip', '*.rar', '*.7z', '*.tar', '*.gz', '*.tgz', '*.bz2', '*.xz', '*.sql', '*.bak',
-  '*.old', '*.orig'].map((m) => new RegExp('^' + m.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$', 'i'));
+  '*.old', '*.orig', '*.*_', '*-orig', '*.*-orig'].map((m) => new RegExp('^' + m.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*') + '$', 'i'))
+  .concat(/\.orig(?![a-z])/i);
 
 function skipTake(rel, size) {
   const name = String(rel).split(/[\\/]/).pop();
   if (SKIP_MASKS.some((re) => re.test(name))) return 'архив';
   if (Number.isFinite(size) && size > FILE_LIMIT) return 'больше 10 МБ';
   return null;
+}
+
+// Р-90б: новый файл на сервере, который без ответа пользователя не забирается, — код (расширение или имя, без регистра) или любой
+// файл в папке корня сайта, которой нет в HEAD: так выглядит и новая страница клиента, и подброшенный код. heads — пути HEAD.
+// Р-91 (М-4): и .pht — в части настроек Apache исполняется как PHP. → { ask: (путь) → спросить ли, dirOf: (путь) → новая папка
+// корня с «/» на конце | null }.
+const CODE_EXT = /\.(?:php[3-8]?|pht|phtml|phar|inc|m?js|cjs|py|sh|pl|cgi|aspx?|jsp)$/i;
+const CODE_NAMES = new Set(['.htaccess', '.user.ini']);
+
+function newCode(heads) {
+  const tops = new Set();
+  for (const p of heads) {
+    const i = p.indexOf('/');
+    if (i > 0) tops.add(p.slice(0, i));
+  }
+  // регистр важен: на сервере Local/ и local/ — разные папки
+  const dirOf = (p) => {
+    const i = p.indexOf('/');
+    return i > 0 && !tops.has(p.slice(0, i)) ? p.slice(0, i + 1) : null;
+  };
+  const ask = (p) => {
+    const name = p.split('/').pop();
+    return CODE_EXT.test(name) || CODE_NAMES.has(name.toLowerCase()) || dirOf(p) !== null;
+  };
+  return { ask, dirOf };
 }
 
 // Коммиты, достижимые из HEAD (от новых к старым), и их пути: [{ hash, subject, paths }]. Корневые коммиты и слияния
@@ -454,7 +483,9 @@ function mergeVersions({ ours = null, base = null, theirs = null } = {}) {
 // Р-39: вопрос задаст синхронизация в основной папке). «Совпадает с git» — только если всё пусто. Без SSH (48.8): local —
 // [{ path, why }] не забранное, что лежит в рабочей копии и не в git (Р-68: разбор скачанного его не удаляет); ftp — в конце
 // одна фраза, что удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны (Р-67). kept — [{ path, why }]: нет
-// на сервере, но у нас не удалено (Р-88: исключено в PhpStorm при «Claude по SSH»).
+// на сервере, но у нас не удалено (Р-88: исключено в PhpStorm при «Claude по SSH»). Р-90а: absent — [путь] нет на сервере, у нас
+// оставлено по ответу (--keep-deleted); absentAhead — число: нет на сервере, спросит синхронизация (--check). Р-90б: code — [путь]
+// новый код на сервере, не забран по ответу (--new-skip; без SSH — лежит в рабочей копии).
 const cleanText = (s) => String(s).replace(/[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g, '?');
 const listOf = (items, fmt = cleanText) => items.slice(0, LIST_LIMIT).map(fmt).join(', ') +
   (items.length > LIST_LIMIT ? ' и ещё ' + (items.length - LIST_LIMIT) : '');
@@ -462,21 +493,27 @@ const listOf = (items, fmt = cleanText) => items.slice(0, LIST_LIMIT).map(fmt).j
 function summaryLine(input = {}) {
   const list = (v) => (Array.isArray(v) ? v : []);
   const { env } = input;
-  const keys = ['changed', 'added', 'removed', 'ours', 'merged', 'conflicts', 'conflictsAhead', 'skipped', 'kept', 'local', 'waiting'];
+  const keys = ['changed', 'added', 'removed', 'ours', 'merged', 'conflicts', 'conflictsAhead', 'skipped', 'kept', 'absent', 'code', 'local', 'waiting'];
   const all = keys.map((k) => list(input[k]));
-  const [changed, added, removed, ours, merged, conflicts, ahead, skipped, kept, local, waiting] = all;
+  const [changed, added, removed, ours, merged, conflicts, ahead, skipped, kept, absent, code, local, waiting] = all;
+  const gone = Number.isInteger(input.absentAhead) && input.absentAhead > 0 ? input.absentAhead : 0;
   const dev = env === 'дев';
   const head = '[kit] ' + (dev ? 'Синхронизация с девом: ' : 'Синхронизация с продом: ');
   const ftp = input.ftp ? ' Удалённые на сервере файлы и новые вне перечисленных папок по FTP не видны.' : '';
   const why = (s) => cleanText(s.path) + ' (' + cleanText(s.why) + ')';
-  if (!all.some((a) => a.length)) return head + (dev ? 'дев' : 'прод') + ' совпадает с git.' + ftp;
-  const parts = [`файлов без kit: изменено ${changed.length}, добавлено ${added.length}, удалено ${removed.length}.`];
+  if (!all.some((a) => a.length) && !gone) return head + (dev ? 'дев' : 'прод') + ' совпадает с git.' + ftp;
+  const parts = [`файлов без kit: изменено ${changed.length}, добавлено ${added.length}, удалено ${removed.length}` +
+    (gone ? `, нет на сервере: ${gone} (спросит синхронизация).` : '.')];
   if (ours.length) parts.push(`Наши прошлые доработки среди изменённых (проверьте, не затёрты ли): ${listOf(ours)}.`);
   if (merged.length) parts.push(`Совмещено с нашими незакоммиченными правками — проверьте в панели изменений: ${listOf(merged)}.`);
   if (conflicts.length) parts.push(`Не совместилось само — вопрос ниже: ${listOf(conflicts)}.`);
   if (ahead.length) parts.push(`Не совместится само — вопрос задаст синхронизация в основной папке: ${listOf(ahead)}.`);
   if (skipped.length) parts.push(`Не забрано, осталось на сервере: ${listOf(skipped, why)}.`);
   if (kept.length) parts.push(`Оставлено у нас: ${listOf(kept, why)}.`);
+  if (absent.length) parts.push(`Нет на сервере, оставлено у нас: ${listOf(absent)}.`);
+  if (code.length) {
+    parts.push(`Новый код на сервере, не забран${input.ftp ? ' (лежит в рабочей копии, в git не идёт — удали сам, если не нужен)' : ''}: ${listOf(code)}.`);
+  }
   if (local.length) parts.push(`Не забрано, лежит в рабочей копии, в git не идёт — удали сам, если не нужен: ${listOf(local, why)}.`);
   if (waiting.length) parts.push(`Ждёт удаления с сервера: ${listOf(waiting)}.`);
   return head + parts.join(' ') + ftp;
@@ -551,14 +588,15 @@ function bigOf(items, limit) {
 }
 
 // Остановка (Р-31, Р-40): вотчеры и объём — одной остановкой, одним вопросом; последняя строка — что делать Claude. flags —
-// флаги режима перед ответом по объёму (без SSH — «--ftp-done », Р-62).
+// флаги перед ответом в обеих командах: режим (без SSH — «--ftp-done », Р-62) и уже данные ответы (48.12а: «--delete-ok --new-ok »
+// — иначе ответ по вотчерам или объёму снова спросил бы об удалённых и новом коде).
 function stopLines(w, big, limit, flags = '') {
   const said = [];
   const ask = [];
   if (w && w.hits.length) {
     said.push(`File Watchers PhpStorm (${w.exts.join(', ')}) — среди забираемого ${w.hits.length} ${plural(w.hits.length, 'файл', 'файла', 'файлов')}: ` +
       `${listOf(w.hits)}; пересборка перезапишет результат, PhpStorm (Always) зальёт его на сервер`);
-    ask.push('по вотчерам — Забирать (`prod-sync.js --watchers-ok`; лучше выключить вотчеры на время синхронизации) / ' + SKIP);
+    ask.push('по вотчерам — Забирать (`prod-sync.js ' + flags + '--watchers-ok`; лучше выключить вотчеры на время синхронизации) / ' + SKIP);
   }
   if (big) {
     said.push(`Забрать за одну синхронизацию — ${mb(big.total)} (больше ${mb(limit)}); самые тяжёлые папки: ${big.top.map(([d, n]) => clean(d) + ' — ' + mb(n)).join(', ')}`);
@@ -566,6 +604,56 @@ function stopLines(w, big, limit, flags = '') {
   }
   return ['Синхронизация остановлена, ничего не записано:', ...said.map((l) => '  ' + l),
     'спроси пользователя одним AskUserQuestion: ' + ask.join('; ') + (ask.length > 1 ? '; оба ответа «забирать» — флаги вместе' : '')];
+}
+
+// Р-91 (В-1): отпечаток списка вопроса — 8 знаков md5 отсортированных путей (через NUL). Флаг ответа несёт его: ответ действует
+// только на тот же список, изменился список (пока отвечали, на сервере появилось или пропало ещё) — вопрос заново.
+const fingerprint = (paths) => md5([...paths].sort().join('\0')).slice(0, 8);
+
+// Р-90а, Р-90б: остановка до любой записи — вопрос по отслеживаемым файлам, которых нет на сервере (gone — пути; mass — { line —
+// строка о массовом удалении, ssh — имя параметра «SSH <окружение>» } или null), и по новому коду с сервера (fresh — пути;
+// dirOf(путь) — новая папка корня или null: её файлы — одной строкой), оба — одной остановкой, одним вопросом (как вотчеры и
+// объём). Списки — до ASK_LIMIT строк, дальше «и ещё N» (файлов). Р-91 (М-2): при массовом удалении первый вариант — «Отложить —
+// проверь SSH» с пометкой «(Рекомендую)»: скорее не тот сервер. cmds — { del, keep, take, skip }: команды ответов (с отпечатками).
+// → строки; последняя — что делать Claude.
+const ASK_LIMIT = 30;
+
+function askLines({ gone = [], mass = null, fresh = [], dirOf = () => null, cmds }) {
+  const out = ['Синхронизация остановлена, ничего не записано:', ...(mass ? ['  ' + mass.line] : [])];
+  const block = (head, entries) => { // entries — [{ line, n — файлов в строке }] по алфавиту
+    out.push(`  ${head} (${entries.reduce((s, e) => s + e.n, 0)}):`, ...entries.slice(0, ASK_LIMIT).map((e) => '    ' + e.line));
+    const rest = entries.slice(ASK_LIMIT).reduce((s, e) => s + e.n, 0);
+    if (rest) out.push('    и ещё ' + rest);
+  };
+  const ask = [];
+  const del = mass
+    ? `${SKIP} — проверь «${mass.ssh}» (/kit:project-init) (Рекомендую) / Удалить у нас (\`${cmds.del}\`) / Оставить у нас (\`${cmds.keep}\`)`
+    : `Удалить у нас (\`${cmds.del}\`) / Оставить у нас (\`${cmds.keep}\`) / ${SKIP}`;
+  const take = `Забрать (\`${cmds.take}\`) / Не забирать (\`${cmds.skip}\`) / ${SKIP}`;
+  if (gone.length) {
+    block('нет на сервере, есть у нас в git', [...gone].sort().map((p) => ({ key: p, line: clean(p), n: 1 })));
+    ask.push(['по удалённым', del]);
+  }
+  if (fresh.length) {
+    const dirs = new Map();
+    const entries = [];
+    for (const p of [...fresh].sort()) {
+      const d = dirOf(p);
+      if (!d) entries.push({ key: p, line: clean(p), n: 1 });
+      else {
+        if (!dirs.has(d)) dirs.set(d, []);
+        dirs.get(d).push(p.slice(d.length));
+      }
+    }
+    for (const [d, names] of dirs) {
+      entries.push({ key: d, line: `${clean(d)} — новая папка (${names.length} ${plural(names.length, 'файл', 'файла', 'файлов')}): ${listOf(names.map(clean))}`, n: names.length });
+    }
+    block('новый код и новые папки на сервере', entries.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0)));
+    ask.push(['по новому коду', take]);
+  }
+  if (ask.length === 1) out.push('спроси пользователя: ' + ask[0][1]);
+  else out.push('спроси пользователя одним AskUserQuestion: ' + ask.map(([what, a]) => what + ' — ' + a).join('; ') + '; два ответа — флаги вместе');
+  return out;
 }
 
 // Папка конфликтов (Р-38): kit-prod-<8 знаков md5 пути папки проекта (на Windows — в нижнем регистре)>-* в os.tmpdir().
@@ -709,15 +797,22 @@ async function secretPaths(c, s, versions) {
 }
 
 // ---- Отметка синхронизации --------------------------------------------------------------------------------------
-// Только named — уже названные в строке файлы «не забирать» (Т-11) — и pending — пути незаконченной синхронизации (Т-12).
+// named — уже названные в строке файлы «не забирать» (Т-11), pending — пути незаконченной синхронизации (Т-12), answered — ответы
+// по удалённым на сервере и новому коду (Р-91).
 // Записей сессий нет (с 48.7): синхронизация — только по просьбе пользователя; поле первой редакции читается без ошибки и при
 // записи пропадает. Элемент pending (Р-57) — { path, md5 }: md5NoCr того, что синхронизация пишет в путь (null — удаляет);
 // без md5 — неизвестно (строка первой редакции или md5 не строка и не null): в файле — строкой, путь — к HEAD, как прежде.
 // Р-85: ftp: true — элемент записал разбор скачанного по FTP (--ftp-done): файл положило скачивание, а не синхронизация — отмена
 // такой путь вне HEAD не удаляет; пометка — только вместе с md5.
+// Р-91 (В-2): answered — ответы пользователя, отдельно от named («назван один раз» — только чтобы не повторять строку): absent —
+// пути «Оставить у нас» (нет на сервере), code — пути «Не забирать» (новый код), taken (Р-92) — пути «Забрать» (новый код), которые
+// ещё не в git: не прошли обычные проверки (секрет и др.) — забираются без вопроса, как только пройдут. Синхронизация не спрашивает
+// только о них; путь, вернувшийся на сервер, исчезнувший с него или забранный, уходит. В файле — только непустое (у отметок 3.4.0
+// ключа нет — пусто).
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const strings = (v) => (Array.isArray(v) ? v.filter((s) => typeof s === 'string') : []);
 const hasMd5 = (e) => Object.prototype.hasOwnProperty.call(e, 'md5');
+const answersOf = (v) => (isObj(v) ? { absent: strings(v.absent), code: strings(v.code), taken: strings(v.taken) } : { absent: [], code: [], taken: [] });
 
 function pendingOf(v) {
   if (typeof v === 'string') return { path: v };
@@ -727,8 +822,10 @@ function pendingOf(v) {
 }
 
 function cleanMark(raw) {
-  if (!isObj(raw)) return { named: [], pending: [] };
-  return { named: strings(raw.named), pending: Array.isArray(raw.pending) ? raw.pending.map(pendingOf).filter(Boolean) : [] };
+  if (!isObj(raw)) return { named: [], pending: [], answered: answersOf(null) };
+  return {
+    named: strings(raw.named), pending: Array.isArray(raw.pending) ? raw.pending.map(pendingOf).filter(Boolean) : [], answered: answersOf(raw.answered),
+  };
 }
 
 // Нет файла, битый JSON, поля не того типа — пустое значение этого поля. Не бросает.
@@ -740,10 +837,12 @@ function readMark(dir) {
   }
 }
 
-// Атомарная запись — только named и pending (элемент без md5 — строкой). Ошибку записи бросает — решает вызывающий.
+// Атомарная запись — named, pending (элемент без md5 — строкой) и непустые answered. Ошибку записи бросает — решает вызывающий.
 function writeMark(dir, mark) {
-  const { named, pending } = cleanMark(mark);
-  const text = JSON.stringify({ named, pending: pending.map((e) => (hasMd5(e) ? e : e.path)) }, null, 2) + '\n';
+  const { named, pending, answered } = cleanMark(mark);
+  const out = { named, pending: pending.map((e) => (hasMd5(e) ? e : e.path)) };
+  if (answered.absent.length || answered.code.length || answered.taken.length) out.answered = answered;
+  const text = JSON.stringify(out, null, 2) + '\n';
   writeFilesAtomic([{ file: path.join(dir, MARK_FILE), text }], { mkdir: true });
 }
 
@@ -751,5 +850,5 @@ module.exports = {
   ENTRY_RE, FILE_LIMIT, ENTRY_LIMIT, MARK_FILE, REGULAR, GIT_FILES, deploymentOf, syncRules, ideaKeep, plural, entrySubject, md5NoCr, classify, entryBase, treeOf, baseTree, skipTake,
   oursPaths, entryDeploy, pendingDelete, inPending, pendingEntry, ignoredOf, dirtyPaths, readWork, watcherExts, mergeVersions, listOf, summaryLine, readMark,
   writeMark, hasMd5, UNKNOWN_SIZE, SKIP, readText, clean, badName, takeRule, watcherHits, bigOf, stopLines, conflictDir, md5Eol,
-  catBlobs, blobHashes, blobVariants, secretPaths,
+  catBlobs, blobHashes, blobVariants, secretPaths, newCode, askLines, fingerprint,
 };
