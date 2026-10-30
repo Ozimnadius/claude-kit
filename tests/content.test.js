@@ -377,6 +377,33 @@ test('server: сначала SSH (BatchMode, remote-php, --timeout, коды), �
   assert.doesNotMatch(ref, /Командн|канал «консоль»/, 'ssh.md: консоли больше нет');
 });
 
+test('навык sync: name sync, описание — «только когда пользователь просит», без disable-model-invocation, argument-hint [--check]', () => {
+  const { fm } = skill('sync');
+  assert.equal(fm.name, 'sync');
+  assert.notEqual(fm['disable-model-invocation'], 'true');
+  assert.equal(fm['argument-hint'], '[--check]');
+  assert.ok(fm.description.includes('Только когда пользователь просит'), 'описание: только по просьбе');
+  assert.ok(fm.description.includes('сам не запускай'), 'описание: сам не запускай');
+  assert.ok(fm.description.includes('/kit:sync') && fm.description.includes('синхронизируй с продом'), 'описание: команда и слова');
+});
+
+test('навык sync: prod-sync.js с timeout 300000, коды 0–4, флаги --watchers-ok, --big-ok, --ftp-done, --abort и варианты вопросов', () => {
+  const { body } = skill('sync');
+  for (const s of [
+    '${CLAUDE_PLUGIN_ROOT}/scripts/prod-sync.js', '300000', '--check', '--watchers-ok', '--big-ok', '--ftp-done', '--abort', '--dirty-ok',
+    'AskUserQuestion', 'спроси пользователя', 'Совместить вручную', 'Оставить нашу', 'Взять версию сервера', 'Не забирать папки',
+    'Повторить', 'Отложить', 'Отменить', 'Скачал', 'Не буду скачивать', 'Скачаю всё равно', 'mcp__ccd_view__show_pane', 'diff_scope',
+    '.gitignore', 'worktree', 'Мэтт', 'multiSelect', 'Совмещено', '--timeout 250', '«спроси пользователя:», «…по каждому:», «…одним AskUserQuestion:»',
+    'с теми же флагами', '`<папка>/server/…`', '`<папка>/base/…`',
+  ]) assert.ok(body.includes(s), s);
+  assert.ok(body.includes('`/kit:step-done` не нужен'), 'коммит делает скрипт, /kit:step-done не нужен — одной фразой');
+  const known = new Set(['--check', '--ftp-done', '--abort', '--watchers-ok', '--big-ok', '--dirty-ok', '--timeout']);
+  for (const flag of body.replace('git diff --stat', '').match(/--[a-z]+(?:-[a-z]+)*/g)) assert.ok(known.has(flag), 'флаг вне списка prod-sync.js: ' + flag);
+  for (const c of ['0', '1', '2', '3', '4']) assert.match(body, new RegExp('^\\| ' + c + ' \\|', 'm'), 'код ' + c);
+  assert.ok(body.includes('/kit:project-init') && body.includes('/kit:step-done'), 'ссылки на соседние команды');
+  assert.ok(Buffer.byteLength(body) <= 10240, 'навык короткий (до 10 КБ)');
+});
+
 test('visual: сценарий, коды, согласие на установку, вход пользователем, фон, NOTES; пример справки проходит проверку', () => {
   const { fm, body } = skill('visual');
   assert.equal(fm.name, 'visual');
