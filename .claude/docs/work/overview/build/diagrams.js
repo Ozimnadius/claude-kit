@@ -5,8 +5,8 @@ const { makeDiagram } = require('./svg');
 
 // 1. Карта: пользователь → Claude ← хуки / проект; Claude → скиллы → скрипты и агенты → что меняется.
 function map() {
-  const d = makeDiagram('d1', 1320, 560, 'Карта плагина kit: пользователь даёт команды Claude, хуки перехватывают события сессии, Claude вызывает шесть команд /kit:, каждая работает через свои скрипты и меняет git, журнал, сервер или сайт либо только читает историю.');
-  const cx = [150, 365, 580, 795, 1010, 1225];
+  const d = makeDiagram('d1', 1320, 560, 'Карта плагина kit: пользователь даёт команды Claude, хуки перехватывают события сессии, Claude вызывает семь команд /kit:, каждая работает через свои скрипты и меняет git, журнал, сервер или сайт либо только читает историю; /kit:sync (с 3.4.0) забирает в git изменения прода, сделанные без kit.');
+  const cx = [105, 290, 475, 660, 845, 1030, 1215];
   const x = cx.map((c) => c - 85);
   d.box({ x: 530, y: 14, w: 260, h: 52, k: 'user', L: [['t', 'Пользователь'], ['s', 'команды · ответы · пароли']] });
   d.box({ x: 20, y: 100, w: 300, h: 104, k: 'hook', a: 'l', L: [['t', 'Хуки — срабатывают сами'], ['m', 'SessionStart → контекст'], ['m', 'PreToolUse → запрет'], ['m', 'PostToolUse → php -l'], ['m', 'PostToolUse → входящие ответы']] });
@@ -22,6 +22,7 @@ function map() {
     ['/kit:project-init', 'один раз на проект'],
     ['/kit:step-done', 'после проверенного шага'],
     ['/kit:server', 'когда нужен сервер'],
+    ['/kit:sync', 'прод менялся без нас'],
     ['/kit:visual', 'до и после изменений'],
     ['/kit:report', 'отчёт заказчику'],
     ['/kit:matt', 'большая работа (Мэтт)'],
@@ -30,6 +31,7 @@ function map() {
     [['m', 'site-probe.js'], ['m', 'ssh-probe.js'], ['m', 'phpstorm-exclude.js'], ['m', 'secret-scan.js --all'], ['m', 'journal-split.js'], ['s', '+ kit-commit.js: 0.1']],
     [['m', 'kit-step.js'], ['m', 'kit-journal.js'], ['m', 'kit-commit.js'], ['m', 'secret-scan.js'], ['m', 'journal-split.js'], ['m', 'ssh-deploy.js']],
     [['m', 'remote-php.js'], ['m', 'kit-exec.js'], ['m', 'md5-check.js'], ['m', 'inventory.php'], ['m', 'check-files.php'], ['m', 'delete-list.php']],
+    [['m', 'prod-sync.js'], ['m', 'lib/prod.js'], ['m', 'lib/prod-ssh.js'], ['m', 'lib/prod-ftp.js'], ['m', 'kit-commit.js'], ['s', 'без SSH — FTP PhpStorm']],
     [['m', 'visual.js'], ['s', 'deps · install · login'], ['s', 'discover · shoot'], ['s', 'check · compare · list']],
     [['m', 'git log --since'], ['m', 'decision-inbox.js'], ['s', 'журнал, решения,'], ['s', 'план выкладки']],
     [['m', 'matt-skill.js'], ['m', 'kit-step.js'], ['m', 'kit-journal.js'], ['m', 'kit-commit.js'], ['s', 'навыки Мэтта — файлом']],
@@ -38,6 +40,7 @@ function map() {
     [['s', 'git · .idea · сайт'], ['s', 'сервер по SSH']],
     [['s', 'журнал и план'], ['s', 'коммит и push']],
     [['s', 'сервер по SSH'], ['s', 'или kit-exec.php']],
+    [['s', 'файлы с сервера'], ['s', 'коммит «Прод: …»']],
     [['s', 'Chrome → сайт'], ['s', 'снимки локально']],
     [['s', 'текст для Б24'], ['s', 'дата — во входящие']],
     [['s', 'карта и тикеты'], ['s', 'в .claude/docs/work']],
