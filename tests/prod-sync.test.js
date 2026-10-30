@@ -479,6 +479,32 @@ test('отметка: после синхронизации в kit-prod.json т�
   assert.deepEqual(JSON.parse(markOf(dir)), { named: ['old.zip'], pending: [] });
 });
 
+test('отметка вне git (Р-93): .gitignore проекта не исключает .claude — после синхронизации отметки нет в git status, строка в info/exclude одна; повтор не дублирует', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n' }, { gitignore: '/.idea/\n' });
+  writeFiles(server, { 'a.php': '2\n', 'old.zip': 'PK' });
+  const exclude = () => read(dir, '.git/info/exclude').split('\n').filter((l) => l.trim() === '/.claude/kit-prod.json').length;
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(changed(dir), ['M\ta.php']);
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: ['old.zip'], pending: [] });
+  assert.equal(status(dir), '', 'отметка .claude/kit-prod.json не видна git');
+  assert.equal(exclude(), 1);
+  const again = await run(dir);
+  assert.equal(again.code, 0, text(again));
+  assert.equal(exclude(), 1, 'второй запуск строку не дублирует');
+  assert.equal(status(dir), '');
+});
+
+test('отметка вне git (Р-93): .gitignore уже исключает .claude/* — info/exclude не меняется', { skip: !SH }, async () => {
+  const { dir, server } = site({ 'a.php': '1\n' });
+  writeFiles(server, { 'old.zip': 'PK' });
+  const before = read(dir, '.git/info/exclude');
+  const r = await run(dir);
+  assert.equal(r.code, 0, text(r));
+  assert.deepEqual(JSON.parse(markOf(dir)), { named: ['old.zip'], pending: [] });
+  assert.equal(read(dir, '.git/info/exclude'), before);
+});
+
 test('закоммиченный, но не залитый шаг (база — заливка до него) — не откатан, коммита синхронизации нет', { skip: !SH }, async () => {
   const { dir, server } = site({ 'a.php': '1\n', 'b.php': 'b\n' });
   writeFiles(dir, { 'a.php': '2\n' });

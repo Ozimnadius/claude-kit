@@ -532,6 +532,68 @@ test('отметка (Р-91, В-2): answered — ответы «Оставить
   assert.deepEqual(readMark(dir).answered, { absent: [], code: [], taken: [] });
 });
 
+// Р-93 (48.12б): отметка — рабочий файл kit, как .claude/kit-inbox.jsonl: не в git. .gitignore проекта её не исключает —
+// writeMark дописывает строку в info/exclude общего каталога git, один раз.
+const EXCLUDE_LINE = '/.claude/kit-prod.json';
+const excludeOf = (dir) => {
+  const f = path.join(dir, '.git', 'info', 'exclude');
+  return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : null;
+};
+const lineCount = (text) => (text || '').split('\n').filter((l) => l.trim() === EXCLUDE_LINE).length;
+
+test('отметка (Р-93): .gitignore не исключает .claude — строка в info/exclude, отметки нет в git status; повтор строку не дублирует', () => {
+  const dir = gitRepo({ '.gitignore': '/.idea/\n', 'a.php': '1' });
+  fs.mkdirSync(path.join(dir, '.git', 'info'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.git', 'info', 'exclude'), '# свои строки'); // без перевода строки в конце
+  writeMark(dir, { named: ['x.zip'], pending: [] });
+  assert.deepEqual(readMark(dir).named, ['x.zip'], 'отметка записана');
+  assert.equal(git(dir, 'status', '--porcelain', '-uall'), '', 'отметки нет в git status');
+  assert.equal(excludeOf(dir), '# свои строки\n' + EXCLUDE_LINE + '\n', 'перевод строки перед строкой, свои строки целы');
+  writeMark(dir, { named: [], pending: [] });
+  assert.equal(lineCount(excludeOf(dir)), 1, 'второй запуск строку не дублирует');
+});
+
+test('отметка (Р-93): нет info/exclude — файл создаётся; .gitignore отменяет исключение («!») — строка всё равно одна', () => {
+  const dir = gitRepo({ '.gitignore': '/.claude/*\n!/.claude/kit-prod.json\n', 'a.php': '1' });
+  fs.rmSync(path.join(dir, '.git', 'info'), { recursive: true, force: true });
+  writeMark(dir, { named: [], pending: [] });
+  assert.equal(excludeOf(dir), EXCLUDE_LINE + '\n');
+  writeMark(dir, { named: [], pending: [] });
+  writeMark(dir, { named: [], pending: [] });
+  assert.equal(excludeOf(dir), EXCLUDE_LINE + '\n', 'строка не дублируется, даже если git её не слушает');
+});
+
+test('отметка (Р-93): .gitignore уже исключает .claude/* — info/exclude не меняется; не git — отметка пишется без ошибки', () => {
+  const dir = gitRepo({ '.gitignore': '/.claude/*\n!/.claude/CLAUDE.md\n', 'a.php': '1' });
+  const before = excludeOf(dir);
+  writeMark(dir, { named: [], pending: [] });
+  assert.equal(excludeOf(dir), before, 'info/exclude как был');
+  assert.equal(git(dir, 'status', '--porcelain', '-uall'), '');
+  const plain = makeProject({});
+  writeMark(plain, { named: ['a.zip'], pending: [] });
+  assert.deepEqual(readMark(plain).named, ['a.zip']);
+  assert.ok(!fs.existsSync(path.join(plain, '.git')), 'git не создан');
+});
+
+test('отметка (Р-93): из связанного worktree — строка в info/exclude общего каталога git (--git-common-dir)', () => {
+  const main = gitRepo({ '.gitignore': '/.idea/\n', 'a.php': '1' });
+  const wt = path.join(makeProject({}), 'w');
+  git(main, 'worktree', 'add', '-q', wt);
+  writeMark(wt, { named: [], pending: [] });
+  assert.equal(lineCount(excludeOf(main)), 1, 'строка в общем info/exclude');
+  assert.equal(git(wt, 'status', '--porcelain', '-uall'), '', 'отметки нет в git status worktree');
+});
+
+test('отметка (Р-93): ошибка записи info/exclude — молча, отметка записана', () => {
+  const dir = gitRepo({ '.gitignore': '/.idea/\n', 'a.php': '1' });
+  const info = path.join(dir, '.git', 'info');
+  fs.rmSync(info, { recursive: true, force: true });
+  fs.writeFileSync(info, 'не папка'); // info — файл: info/exclude не записать
+  writeMark(dir, { named: ['y.zip'], pending: [] });
+  assert.deepEqual(readMark(dir).named, ['y.zip']);
+  assert.equal(fs.readFileSync(info, 'utf8'), 'не папка');
+});
+
 test('fingerprint (Р-91, В-1): 8 знаков md5 отсортированного списка путей — порядок не важен, другой список — другой отпечаток', () => {
   const a = prod.fingerprint(['x/index.php', 'README.md']);
   assert.match(a, /^[0-9a-f]{8}$/);

@@ -21,7 +21,7 @@ function ignored(gitignore, paths) {
 }
 
 test('gitignore-bitrix: служебное, ядро, снимки и секреты игнорируются; правила, документы, скрипты и материалы — в git', () => {
-  const yes = ['.idea/workspace.xml', '.claude/settings.local.json', '.claude/agents/x.md', '.claude/worktrees/x/index.php', '.claude/docs/visual/before/admin/desktop/home.png', '.claude/docs/visual/.gitignore',
+  const yes = ['.idea/workspace.xml', '.claude/settings.local.json', '.claude/kit-inbox.jsonl', '.claude/kit-prod.json', '.claude/agents/x.md', '.claude/worktrees/x/index.php', '.claude/docs/visual/before/admin/desktop/home.png', '.claude/docs/visual/.gitignore',
     '.claude/skills/bitrix-orm/SKILL.md', '.claude/skills/bitrix-orm/rules/reading.md',
     'kit-exec.php', 'bitrix/.settings.php', 'upload/iblock/a.jpg', 'local/x.php.back1',
     '.env', '.env.local', 'local/.env.production', 'cert/site.pem', 'local/ssl/private.key',
@@ -58,7 +58,7 @@ test('рабочие папки в bitrix/ (с 3.2.0): пример справк
 });
 
 test('gitignore-general: служебное, снимки и секреты игнорируются; документы — в git', () => {
-  const yes = ['.idea/workspace.xml', '.claude/settings.local.json', '.env', '.env.local', 'node_modules/a/b.js', 'x.php.back1', '.claude/docs/visual/links.json',
+  const yes = ['.idea/workspace.xml', '.claude/settings.local.json', '.claude/kit-inbox.jsonl', '.claude/kit-prod.json', '.env', '.env.local', 'node_modules/a/b.js', 'x.php.back1', '.claude/docs/visual/links.json',
     '.superpowers/brainstorm/1/content/a.html', '.worktrees/feature/src/a.php'];
   const no = ['.claude/CLAUDE.md', '.claude/scripts/a.php', '.claude/scripts/visual/pages.json', 'src/a.php', '.claude/docs/progress.md', '.claude/docs/work/spec.md', '.claude/docs/archive/a.md', 'docs/progress.md', '.env.example'];
   const set = ignored(read('gitignore-general'), [...yes, ...no]);

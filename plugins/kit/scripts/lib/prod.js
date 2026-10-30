@@ -5,7 +5,8 @@
 // (askLines), строки для пользователя, отметка синхронизации; blob из git и md5 его
 // вариантов переводов строк; правки рабочей копии (git status) и чтение её файла. Только правила и git; сценарии для сервера и
 // их разбор — lib/prod-ssh.js; без SSH (FTP) — lib/prod-ftp.js; подключение, скачивание, запись и коммит — prod-sync.js.
-// Отметка — `.claude/kit-prod.json`: читается без исключений, пишется атомарно.
+// Отметка — `.claude/kit-prod.json`: читается без исключений, пишется атомарно; вне git — строкой в info/exclude, если
+// .gitignore проекта её не исключает (Р-93).
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -844,6 +845,34 @@ function writeMark(dir, mark) {
   if (answered.absent.length || answered.code.length || answered.taken.length) out.answered = answered;
   const text = JSON.stringify(out, null, 2) + '\n';
   writeFilesAtomic([{ file: path.join(dir, MARK_FILE), text }], { mkdir: true });
+  excludeMark(dir);
+}
+
+// Р-93 (48.12б): отметка — рабочий файл kit, как .claude/kit-inbox.jsonl: не в git и не на сервер. .gitignore проекта её не
+// исключает (код 1 у `git check-ignore -q`) — строка `/<путь от корня репозитория>/.claude/kit-prod.json` в info/exclude общего
+// каталога git (--git-common-dir — так и из worktree), один раз, с переводом строки перед ней, если файл им не кончается.
+// Не git, ошибка git или записи — молча: отметка важнее.
+function excludeMark(dir) {
+  try {
+    const run = (args) => spawnSync('git', ['-c', 'core.quotepath=false', ...args], { cwd: dir, encoding: 'utf8' });
+    if (run(['check-ignore', '-q', MARK_FILE]).status !== 1) return;
+    const common = run(['rev-parse', '--git-common-dir']);
+    const prefix = run(['rev-parse', '--show-prefix']);
+    if (common.status !== 0 || prefix.status !== 0) return;
+    const line = '/' + prefix.stdout.trim() + MARK_FILE;
+    const file = path.join(path.resolve(dir, common.stdout.trim()), 'info', 'exclude');
+    let old = '';
+    try {
+      old = fs.readFileSync(file, 'utf8');
+    } catch (e) {
+      if (e.code !== 'ENOENT') return;
+    }
+    if (old.split(/\r?\n/).some((l) => l.trim() === line)) return;
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.appendFileSync(file, (old && !old.endsWith('\n') ? '\n' : '') + line + '\n');
+  } catch (e) {
+    // молча: info/exclude не записать — отметка всё равно записана
+  }
 }
 
 module.exports = {

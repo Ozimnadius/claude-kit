@@ -121,7 +121,7 @@ const docsProject = (extra = {}) => ({
   '.claude/settings.local.json': '{}',
 });
 // .claude/settings.json — заранее с 47.8б: его пишет установка плагина на проект посреди /kit:project-init.
-const OPENED = ['.claude/agents', '.claude/settings.local.json', '.claude/worktrees', '.claude/settings.json', '.claude/skills', '.claude/kit-inbox.jsonl', '.claude/docs/visual'];
+const OPENED = ['.claude/agents', '.claude/settings.local.json', '.claude/worktrees', '.claude/settings.json', '.claude/skills', '.claude/kit-inbox.jsonl', '.claude/kit-prod.json', '.claude/docs/visual'];
 
 test('--hook, «Документы на сервере: да»: .claude убрана, исключено всё в ней, кроме docs, CLAUDE.md и .htaccess, плюс worktrees, скиллы и снимки; повтор — тишина', () => {
   const dir = makeProject({ ...docsProject(), [XML]: GAMMA });

@@ -22,10 +22,10 @@ const { writeFilesAtomic } = require('./lib/atomic');
 const MUST = ['.idea', '.git', '.claude'];
 const RELOAD = 'Если PhpStorm открыт и не подхватил — File → Reload All from Disk.';
 // «Документы на сервере: да»: что из .claude уезжает; worktrees, settings.json (установка плагина на проект посреди
-// /kit:project-init), settings.local.json и скиллы (bitrix-skills.js) исключаются заранее — они появляются посреди сессии,
-// а хук увидит их только на следующем старте.
+// /kit:project-init), settings.local.json, скиллы (bitrix-skills.js) и рабочие файлы kit (kit-inbox.jsonl, отметка /kit:sync
+// kit-prod.json) исключаются заранее — они появляются посреди сессии, а хук увидит их только на следующем старте.
 const KEEP = DOCS_KEEP;
-const EARLY = ['.claude/worktrees', '.claude/settings.json', '.claude/settings.local.json', '.claude/skills', '.claude/kit-inbox.jsonl'];
+const EARLY = ['.claude/worktrees', '.claude/settings.json', '.claude/settings.local.json', '.claude/skills', '.claude/kit-inbox.jsonl', '.claude/kit-prod.json'];
 // Служебные папки superpowers (визуальный помощник, git worktree, спеки и планы по умолчанию) — тоже заранее:
 // появляются посреди сессии. specs и .specify не исключаем — так может называться папка сайта.
 const TOOLS = ['.superpowers', '.worktrees', 'docs/superpowers'];

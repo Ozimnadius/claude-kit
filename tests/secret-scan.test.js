@@ -19,6 +19,16 @@ test('--cached: вебхук Б24 в добавленной строке — к�
   assert.doesNotMatch(r.stdout, /abcdef123456/);
 });
 
+test('--cached: рабочие файлы kit .claude/kit-inbox.jsonl и .claude/kit-prod.json (Р-93) — запрещённые пути, коммит остановлен', () => {
+  const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd(ALPHA) });
+  writeFiles(dir, { '.claude/kit-prod.json': '{ "named": [], "pending": [] }\n', '.claude/kit-inbox.jsonl': '' });
+  git(dir, 'add', '-f', '.claude/kit-prod.json', '.claude/kit-inbox.jsonl');
+  const r = scan(dir, '--cached');
+  assert.equal(r.code, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /^ {2}\.claude\/kit-prod\.json: запрещённый путь/m);
+  assert.match(r.stdout, /^ {2}\.claude\/kit-inbox\.jsonl: запрещённый путь/m);
+});
+
 test('--cached: пароль с цифрами — находка', () => {
   const dir = gitRepo({ 'x.txt': '' });
   writeFiles(dir, { 'cfg.php': "<?php\nreturn ['password' => 'Qw3rty!x9'];\n" });
@@ -317,9 +327,9 @@ test('запрещённые пути: базовые и из параметра
 test('--paths: только запрещённые пути — файлы не читаются и могут не существовать (К40)', () => {
   const dir = gitRepo({ '.claude/CLAUDE.md': paramsMd(ALPHA) });
   // Ни одного из этих файлов на диске нет: режим смотрит только на пути.
-  const bad = scan(dir, '--paths', '--', '.env', 'local/x.php.back1', 'upload/iblock/b.txt', 'kit-exec.php', '.claude/docs/visual/a.png', '.claude/kit-inbox.jsonl', 'ok.php');
+  const bad = scan(dir, '--paths', '--', '.env', 'local/x.php.back1', 'upload/iblock/b.txt', 'kit-exec.php', '.claude/docs/visual/a.png', '.claude/kit-inbox.jsonl', '.claude/kit-prod.json', 'ok.php');
   assert.equal(bad.code, 1, bad.stdout);
-  for (const p of ['\\.env', 'local\\/x\\.php\\.back1', 'upload\\/iblock\\/b\\.txt', 'kit-exec\\.php', '\\.claude\\/docs\\/visual\\/a\\.png', '\\.claude\\/kit-inbox\\.jsonl']) {
+  for (const p of ['\\.env', 'local\\/x\\.php\\.back1', 'upload\\/iblock\\/b\\.txt', 'kit-exec\\.php', '\\.claude\\/docs\\/visual\\/a\\.png', '\\.claude\\/kit-inbox\\.jsonl', '\\.claude\\/kit-prod\\.json']) {
     assert.match(bad.stdout, new RegExp('^ {2}' + p + ': запрещённый путь', 'm'), p);
   }
   assert.doesNotMatch(bad.stdout, /ok\.php/);
