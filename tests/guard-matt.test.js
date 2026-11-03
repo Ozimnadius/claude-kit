@@ -157,6 +157,7 @@ test('guard-matt: чужой и обычный kit-проект — пропус
   // Абсолютный путь системы (с «\» на Windows) и относительный — отказ с подсказкой.
   const abs = reasonOf(hook(dir, 'Write', { file_path: path.join(dir, 'GLOSSARY.md'), content: 'x' }));
   assert.match(abs, /^\[kit\] Файлы системы Мэтта — в \.claude\/docs\/: глоссарий — GLOSSARY\.md/);
+  assert.match(abs, /не обходи его молча: .*отдельной сессии в репозитории claude-kit\.$/, 'подсказка с 3.4.3');
   assert.match(reasonOf(hook(dir, 'Edit', { file_path: 'docs/adr/0001-x.md' })), /^\[kit\] Файлы системы Мэтта/);
   assert.match(reasonOf(hook(dir, 'MultiEdit', { file_path: path.join(dir, '.scratch', 'a', 'issues', '01-x.md') })), /^\[kit\]/);
   assert.match(reasonOf(hook(dir, 'NotebookEdit', { notebook_path: path.join(dir, 'CONTEXT.md') })), /^\[kit\]/);

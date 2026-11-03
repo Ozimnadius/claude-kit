@@ -75,4 +75,9 @@ function isDocOnServer(rel, info) {
   }) && !p.startsWith(visual);
 }
 
-module.exports = { JOURNAL_DEFAULTS, readStdinJson, resolveProjectDir, kitInfo, serverEnv, DOCS_KEEP, docsOnServer, isDocOnServer };
+// Подсказка к отказам стражей и остановкам kit-commit.js (с 3.4.3): в правилах старта на неё нет места (худший случай
+// проекта Мэтта — у предела), а здесь она видна ровно тогда, когда ограничение сработало.
+const KIT_LIMIT_HINT = 'Если это ограничение kit мешает задаче и штатного пути нет — не обходи его молча: опиши проблему пользователю '
+  + 'и дай готовый промт для отдельной сессии в репозитории claude-kit.';
+
+module.exports = { JOURNAL_DEFAULTS, readStdinJson, resolveProjectDir, kitInfo, serverEnv, DOCS_KEEP, docsOnServer, isDocOnServer, KIT_LIMIT_HINT };

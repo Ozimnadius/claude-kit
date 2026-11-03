@@ -75,6 +75,8 @@ test('хук: в kit-проекте — JSON deny, в чужом и для бе�
   assert.equal(out.hookSpecificOutput.hookEventName, 'PreToolUse');
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /^\[kit\]/);
+  // С 3.4.3: подсказка — ограничение kit не обходят молча.
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /не обходи его молча: опиши проблему пользователю и дай готовый промт для отдельной сессии в репозитории claude-kit\.$/);
   const foreign = makeProject({ 'a.txt': '' });
   const r2 = runScript('guard-bash.js', { input: { tool_name: 'Bash', tool_input: { command: 'cd /c/x' }, cwd: foreign } });
   assert.equal(r2.stdout, '');

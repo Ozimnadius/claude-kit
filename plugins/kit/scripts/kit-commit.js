@@ -26,6 +26,7 @@ const fs = require('fs');
 const path = require('path');
 const { spawnSync } = require('child_process');
 const { norm, repoPath } = require('./lib/paths');
+const { KIT_LIMIT_HINT } = require('./lib/project');
 const { INBOX, clearFirst } = require('./decision-inbox');
 
 const SCAN = path.join(__dirname, 'secret-scan.js');
@@ -155,7 +156,7 @@ function main(argv, input) {
   const before = head(); // '' — первый коммит
 
   let r = scan(['--paths', '--', ...a.paths]);
-  if (r.code === 1) return stop(1, r.out, 'kit-commit: стоп — запрещённые пути, ничего не добавлено');
+  if (r.code === 1) return stop(1, r.out, 'kit-commit: стоп — запрещённые пути, ничего не добавлено', KIT_LIMIT_HINT);
   if (r.code !== 0) return stop(2, r.out, 'kit-commit: secret-scan.js --paths не отработал');
 
   const deleted = new Set(lines(git(['diff', '--cached', '--name-only', '--diff-filter=D']).stdout));
@@ -169,7 +170,8 @@ function main(argv, input) {
   if (r.code !== 0) {
     const why = r.code === 1 ? 'стоп — найдены секреты' : 'secret-scan.js --cached не отработал';
     return stop(r.code === 1 ? 1 : 2, r.out,
-      `kit-commit: ${why}, коммита нет. Индекс оставлен как есть:`, git(['diff', '--cached', '--name-only']).out);
+      `kit-commit: ${why}, коммита нет. Индекс оставлен как есть:`, git(['diff', '--cached', '--name-only']).out,
+      r.code === 1 ? KIT_LIMIT_HINT : '');
   }
 
   // Повтор — только пока HEAD прежний: упавший git commit мог всё же создать коммит, второй повтор его не удвоит.

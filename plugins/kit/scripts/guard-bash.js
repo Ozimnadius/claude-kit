@@ -11,7 +11,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { readStdinJson, resolveProjectDir, kitInfo } = require('./lib/project');
+const { readStdinJson, resolveProjectDir, kitInfo, KIT_LIMIT_HINT } = require('./lib/project');
 const { isMattProject, projectRoot } = require('./lib/matt');
 
 const BASH_CD = new Set(['cd', 'pushd', 'popd']);
@@ -545,7 +545,7 @@ function main() {
       hookSpecificOutput: {
         hookEventName: 'PreToolUse',
         permissionDecision: 'deny',
-        permissionDecisionReason: '[kit] ' + reason,
+        permissionDecisionReason: '[kit] ' + reason + ' ' + KIT_LIMIT_HINT,
       },
     }));
   } catch (e) {
